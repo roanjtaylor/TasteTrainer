@@ -11,13 +11,15 @@ We decide each aspect **doc by doc** before building. Each doc is short and uses
 
 ## The core themes
 
+Numbered **1 → 5 by increasing concreteness** — from the abstract skeleton, through the data model, to the concrete features built on it.
+
 | Doc | The one core thing it decides |
 |---|---|
-| [setup.md](setup.md) | The skeleton — stack, runs on localhost, data lives as files on disk |
-| [data.md](data.md) | What we store — the shape of a *dataset* and an *item* |
-| [curation.md](curation.md) | How a dataset gets *made* with AI — topic → research → review → save |
-| [images.md](images.md) | How each item gets a *real image* — Wikimedia + an alternative picker |
-| [comparison.md](comparison.md) | How taste gets *trained* — 1v1 forced choice → a ranking |
+| [1-setup.md](1-setup.md) | The skeleton — stack, runs on localhost, data lives as files on disk |
+| [2-data.md](2-data.md) | What we store — the shape of a *dataset* and an *item* |
+| [3-curation.md](3-curation.md) | How a dataset gets *made* with AI — topic → research → review → save |
+| [4-images.md](4-images.md) | How each item gets a *real image* — Wikimedia + an alternative picker |
+| [5-comparison.md](5-comparison.md) | How taste gets *trained* — 1v1 forced choice → a ranking |
 
 ## How to use these
 

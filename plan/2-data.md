@@ -20,7 +20,7 @@ Within a dataset, every item sits on two **independent, filterable** axes:
   - **Fashion & Designer Watches** — Style-focused timepieces made by clothing or lifestyle brands.
 - **Era** — the time range, e.g. *1990s*. **Derived, not stored:** era is computed from each item's `year` (default bucket = decade). No separate era field to keep consistent — the years do the work, and a dataset's eras are simply the decades its items span.
 
-"Independent" means you can browse the **whole macro topic**, or narrow by **subtopic AND/OR era** — e.g. *Watches → 1990s*, or *Paintings → Nature landscapes → 1960s*. Build a broad macro set first, then discover niches and compare at any depth (this powers the filtering + scoped ranking in `comparison.md`).
+"Independent" means you can browse the **whole macro topic**, or narrow by **subtopic AND/OR era** — e.g. *Watches → 1990s*, or *Paintings → Nature landscapes → 1960s*. Build a broad macro set first, then discover niches and compare at any depth (this powers the filtering + scoped ranking in `5-comparison.md`).
 
 ### 2. Item fields
 - `name` — what it is (e.g. "Eames Lounge Chair").
@@ -37,13 +37,13 @@ Within a dataset, every item sits on two **independent, filterable** axes:
 
 ### 3. Images — link, don't store
 Items hold a **URL only**; we do **not** download images. Storage stays tiny, and a dead link is fixed by pasting a new address. The old `image` + `source` fields are now a **single `image` URL** — the address is both the picture and where it lives. No separate source/attribution field.
-> Propagated into `images.md` so the docs agree.
+> Propagated into `4-images.md` so the docs agree.
 
 ### 4. On disk
 ```
 data/
   datasets/<id>.json          # one macro topic per file
-  results/<datasetId>.json     # comparison outcomes / rankings (see comparison.md)
+  results/<datasetId>.json     # comparison outcomes / rankings (see 5-comparison.md)
 ```
 A **dataset** record holds: `id`, `topic` (the macro name), **`description` (required)**, `subtopics[]` (each `{ name, description }`, the canonical AI-initialised list), `items[]`, `createdAt`, `updatedAt`. Eras are **derived** from item `year`s, not stored. Subtopics are a browsing/grouping structure *within* the one file — not separate folders on disk — so the catalogue stays a single, inspectable JSON per macro topic.
 
