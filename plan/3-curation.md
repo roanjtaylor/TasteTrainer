@@ -1,31 +1,75 @@
 # Curation — making a dataset with AI
 
+> **UI →** this is the **Curate flow** screen (`6-ui.md`): topic → AI-proposed subtopics → review grid → save. The interaction details below are the UI; the global shell/visual language lives in `6-ui.md`.
+
 **Purpose**
 The heart of the tool. You pick a topic; Claude does the research grunt-work (finding the names of the best work and why they're great); you review and tidy before saving. The model does the hard part so you can build great reference sets in minutes instead of hours — your fast-track to exposure.
+
+But "the best work" isn't enough on its own. The deeper job of curation here is to surface the **objective reality of a field** — the key work that actually defines it — not just the famous corners you (or the model) already know. See *Curation quality* below; it's the part that's easy to get wrong.
 
 **The core decision(s)**
 1. **The flow** — how a dataset gets created, start to finish.
 2. **What Claude returns** — research output, not images (images are handled in `4-images.md`).
 3. **How the app talks to Claude** — which access path.
 4. **What you can do after** — editing/extending/deleting.
+5. **Curation quality** — how we avoid duplicates and bias, and cover the whole field (incl. the parts we don't know we're missing).
+6. **Curation rules visibility** — the prompt/principles are editable by you, not a blackbox.
 
-**Recommended default**
+---
+
+## Decisions (confirmed 2026-06-18)
 
 **Flow (topic → research → review → save):**
 1. You type a **topic** and roughly **how many** items (e.g. "20 most iconic chairs").
-2. The backend asks **Claude** to return a clean list of items — for each: `name`, a short `description` of why it's great, and the likely **Wikipedia title** (used later to fetch the image).
-3. The app fetches an image per item (see `4-images.md`) and shows everything on a **review screen** — a grid of proposed items.
-4. You **edit freely before saving**: deselect ones you don't want, fix text, swap images, or "ask Claude for more". Nothing is saved until you say so.
-5. **Save** writes the dataset to disk.
+2. On a **new topic**, Claude first proposes the **subtopics** (the canonical axes of the field — see `2-data.md`) so the dataset is initialised with a sound structure before any items are added.
+3. The backend asks **Claude** to return a clean list of items, **filling every field** for each one (`name`, `description`, `year`, `brand`, `creator`, `definingFact`, `subtopic`) — fully populated so you can just glance across a row to sanity-check it rather than fill gaps yourself. (`image` comes from the fetch step — see `4-images.md`.)
+4. The app fetches an image per item and shows everything on a **review screen** — a grid of proposed items.
+5. You **edit freely before saving**: deselect, fix text, swap images, or "ask Claude for more". Nothing is saved until you say so. **(Confirmed: review-before-save is the right default — fast init by Claude, final taste call by you.)**
+6. **Save** writes the dataset to disk.
 
-**After saving (full CRUD):** list all datasets, open one to rename/edit/add/delete items or re-fetch images, and delete whole datasets. "Add items" can be manual or "ask Claude for N more".
+**After saving (full CRUD):** list all datasets, open one to rename/edit/add/delete items or re-fetch images, and delete whole datasets. "Add items" can be manual or "ask Claude for N more" — the expansion path is where coverage/dedup rules matter most (below).
 
-**How it talks to Claude:** the **Claude Agent SDK using your Pro/Max subscription** (the same login Claude Code uses) — no separate pay-per-use API key, no extra cost. It can also web-search when unsure, but for famous "best of" topics the model's own knowledge + Wikipedia titles usually suffice.
+**How it talks to Claude:** the **Claude Agent SDK using your Pro/Max subscription** (the same login Claude Code uses) — no separate pay-per-use API key, no extra cost. **(Confirmed: you're logged in on this machine.)**
 
-*Why:* review-before-save keeps you in control of taste (the model proposes, you decide), and the subscription path keeps it free.
+**Web search:** **on by default for newer/cutting-edge topics**, where the model's training may be stale or thin. For the majority of "best of" topics that are well-settled (e.g. 90s watches, classic cars), the model's own knowledge + Wikipedia titles will usually suffice, so search can be skipped to stay fast. Rule of thumb baked into the curation prompt: *search when recency or completeness is in doubt; otherwise answer from knowledge.*
 
-**Open questions**
-- Is **review-before-save** (model proposes a full set, you prune) the right default — or would you rather build sets more incrementally (add a few at a time)?
-- For ambiguous/cutting-edge topics, should Claude **web-search by default**, or only when you ask (slower/maybe costs subscription quota)?
-- Any fields you want Claude to always fill beyond name + description (e.g. year, designer)? (Ties to `2-data.md`.)
-- Confirm you're logged into Claude on this machine (Claude Code / `claude`), so the subscription path works without an API key.
+**Fields Claude always fills:** all item fields listed above (ties to `2-data.md`). Confirmed: fill everything, every time.
+
+---
+
+## Curation quality — the part that's easy to get wrong
+
+The failure mode to design against: the model returns the **obvious, top-of-mind, popularity-weighted** picks and quietly omits whole regions of the field. For *cars*, that looks like a list of best-selling Mercedes models while BMW, Citroën, Honda, Lancia and the design movements they represent never appear. The result *looks* authoritative but is a biased slice — it teaches a distorted taste.
+
+The guiding principle: **find what you don't know that you don't know.** The tool must actively map the *whole* field — its key brands, schools, eras, and design directions — and pull the defining work from each, not just the corners already familiar to the user or the model. The goal is to show the field's objective reality, not to confirm what's already widely recognised.
+
+Concretely, the curation logic should:
+
+- **Cover the field's axes, not just its hits.** Before listing items, have the model enumerate the field's *dimensions* — major makers/schools, eras, sub-genres, regions — then deliberately draw items across them. (The subtopics from step 2 are the start of this, but coverage must also span brands/movements/eras *within* subtopics.) Aim for representativeness, not a popularity ranking.
+- **Explicitly counter popularity bias.** Instruct the model that "best-selling / most-famous" ≠ "most defining". Include the work that *shaped* the field even if it's less mainstream; avoid over-indexing on one dominant name.
+- **De-duplicate on expansion.** When "ask Claude for N more", pass the **existing items** (names + subtopics + brands) into the prompt and instruct: no repeats, and *prefer filling under-represented areas* of the current set. Each expansion should widen coverage, not deepen an existing cluster.
+- **Surface gaps (a button, on demand).** A **"what's missing?" button** runs a breadth-first sweep of the field and reports which axes are thin or missing ("no representation of pre-1960 work; no Japanese makers") so you can target the next expansion — turning unknown unknowns into known, fillable gaps. (Decided: a button you press, not automatic after every build — keeps normal curation fast.)
+- **Breadth before depth.** Priority order is **breadth across the whole field first, depth second.** Fill the broad set across all axes (e.g. complete the 1930s mechanical-watch set across brands/movements) *before* delving deeper into any one node. Breadth is the point of the tool — it gives you the full map of a field's design space; depth is something you grow into afterwards by expanding a chosen node.
+
+This is the core intelligence of the product; it's worth getting the prompt logic right even at the cost of more model calls.
+
+### Structure: a graph of nodes, derived from faceted items
+
+Breadth-then-depth implies the field is a **network of connected nodes** (subtopic → era → brand → creator → item, with cross-links), not a flat list — and this also powers visual field previews later. **This is decided and owned by `2-data.md` §5:** the flat, faceted `items[]` list stays the source of truth (the facets *are* the connections), and the graph/tree is a **derived projection** computed on the fly — no stored edges until a relationship can't be derived from facets (e.g. movement→movement *influence*), which is deferred. See `2-data.md` §5 for the full rationale; curation just needs to know it should fill facets richly so that derived graph is complete.
+
+---
+
+## Curation rules visibility — not a blackbox
+
+The curation behaviour above lives in a **single editable rules file** (see implementation note below), not buried in code. You can read, edit, and refine the rules over time so curation improves with feedback (e.g. "results still skew to one brand → tighten the anti-popularity rule"). Two reasons this matters:
+
+1. **Quality control via feedback.** When a set comes out biased or shallow, you fix the *rule*, not just that one set — improvements compound across every future dataset.
+2. **Learning.** Seeing the actual principles/prompts fed to the model — and how the agent uses them — builds your own theory of how these models/agents work, which is part of the point of building this.
+
+*Implementation note (for later docs):* keep the curation rules in a **single global rules file** — one plain, versioned text/markdown file the app loads at runtime (so editing a rule needs no code change), with clear sections for (a) field-mapping/coverage, (b) anti-bias, (c) dedup-on-expansion, (d) field-filling, (e) web-search policy. (Decided: one global file, not per-field-type overrides — keeps the rules simple and learnable; if a field ever needs special handling, a section in the same file can branch on it.)
+
+---
+
+## Open questions
+- Cross-cutting **influence edges** (movement→movement, mentor→designer): worth adding to the data model eventually, or out of scope for the MVP? (Currently deferred — facets cover everything else.)
+- Visual field preview (rendering the derived graph): a later feature — does it belong in its own doc when we get there?

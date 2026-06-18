@@ -1,5 +1,7 @@
 # Images — a real picture for every item
 
+> **UI →** the **3×3 image picker** lives *inside* the Curate flow review grid (`3-curation.md` / `6-ui.md`) — it's how you swap an item's image. The global shell/visual language lives in `6-ui.md`.
+
 **Purpose**
 This is the genuinely hard part. Claude can reliably tell you *what* the best 50 watches are; getting an actual, correct *photograph* of each is the challenge — and since this is a visual taste tool, the image is the whole point. We need a default source that "just works" for famous objects, plus an easy escape hatch when the default picks a poor image.
 
@@ -16,8 +18,12 @@ This is the genuinely hard part. Claude can reliably tell you *what* the best 50
 
 *Why:* Wikimedia carries the MVP for free with minimal fuss; the DuckDuckGo 3×3 picker gives you full control for the cases it misses (better results, zero setup); URL-only keeps storage trivial and images easy to refresh.
 
-**Open questions**
-- **DuckDuckGo** (decided) is unofficial — fine to accept the small "could break later" risk in exchange for no setup + cleaner results? If you'd rather have a formally supported API later, we can add Google Custom Search or Bing as a fallback.
-- For the MVP, are the domains mostly **physical design + art** (where Wikimedia shines)? If you care a lot about **website/digital design**, those need screenshots — a different mechanism we'd plan separately.
-- A URL-only approach means an item shows a broken image if a link later dies — fine to handle by **re-running the picker** to repaste a fresh URL (rather than any local backup)?
-- Any concern about image **licensing/credit**, or is "personal use, just the image URL" fine?
+**Resolved (2026-06-18)**
+1. **DuckDuckGo confirmed** — chosen for better images than Google. The unofficial-endpoint risk is accepted: this is an internal/personal tool, so if it breaks it's fine to hack a fix. No formal-API fallback needed for now.
+2. **Domains are physical design + art for the MVP** (watches, cars, paintings). **Website/digital design is deferred** until the MVP is proven — screenshot tech / Wayback Machine is explicitly out of scope for now and will be planned separately later.
+3. **URL-only confirmed** — fine for now. A dead link is handled by re-running the picker to paste a fresh URL; no local backup. Stale-link handling is deliberately deferred (a good CS exercise to tackle later if it actually becomes a problem).
+4. **Licensing: not a concern** — personal use, image URL only.
+
+**Deferred for later (post-MVP)**
+- Website/digital-design domains → screenshot capture + Wayback Machine, planned in their own doc when the time comes.
+- Stale/dead-link detection & repair (beyond manual re-pick).

@@ -51,6 +51,14 @@ The dataset `description` is **required** — a concise capture of the field's c
 
 *Why this shape:* it supports the full loop — *expose* (image), *perceive* (description + defining fact + maker), *internalize* (rank within any slice), *apply* (your own reference catalogue) — while staying a simple pile of JSON, one file per field.
 
+### 5. Structure — a graph derived from facets, not a stored tree
+A field is naturally a **network of connected nodes** (subtopic → era → brand → creator → item, with cross-links), and curation works **breadth-first then depth** (`3-curation.md`): fill the broad set across all axes before deepening any one node. But we **do not store an explicit tree or graph.**
+
+- **Source of truth = the flat, faceted `items[]` list above.** Each item's tags (`subtopic`, `brand`, `creator`, era-from-`year`) *are* the connections: items sharing a facet value are linked through it.
+- **The graph/tree is a derived projection** — computed on the fly from those facets for navigation (expand a node = filter to its facet) and future **visual field previews**. Nothing extra to maintain during curation.
+- **Why graph-derived, not a stored tree:** subtopic and era are **independent** axes — an item lives under both at once, which a single tree can't represent without forcing one parent. Facets handle multi-axis membership natively, so we keep facets as truth and render whatever tree/graph view we want.
+- **Explicit `edges[]` deferred:** only relationships that *can't* be derived from facets (e.g. movement→movement *influence*, mentor→designer) would need stored edges. Additive when needed — not a rewrite, and out of MVP scope.
+
 ## Decisions locked (2026-06-18)
 - `maker` → **split** into `brand` (company) + `creator` (individual designer/artist). ✅
 - Subtopics are **canonical** and **AI-suggested at dataset creation** to initialise the structure; each subtopic is `{ name, description }`. ✅
@@ -58,6 +66,7 @@ The dataset `description` is **required** — a concise capture of the field's c
 - **One subtopic per item.** ✅
 - **Era derived from `year`** (default = decade); no stored era field. ✅
 - **Source dropped** — the `image` URL is the only address we keep. ✅
+- **Structure = graph derived from facets**, not a stored tree; explicit `edges[]` deferred until a relationship can't be derived from facets. ✅ (mirrors `3-curation.md`)
 
 ## Small residual to confirm (non-blocking)
 - **Era bucket size** — decade (*1990s*) as the default grouping; OK, or do some fields want finer (5-year) / coarser (mid-century) buckets? Can stay decade and revisit.
