@@ -1,0 +1,37 @@
+@import 'tailwindcss';
+
+/* Gallery-wall design language (6-ui.md): warm beige, near-black ink, one
+   restrained accent, type-led. Not the harsh white of a default screen. */
+@theme {
+  --color-wall: #f4f1ea;
+  --color-wall-soft: #efe9dd;
+  --color-card: #faf8f3;
+  --color-ink: #1f1c18;
+  --color-muted: #6c655b;
+  --color-line: #e0d8c8;
+  --color-accent: #b0552f;
+
+  --font-serif: 'Georgia', 'Times New Roman', serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-wall);
+  color: var(--color-ink);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+.serif {
+  font-family: var(--font-serif);
+  letter-spacing: -0.01em;
+}
