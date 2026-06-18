@@ -15,12 +15,16 @@ async function http<T>(url: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
+    // Read the body once as text so we can surface non-JSON errors too — e.g. a
+    // Vite proxy 500 when the backend is down is plain text, not our { error } shape.
+    const raw = await res.text().catch(() => '');
     try {
-      const body = await res.json();
+      const body = raw ? JSON.parse(raw) : null;
       if (body?.error) message = body.error;
     } catch {
-      /* ignore */
+      if (raw) message = `Request failed (${res.status}): ${raw.slice(0, 200)}`;
     }
+    console.error(`[api] ${options?.method ?? 'GET'} ${url} -> ${res.status}`, raw.slice(0, 500));
     throw new Error(message);
   }
   if (res.status === 204) return undefined as T;
