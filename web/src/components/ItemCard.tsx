@@ -1,18 +1,13 @@
 import type { Item } from '../../../shared/types';
 import { eraOf } from '../lib/format';
+import { Photo } from './Photo';
 
 // Gallery-style display card: the work is the hero, chrome stays quiet.
 export function ItemCard({ item }: { item: Item }) {
   return (
     <figure className="overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-card)]">
       <div className="aspect-[4/3] w-full bg-[var(--color-wall-soft)]">
-        {item.image ? (
-          <img src={item.image} alt={item.name} className="h-full w-full object-cover" />
-        ) : (
-          <div className="flex h-full items-center justify-center text-sm text-[var(--color-muted)]">
-            needs image
-          </div>
-        )}
+        <Photo src={item.image} alt={item.name} />
       </div>
       <figcaption className="space-y-1.5 p-4">
         <div className="flex items-baseline justify-between gap-2">

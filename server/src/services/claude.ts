@@ -1,47 +1,30 @@
 // Talks to Claude via the Claude Agent SDK, using whatever credentials the local
-// environment already has (the same login Claude Code uses, or ANTHROPIC_API_KEY).
-// No key is hardcoded here. See README for auth notes.
+// environment already has. With no ANTHROPIC_API_KEY set it uses your Claude
+// subscription login (the OAuth token in ~/.claude/.credentials.json, same as
+// Claude Code) — so curation draws on your plan, not pay-per-use API credits. If
+// ANTHROPIC_API_KEY *is* set in the environment, the SDK prefers it and bills
+// credits. No key is hardcoded here. See plan/3-curation.md for the full picture.
 import fs from 'node:fs/promises';
-import { appendFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLAUDE_MODEL } from '../config.ts';
 import type { CoverageGap, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
 
-// The Agent SDK doesn't call an API directly — it spawns a full Claude Code CLI
-// session. By default that session does non-essential network/git work on startup:
-// refreshing plugin marketplaces and auto-updating plugins from GitHub. On some
-// networks/machines that stalls for minutes (the real cause of the "stuck on
-// loading the SDK" hang). We need none of it for one-shot JSON calls, so disable
-// it. Setting these on process.env (rather than options.env) means the spawned CLI
-// inherits them without us having to reconstruct its whole environment; subscription
-// auth (the OAuth token in ~/.claude/.credentials.json) is unaffected. `??=` lets an
-// explicit override from the user's own environment still win.
+// The Agent SDK doesn't call an HTTP API directly — it spawns a full Claude Code
+// CLI subprocess. By default that CLI does non-essential network work on startup
+// (refreshing plugin marketplaces, auto-updating from GitHub) which can stall for
+// minutes on some networks. We need none of it for one-shot JSON calls, so disable
+// it. Setting these on process.env (not options.env) means the spawned CLI inherits
+// them without us rebuilding its whole environment; subscription auth is unaffected.
+// `??=` lets an explicit override from the user's own environment still win.
 process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC ??= '1';
 process.env.DISABLE_AUTOUPDATER ??= '1';
 
-// Synchronous, unbuffered phase logger. console.log is block-buffered when stdout
-// is a pipe (e.g. under `concurrently`), which hides exactly the lines you need
-// when diagnosing a hang. Writing straight to a file with appendFileSync sidesteps
-// that. Gated by DEBUG_CLAUDE_SDK so it's off by default. The file is written to
-// the OS temp dir (NOT the project) so the dev watcher doesn't restart on it.
-const DBG_PATH = path.join(os.tmpdir(), 'tastetrainer-claude-debug.log');
-function dbg(msg: string): void {
-  if (!process.env.DEBUG_CLAUDE_SDK) return;
-  try {
-    appendFileSync(DBG_PATH, `[${new Date().toISOString()}] ${msg}\n`);
-  } catch {
-    /* never let logging break a request */
-  }
-}
-
-// The Claude Agent SDK is loaded LAZILY (on first use), NOT at module top-level.
-// Importing it during startup hung the whole server before it could bind its port
-// — boot never got past "importing ./routes/curation.ts", and because it hung
-// (rather than threw) there was no stack trace. Deferring it lets the server boot
-// instantly; a misbehaving SDK now fails one request (with a timeout) instead of
-// taking down the entire backend. The `type` reference is erased at runtime, so it
+// The SDK is loaded LAZILY (on first request), never at module top-level, and the
+// import is wrapped in a timeout. It's a heavy module that spawns a CLI; deferring
+// it keeps server boot instant, and a misbehaving load fails one request instead of
+// silently taking down the whole backend. `type` is erased at runtime, so this
 // keeps `query`'s types WITHOUT triggering the real import.
 type QueryFn = (typeof import('@anthropic-ai/claude-agent-sdk'))['query'];
 let cachedQuery: QueryFn | null = null;
@@ -63,19 +46,14 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   });
 }
 
-/** Load (once) and cache the SDK's `query`, guarded by a timeout + debug logging. */
+/** Load (once) and cache the SDK's `query`. */
 async function getQuery(): Promise<QueryFn> {
   if (cachedQuery) return cachedQuery;
-  console.log('[claude] loading @anthropic-ai/claude-agent-sdk …');
-  dbg('getQuery: BEFORE import()');
-  const startedAt = Date.now();
   const mod = await withTimeout(
     import('@anthropic-ai/claude-agent-sdk'),
     20_000,
     'Loading the Claude Agent SDK',
   );
-  dbg(`getQuery: AFTER import() (${Date.now() - startedAt}ms)`);
-  console.log(`[claude] SDK module loaded in ${Date.now() - startedAt}ms`);
   cachedQuery = mod.query;
   return cachedQuery;
 }
@@ -84,11 +62,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RULES_PATH = path.join(__dirname, '..', 'prompts', 'curation-rules.md');
 
 // The spawned Claude CLI scribbles working files (sessions, todos, etc.) into its
-// cwd. If that cwd is inside the project, the dev file-watcher sees those writes
-// and restarts the server mid-request, dropping the call (ECONNRESET). Point the
-// CLI at a scratch dir OUTSIDE the project so its writes never trip the watcher.
-// A neutral cwd is also correct on its own: these are one-shot JSON calls that
-// must NOT pick up the repo's own CLAUDE.md / project context.
+// cwd. If that cwd were inside the project, the dev file-watcher would see those
+// writes and restart the server mid-request, dropping the call (ECONNRESET). Point
+// the CLI at a scratch dir OUTSIDE the project. A neutral cwd is also correct on its
+// own: these are one-shot JSON calls that must NOT pick up the repo's own CLAUDE.md.
 const CLAUDE_CWD = path.join(os.tmpdir(), 'tastetrainer-claude-cwd');
 let claudeCwdReady = false;
 async function ensureClaudeCwd(): Promise<string> {
@@ -125,31 +102,38 @@ function extractJson(text: string): any {
   }
 }
 
+/** A human-readable progress line, surfaced to the UI as the call runs. */
+export type ProgressFn = (line: string) => void;
+
+interface RunOpts {
+  onProgress?: ProgressFn;
+  /**
+   * Report live progress by counting completed objects in the streaming JSON.
+   * `key` is the JSON field that appears once per object (e.g. "name"); `total`
+   * (if known) drives an "X of N" line, otherwise we show "Found X …".
+   */
+  count?: { key: string; total?: number; noun: string };
+}
+
 /** One-shot prompt -> parsed JSON. No tools, single turn. */
-async function runJson(system: string, prompt: string): Promise<any> {
-  const startedAt = Date.now();
-  dbg('runJson: BEFORE getQuery()');
+async function runJson(system: string, prompt: string, opts: RunOpts = {}): Promise<any> {
+  const { onProgress, count } = opts;
+  onProgress?.('Reaching Claude…');
   const query = await getQuery();
   const cwd = await ensureClaudeCwd();
-  dbg('runJson: AFTER getQuery(); BEFORE query() iteration');
-  console.log(`[claude] query start — model ${CLAUDE_MODEL}, prompt ${prompt.length} chars`);
 
-  // Each query() spawns a full Claude Code CLI subprocess. The timeout below only
-  // RACES the call — it does not, on its own, stop the spawned CLI. Without an
-  // abortController, a slow or stuck query leaves an orphaned CLI child running:
-  // they pile up across attempts (re-clicks, retries), saturate the machine, and
-  // eventually wedge the server so that even later timers stop firing — the real
-  // cause of "stuck on loading the SDK forever". Passing this controller lets us
-  // actually tear the subprocess down. Aborting after a clean finish is a no-op.
+  // Each query() spawns a Claude Code CLI subprocess. The timeout below only RACES
+  // the call — on its own it does NOT stop the spawned CLI, so a stuck/abandoned
+  // query would leave an orphaned child running. Orphans pile up across attempts,
+  // saturate the machine, and can wedge the server. The abortController lets us
+  // actually tear the subprocess down; we abort it in `finally` (a no-op once the
+  // query has finished cleanly, a real kill on timeout/error).
   const controller = new AbortController();
 
-  // Consume the streamed messages. A healthy call here takes ~15–25s; the timeout
-  // below caps a stuck call so it fails with a clear error instead of an infinite
-  // spinner. Each message type is logged so we can trace how far the SDK got —
-  // auth/credential failures show up as an error message or non-success subtype.
   const consume = async (): Promise<string> => {
     let result = '';
-    let sawResult = false;
+    let partial = '';
+    let lastCount = -1;
     for await (const message of query({
       prompt,
       options: {
@@ -157,23 +141,32 @@ async function runJson(system: string, prompt: string): Promise<any> {
         systemPrompt: system,
         maxTurns: 1,
         allowedTools: [],
-        // Run the CLI in a scratch dir outside the project (see CLAUDE_CWD) so its
-        // working-file writes don't trip the dev watcher and restart the server.
+        // Stream partial output so we can show live progress instead of a blackbox.
+        includePartialMessages: true,
         cwd,
-        // Kill the spawned CLI when we abort (timeout / error) instead of leaking it.
         abortController: controller,
-        // The SDK ignores the spawned CLI's stderr by default. Opt in with
-        // DEBUG_CLAUDE_SDK=1 to surface exactly what that CLI is doing — the only
-        // way to see auth prompts / startup stalls happening inside the SDK.
-        stderr: process.env.DEBUG_CLAUDE_SDK
-          ? (s: string) => console.error('[claude/cli]', s.trimEnd())
-          : undefined,
       },
     })) {
-      dbg(`runJson: message ${message.type}`);
-      console.log(`[claude] message: ${message.type}`);
-      if (message.type === 'result') {
-        sawResult = true;
+      if (message.type === 'stream_event' && count && onProgress) {
+        // Accumulate streamed text and count completed objects (one `"key":` each)
+        // so the UI can show "3 of 12 items" as Claude writes them.
+        const ev = (message as any).event;
+        if (ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+          partial += ev.delta.text as string;
+          const n = (partial.match(new RegExp(`"${count.key}"\\s*:`, 'g')) || []).length;
+          if (n > 0 && n !== lastCount) {
+            lastCount = n;
+            const shown = count.total ? Math.min(n, count.total) : n;
+            // Singularise the noun at 1 ("1 theme", not "1 themes").
+            const noun = shown === 1 ? count.noun.replace(/s$/, '') : count.noun;
+            onProgress(
+              count.total
+                ? `Researching… ${shown} of ${count.total} ${noun}`
+                : `Found ${shown} ${noun}…`,
+            );
+          }
+        }
+      } else if (message.type === 'result') {
         // The result message carries the final text in `.result` on success.
         result = (message as any).result ?? '';
         if ((message as any).subtype && (message as any).subtype !== 'success') {
@@ -181,22 +174,17 @@ async function runJson(system: string, prompt: string): Promise<any> {
         }
       }
     }
-    console.log(
-      `[claude] query done in ${Date.now() - startedAt}ms — sawResult=${sawResult}, ${result.length} chars`,
-    );
     if (!result) throw new Error('Empty response from Claude.');
     return result;
   };
 
   try {
+    onProgress?.('Claude is researching the field…');
+    // A healthy call takes ~15–25s; the cap turns a stuck call into a clear error.
     const result = await withTimeout(consume(), 90_000, 'Claude query');
+    onProgress?.('Composing results…');
     return extractJson(result);
-  } catch (err) {
-    console.error(`[claude] query FAILED after ${Date.now() - startedAt}ms:`, err);
-    throw err;
   } finally {
-    // Tear down the CLI subprocess. On a clean finish it has already exited and
-    // this is a harmless no-op; on timeout/error it stops an orphaned child.
     controller.abort();
   }
 }
@@ -210,12 +198,17 @@ const JSON_ONLY = 'Respond with valid JSON only — no markdown, no code fences,
 export async function proposeSubtopics(
   topic: string,
   description: string,
-): Promise<Subtopic[]> {
+  onProgress?: ProgressFn,
+): Promise<{ subtopics: Subtopic[]; suggestedCount: number }> {
   const rules = await loadRules();
   const system = `You are the curation engine for TasteTrainer.\n\n${rules}\n\n${JSON_ONLY}`;
-  const prompt = `Macro topic: "${topic}"\nField description: "${description}"\n\nPropose the canonical SUBTOPICS for this field — the tidy, fixed set of categories items will be sorted into. Cover the real breadth of the field (see the coverage and anti-bias rules), typically 5–9 subtopics.\n\nReturn JSON of shape: { "subtopics": [ { "name": string, "description": string } ] }`;
-  const json = await runJson(system, prompt);
-  return (json.subtopics ?? []) as Subtopic[];
+  const prompt = `Macro topic: "${topic}"\nField description: "${description}"\n\nPropose the canonical SUBTOPICS for this field — its core themes/areas, the MINIMUM set of distinct categories that together cover the WHOLE field (see the subtopic-count rule). Use as few or as many as the field genuinely needs — do NOT aim for a fixed number; merge near-duplicates and split conflated themes.\n\nAlso suggest how many DEFINING ITEMS best represent this field as a whole — a single integer "suggestedCount" sized to the field's real breadth (typically 12–30; fewer for a narrow field, more for a sprawling one), enough for representative coverage without padding.\n\nReturn JSON of shape: { "subtopics": [ { "name": string, "description": string } ], "suggestedCount": number }`;
+  const json = await runJson(system, prompt, { onProgress, count: { key: 'name', noun: 'themes' } });
+  const subtopics = (json.subtopics ?? []) as Subtopic[];
+  // Trust but clamp the model's suggestion to the same 1–50 bound the UI/API enforce.
+  const raw = Number(json.suggestedCount);
+  const suggestedCount = Number.isFinite(raw) ? Math.max(1, Math.min(50, Math.round(raw))) : 12;
+  return { subtopics, suggestedCount };
 }
 
 /**
@@ -228,7 +221,7 @@ export async function generateItems(args: {
   subtopics: Subtopic[];
   count: number;
   existingItems?: Item[];
-}): Promise<ProposedItem[]> {
+}, onProgress?: ProgressFn): Promise<ProposedItem[]> {
   const { topic, description, subtopics, count, existingItems = [] } = args;
   const rules = await loadRules();
   const system = `You are the curation engine for TasteTrainer.\n\n${rules}\n\n${JSON_ONLY}`;
@@ -245,7 +238,10 @@ export async function generateItems(args: {
 
   const prompt = `Macro topic: "${topic}"\nField description: "${description}"\n\nCanonical subtopics (each item's "subtopic" MUST be exactly one of these names):\n${subtopicList}\n\nPropose ${count} defining items for this field. Spread them across the field's brands/makers, movements, eras and regions (breadth first), countering popularity bias.${existingBlock}\n\nFill EVERY field. Return JSON of shape:\n{ "items": [ { "name": string, "description": string, "year": number|null, "brand": string, "creator": string, "definingFact": string, "subtopic": string, "wikipediaTitle": string } ] }`;
 
-  const json = await runJson(system, prompt);
+  const json = await runJson(system, prompt, {
+    onProgress,
+    count: { key: 'name', total: count, noun: 'items' },
+  });
   const items = (json.items ?? []) as Omit<ProposedItem, 'image'>[];
   return items.map((it) => ({ ...it, image: '' }));
 }
@@ -259,7 +255,7 @@ export async function findGaps(args: {
   description: string;
   subtopics: Subtopic[];
   items: Item[];
-}): Promise<CoverageGap[]> {
+}, onProgress?: ProgressFn): Promise<CoverageGap[]> {
   const { topic, description, subtopics, items } = args;
   const rules = await loadRules();
   const system = `You are the curation engine for TasteTrainer.\n\n${rules}\n\n${JSON_ONLY}`;
@@ -272,6 +268,9 @@ export async function findGaps(args: {
     .map((s) => s.name)
     .join(', ')}\n\nCurrent items (${items.length}):\n${inventory || '(none yet)'}\n\nDo a breadth-first sweep of the WHOLE field and report what is thin or missing — brands/makers, movements, eras, regions, or subtopics that a representative set of this field should include but this set under-covers. Be concrete.\n\nReturn JSON of shape: { "gaps": [ { "axis": string, "detail": string } ] }`;
 
-  const json = await runJson(system, prompt);
+  const json = await runJson(system, prompt, {
+    onProgress,
+    count: { key: 'axis', noun: 'gaps' },
+  });
   return (json.gaps ?? []) as CoverageGap[];
 }

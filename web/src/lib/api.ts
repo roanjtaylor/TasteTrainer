@@ -24,11 +24,68 @@ async function http<T>(url: string, options?: RequestInit): Promise<T> {
     } catch {
       if (raw) message = `Request failed (${res.status}): ${raw.slice(0, 200)}`;
     }
-    console.error(`[api] ${options?.method ?? 'GET'} ${url} -> ${res.status}`, raw.slice(0, 500));
     throw new Error(message);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+export type OnProgress = (line: string) => void;
+
+// POST a body and consume the backend's Server-Sent Event stream (see
+// server/src/routes/curation.ts): `progress` lines drive the live status, then a
+// single `done` payload resolves (or an `error` rejects). We use fetch + a stream
+// reader rather than EventSource because EventSource can't POST a request body.
+async function streamSSE<T>(url: string, body: unknown, onProgress?: OnProgress): Promise<T> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  // Pre-stream failures (e.g. validation) come back as a normal JSON error, not SSE.
+  if (!res.ok || !res.body) {
+    let message = `Request failed (${res.status})`;
+    try {
+      const b = await res.json();
+      if (b?.error) message = b.error;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(message);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result: T | undefined;
+  let errorMessage: string | undefined;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep: number;
+    // Events are separated by a blank line; a `data:` line carries the JSON payload.
+    while ((sep = buffer.indexOf('\n\n')) !== -1) {
+      const chunk = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      let event = 'message';
+      let data = '';
+      for (const line of chunk.split('\n')) {
+        if (line.startsWith('event:')) event = line.slice(6).trim();
+        else if (line.startsWith('data:')) data += line.slice(5).trim();
+      }
+      if (!data) continue;
+      const parsed = JSON.parse(data);
+      if (event === 'progress') onProgress?.(parsed.line);
+      else if (event === 'done') result = parsed as T;
+      else if (event === 'error') errorMessage = parsed.error;
+    }
+  }
+
+  if (errorMessage) throw new Error(errorMessage);
+  if (result === undefined) throw new Error('Stream ended without a result.');
+  return result;
 }
 
 export const api = {
@@ -45,28 +102,27 @@ export const api = {
     http<Dataset>(`/api/datasets/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteDataset: (id: string) => http<void>(`/api/datasets/${id}`, { method: 'DELETE' }),
 
-  // Curation
-  proposeSubtopics: (topic: string, description: string) =>
-    http<{ subtopics: Subtopic[] }>('/api/curation/subtopics', {
-      method: 'POST',
-      body: JSON.stringify({ topic, description }),
-    }),
-  generateItems: (body: {
-    topic: string;
-    description: string;
-    subtopics: Subtopic[];
-    count: number;
-    existingItems?: Item[];
-  }) =>
-    http<{ items: ProposedItem[] }>('/api/curation/items', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-  findGaps: (body: { topic: string; description: string; subtopics: Subtopic[]; items: Item[] }) =>
-    http<{ gaps: CoverageGap[] }>('/api/curation/gaps', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
+  // Curation — these stream live progress (onProgress) and resolve with the result.
+  proposeSubtopics: (topic: string, description: string, onProgress?: OnProgress) =>
+    streamSSE<{ subtopics: Subtopic[]; suggestedCount: number }>(
+      '/api/curation/subtopics',
+      { topic, description },
+      onProgress,
+    ),
+  generateItems: (
+    body: {
+      topic: string;
+      description: string;
+      subtopics: Subtopic[];
+      count: number;
+      existingItems?: Item[];
+    },
+    onProgress?: OnProgress,
+  ) => streamSSE<{ items: ProposedItem[] }>('/api/curation/items', body, onProgress),
+  findGaps: (
+    body: { topic: string; description: string; subtopics: Subtopic[]; items: Item[] },
+    onProgress?: OnProgress,
+  ) => streamSSE<{ gaps: CoverageGap[] }>('/api/curation/gaps', body, onProgress),
 
   // Images
   searchImages: (q: string) =>

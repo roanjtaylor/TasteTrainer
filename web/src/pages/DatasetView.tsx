@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import type { CoverageGap, Dataset, EloEntry, Item } from '../../../shared/types';
+import type { CoverageGap, Dataset, EloEntry, Item, Subtopic } from '../../../shared/types';
 import { api, type Progress, type ScopeQuery } from '../lib/api';
 import { eraOf, erasOf } from '../lib/format';
 import { ItemCard, Chip } from '../components/ItemCard';
+import { ImagePicker } from '../components/ImagePicker';
+import { Photo } from '../components/Photo';
+import { ItemFields } from '../components/ItemFields';
 
 type Mode = 'browse' | 'rank' | 'leaderboard';
 
@@ -153,20 +156,32 @@ function Browse({
 }) {
   const [gaps, setGaps] = useState<CoverageGap[] | null>(null);
   const [loadingGaps, setLoadingGaps] = useState(false);
+  const [gapProgress, setGapProgress] = useState('');
+
+  // Inline editing: `editing` holds a working copy of the item being edited; `picker`
+  // toggles the image swapper for it; `saving` disables the form during the write.
+  const [editing, setEditing] = useState<Item | null>(null);
+  const [picker, setPicker] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   async function whatsMissing() {
     setLoadingGaps(true);
     setGaps(null);
+    setGapProgress('');
     try {
-      const res = await api.findGaps({
-        topic: ds.topic,
-        description: ds.description,
-        subtopics: ds.subtopics,
-        items: ds.items,
-      });
+      const res = await api.findGaps(
+        {
+          topic: ds.topic,
+          description: ds.description,
+          subtopics: ds.subtopics,
+          items: ds.items,
+        },
+        setGapProgress,
+      );
       setGaps(res.gaps);
     } finally {
       setLoadingGaps(false);
+      setGapProgress('');
     }
   }
 
@@ -178,6 +193,20 @@ function Browse({
     onChanged(updated);
   }
 
+  async function saveEdit() {
+    if (!editing) return;
+    setSaving(true);
+    try {
+      const updated = await api.updateDataset(ds.id, {
+        items: ds.items.map((i) => (i.id === editing.id ? editing : i)),
+      });
+      onChanged(updated);
+      setEditing(null);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
@@ -186,7 +215,7 @@ function Browse({
           disabled={loadingGaps}
           className="rounded-full border border-[var(--color-line)] px-4 py-2 text-sm disabled:opacity-40"
         >
-          {loadingGaps ? 'Sweeping the field…' : "What's missing?"}
+          {loadingGaps ? gapProgress || 'Sweeping the field…' : "What's missing?"}
         </button>
       </div>
 
@@ -211,19 +240,102 @@ function Browse({
         <p className="text-[var(--color-muted)]">No items in this scope.</p>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {pool.map((item) => (
-            <div key={item.id} className="group relative">
-              <ItemCard item={item} />
-              <button
-                onClick={() => removeItem(item.id)}
-                className="absolute right-2 top-2 hidden rounded-full bg-[var(--color-ink)]/80 px-2 py-1 text-xs text-[var(--color-wall)] group-hover:block"
-              >
-                Remove
-              </button>
-            </div>
-          ))}
+          {pool.map((item) =>
+            editing?.id === item.id ? (
+              <ItemEditorCard
+                key={item.id}
+                draft={editing}
+                subtopics={ds.subtopics}
+                saving={saving}
+                onChange={(c) => setEditing((e) => (e ? { ...e, ...c } : e))}
+                onSwapImage={() => setPicker(true)}
+                onSave={saveEdit}
+                onCancel={() => setEditing(null)}
+              />
+            ) : (
+              <div key={item.id} className="group relative">
+                <ItemCard item={item} />
+                <div className="absolute right-2 top-2 hidden gap-1 group-hover:flex">
+                  <button
+                    onClick={() => setEditing({ ...item })}
+                    className="rounded-full bg-[var(--color-ink)]/80 px-2 py-1 text-xs text-[var(--color-wall)]"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => removeItem(item.id)}
+                    className="rounded-full bg-[var(--color-ink)]/80 px-2 py-1 text-xs text-[var(--color-wall)]"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ),
+          )}
         </div>
       )}
+
+      {picker && editing && (
+        <ImagePicker
+          initialQuery={`${editing.name} ${editing.brand}`.trim()}
+          onPick={(url) => {
+            setEditing((e) => (e ? { ...e, image: url } : e));
+            setPicker(false);
+          }}
+          onClose={() => setPicker(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Inline editor for a saved item — same minimalist form as the curate review grid,
+// outlined in the accent colour so it reads as "editing". Save writes through to disk.
+function ItemEditorCard({
+  draft,
+  subtopics,
+  saving,
+  onChange,
+  onSwapImage,
+  onSave,
+  onCancel,
+}: {
+  draft: Item;
+  subtopics: Subtopic[];
+  saving: boolean;
+  onChange: (change: Partial<Item>) => void;
+  onSwapImage: () => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="space-y-2 rounded-xl border border-[var(--color-accent)] bg-[var(--color-card)] p-3">
+      <div className="relative aspect-[4/3] overflow-hidden rounded-lg bg-[var(--color-wall-soft)]">
+        <Photo src={draft.image} alt={draft.name} />
+        <button
+          onClick={onSwapImage}
+          className="absolute bottom-2 right-2 rounded-full bg-[var(--color-ink)]/80 px-3 py-1 text-xs text-[var(--color-wall)]"
+        >
+          Swap image
+        </button>
+      </div>
+      <ItemFields item={draft} subtopics={subtopics} onChange={onChange} />
+      <div className="flex gap-2 pt-1">
+        <button
+          onClick={onSave}
+          disabled={saving}
+          className="rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-xs text-white disabled:opacity-40"
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        <button
+          onClick={onCancel}
+          disabled={saving}
+          className="rounded-full border border-[var(--color-line)] px-4 py-1.5 text-xs disabled:opacity-40"
+        >
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }
@@ -334,13 +446,7 @@ function Contender({
       className="group overflow-hidden rounded-2xl border border-[var(--color-line)] bg-[var(--color-card)] text-left transition-transform hover:-translate-y-0.5 hover:border-[var(--color-accent)]"
     >
       <div className="aspect-[4/3] w-full bg-[var(--color-wall-soft)]">
-        {item.image ? (
-          <img src={item.image} alt={item.name} className="h-full w-full object-cover" />
-        ) : (
-          <div className="flex h-full items-center justify-center text-sm text-[var(--color-muted)]">
-            no image
-          </div>
-        )}
+        <Photo src={item.image} alt={item.name} />
       </div>
       <div className="p-4">
         <div className="flex items-baseline justify-between">

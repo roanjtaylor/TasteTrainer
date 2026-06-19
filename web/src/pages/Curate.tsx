@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import type { ProposedItem, Subtopic } from '../../../shared/types';
 import { api } from '../lib/api';
 import { ImagePicker } from '../components/ImagePicker';
+import { Photo } from '../components/Photo';
+import { ItemFields } from '../components/ItemFields';
 
 // Curate flow (3-curation.md / 6-ui.md): topic -> AI subtopics -> review grid -> save.
 export function Curate() {
@@ -16,11 +18,13 @@ export function Curate() {
   const [items, setItems] = useState<ProposedItem[]>([]);
 
   const [busy, setBusy] = useState<null | string>(null);
+  const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
   const [pickerIndex, setPickerIndex] = useState<number | null>(null);
 
   async function run<T>(label: string, fn: () => Promise<T>): Promise<T | undefined> {
     setBusy(label);
+    setProgress('');
     setError('');
     try {
       return await fn();
@@ -28,26 +32,32 @@ export function Curate() {
       setError(e?.message ?? 'Something went wrong');
     } finally {
       setBusy(null);
+      setProgress('');
     }
   }
 
   async function initialise() {
     if (!topic.trim()) return;
     await run('Mapping the field…', async () => {
-      const res = await api.proposeSubtopics(topic.trim(), description.trim());
+      const res = await api.proposeSubtopics(topic.trim(), description.trim(), setProgress);
       setSubtopics(res.subtopics);
+      // Claude sizes the collection to the field; the user can still override below.
+      setCount(res.suggestedCount);
     });
   }
 
   async function generate(more = false) {
     await run(more ? 'Finding more…' : 'Researching the best…', async () => {
-      const res = await api.generateItems({
-        topic: topic.trim(),
-        description: description.trim(),
-        subtopics,
-        count,
-        existingItems: more ? (items as any) : [],
-      });
+      const res = await api.generateItems(
+        {
+          topic: topic.trim(),
+          description: description.trim(),
+          subtopics,
+          count,
+          existingItems: more ? (items as any) : [],
+        },
+        setProgress,
+      );
       setItems((prev) => (more ? [...prev, ...res.items] : res.items));
     });
   }
@@ -76,30 +86,19 @@ export function Curate() {
         </p>
       </header>
 
-      {/* Step 1: the field */}
+      {/* Step 1: the field. (No item count here — Claude sizes the collection after
+          mapping the field, so the count lives in step 2 to avoid implying the user
+          sets the field's structure.) */}
       <section className="space-y-4 rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-5">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="block">
-            <span className="text-sm text-[var(--color-muted)]">Topic</span>
-            <input
-              className="mt-1 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-2"
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-              placeholder="e.g. Watches"
-            />
-          </label>
-          <label className="block">
-            <span className="text-sm text-[var(--color-muted)]">How many items</span>
-            <input
-              type="number"
-              min={1}
-              max={50}
-              className="mt-1 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-2"
-              value={count}
-              onChange={(e) => setCount(Number(e.target.value))}
-            />
-          </label>
-        </div>
+        <label className="block">
+          <span className="text-sm text-[var(--color-muted)]">Topic</span>
+          <input
+            className="mt-1 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-2"
+            value={topic}
+            onChange={(e) => setTopic(e.target.value)}
+            placeholder="e.g. Watches"
+          />
+        </label>
         <label className="block">
           <span className="text-sm text-[var(--color-muted)]">
             Description <span className="text-[var(--color-accent)]">(required to save)</span>
@@ -151,17 +150,38 @@ export function Curate() {
               </div>
             ))}
           </div>
-          <button
-            onClick={() => generate(false)}
-            disabled={!!busy}
-            className="rounded-full bg-[var(--color-ink)] px-5 py-2 text-sm text-[var(--color-wall)] disabled:opacity-40"
-          >
-            Research the best {count} →
-          </button>
+          <div className="flex flex-wrap items-end gap-3 pt-1">
+            <label className="block">
+              <span className="text-sm text-[var(--color-muted)]">How many items</span>
+              <input
+                type="number"
+                min={1}
+                max={50}
+                className="mt-1 w-24 rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-2"
+                value={count}
+                onChange={(e) => setCount(Number(e.target.value))}
+              />
+            </label>
+            <button
+              onClick={() => generate(false)}
+              disabled={!!busy}
+              className="rounded-full bg-[var(--color-ink)] px-5 py-2 text-sm text-[var(--color-wall)] disabled:opacity-40"
+            >
+              Research the best {count} →
+            </button>
+          </div>
+          <p className="text-xs text-[var(--color-muted)]">
+            Claude sized this to the field — adjust if you like.
+          </p>
         </section>
       )}
 
-      {busy && <p className="text-[var(--color-accent)]">{busy}</p>}
+      {busy && (
+        <div className="flex items-center gap-3 rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-3 text-sm">
+          <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]" />
+          <span className="text-[var(--color-muted)]">{progress || busy}</span>
+        </div>
+      )}
       {error && <p className="text-[var(--color-accent)]">{error}</p>}
 
       {/* Step 3: review grid */}
@@ -229,17 +249,10 @@ function ReviewCard({
   onSwapImage: () => void;
   onRemove: () => void;
 }) {
-  const field = 'w-full rounded border border-[var(--color-line)] bg-[var(--color-wall)] px-2 py-1 text-sm';
   return (
     <div className="space-y-2 rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-3">
       <div className="relative aspect-[4/3] overflow-hidden rounded-lg bg-[var(--color-wall-soft)]">
-        {item.image ? (
-          <img src={item.image} alt={item.name} className="h-full w-full object-cover" />
-        ) : (
-          <div className="flex h-full items-center justify-center text-sm text-[var(--color-muted)]">
-            needs image
-          </div>
-        )}
+        <Photo src={item.image} alt={item.name} />
         <button
           onClick={onSwapImage}
           className="absolute bottom-2 right-2 rounded-full bg-[var(--color-ink)]/80 px-3 py-1 text-xs text-[var(--color-wall)]"
@@ -248,46 +261,8 @@ function ReviewCard({
         </button>
       </div>
 
-      <input className={field + ' font-medium'} value={item.name} onChange={(e) => onChange({ name: e.target.value })} />
-      <div className="flex gap-2">
-        <input
-          className={field}
-          type="number"
-          value={item.year ?? ''}
-          placeholder="year"
-          onChange={(e) => onChange({ year: e.target.value ? Number(e.target.value) : null })}
-        />
-        <select
-          className={field}
-          value={item.subtopic}
-          onChange={(e) => onChange({ subtopic: e.target.value })}
-        >
-          <option value="">subtopic…</option>
-          {subtopics.map((s) => (
-            <option key={s.name} value={s.name}>
-              {s.name}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="flex gap-2">
-        <input className={field} value={item.brand} placeholder="brand" onChange={(e) => onChange({ brand: e.target.value })} />
-        <input className={field} value={item.creator} placeholder="creator" onChange={(e) => onChange({ creator: e.target.value })} />
-      </div>
-      <textarea
-        className={field}
-        rows={2}
-        value={item.description}
-        placeholder="why it's great"
-        onChange={(e) => onChange({ description: e.target.value })}
-      />
-      <textarea
-        className={field}
-        rows={2}
-        value={item.definingFact}
-        placeholder="defining fact"
-        onChange={(e) => onChange({ definingFact: e.target.value })}
-      />
+      <ItemFields item={item} subtopics={subtopics} onChange={onChange} />
+
       <button onClick={onRemove} className="text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)]">
         Remove
       </button>

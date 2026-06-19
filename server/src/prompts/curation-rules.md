@@ -15,6 +15,16 @@ Core principle: **find what you don't know that you don't know.**
   whole field, not a popularity ranking of its top few names.
 - Coverage must span brands/movements/eras WITHIN each subtopic, not only across subtopics.
 
+## (a2) Subtopic count — minimum necessary, not a fixed number
+- Subtopics are the field's **core themes/areas** — the smallest set of categories that
+  together cover the WHOLE field with little overlap. Use as **few or as many as the field
+  genuinely needs**, never a fixed target.
+- Some fields split cleanly into just 2–3 (e.g. "analogue vs digital"); others span many
+  (e.g. distinct artistic periods across centuries). Let the field's real structure decide.
+- Each subtopic must be **distinct and necessary**: if two could merge without losing a real
+  distinction, merge them; if one theme is actually two different things, split it. Do not
+  pad with filler categories, and do not cram unrelated areas together to hit a round number.
+
 ## (b) Anti-bias
 - "Best-selling" / "most-famous" is NOT the same as "most-defining". Include the work
   that *shaped* the field even when it is less mainstream.
