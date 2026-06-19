@@ -1,0 +1,1 @@
+{"root":["./src/main.tsx","./src/components/imagepicker.tsx","./src/components/itemcard.tsx","./src/components/itemfields.tsx","./src/components/nav.tsx","./src/components/photo.tsx","./src/lib/api.ts","./src/lib/format.ts","./src/pages/curate.tsx","./src/pages/datasetview.tsx","./src/pages/home.tsx","../shared/types.ts"],"version":"5.9.3"}

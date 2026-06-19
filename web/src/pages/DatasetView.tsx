@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import type { CoverageGap, Dataset, EloEntry, Item, Subtopic } from '../../../shared/types';
+import type {
+  CoverageGap,
+  Dataset,
+  EloEntry,
+  Item,
+  ProposedItem,
+  Subtopic,
+} from '../../../shared/types';
 import { api, type Progress, type ScopeQuery } from '../lib/api';
 import { eraOf, erasOf } from '../lib/format';
 import { ItemCard, Chip } from '../components/ItemCard';
 import { ImagePicker } from '../components/ImagePicker';
 import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
+import { ReviewCard } from './Curate';
 
 type Mode = 'browse' | 'rank' | 'leaderboard';
 
@@ -154,36 +162,11 @@ function Browse({
   pool: Item[];
   onChanged: (ds: Dataset) => void;
 }) {
-  const [gaps, setGaps] = useState<CoverageGap[] | null>(null);
-  const [loadingGaps, setLoadingGaps] = useState(false);
-  const [gapProgress, setGapProgress] = useState('');
-
   // Inline editing: `editing` holds a working copy of the item being edited; `picker`
   // toggles the image swapper for it; `saving` disables the form during the write.
   const [editing, setEditing] = useState<Item | null>(null);
   const [picker, setPicker] = useState(false);
   const [saving, setSaving] = useState(false);
-
-  async function whatsMissing() {
-    setLoadingGaps(true);
-    setGaps(null);
-    setGapProgress('');
-    try {
-      const res = await api.findGaps(
-        {
-          topic: ds.topic,
-          description: ds.description,
-          subtopics: ds.subtopics,
-          items: ds.items,
-        },
-        setGapProgress,
-      );
-      setGaps(res.gaps);
-    } finally {
-      setLoadingGaps(false);
-      setGapProgress('');
-    }
-  }
 
   async function removeItem(itemId: string) {
     if (!confirm('Remove this item from the dataset?')) return;
@@ -209,32 +192,7 @@ function Browse({
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <button
-          onClick={whatsMissing}
-          disabled={loadingGaps}
-          className="rounded-full border border-[var(--color-line)] px-4 py-2 text-sm disabled:opacity-40"
-        >
-          {loadingGaps ? gapProgress || 'Sweeping the field…' : "What's missing?"}
-        </button>
-      </div>
-
-      {gaps && (
-        <div className="rounded-xl border border-[var(--color-accent)]/40 bg-[var(--color-card)] p-4">
-          <h3 className="serif text-lg">Coverage gaps</h3>
-          {gaps.length === 0 ? (
-            <p className="text-sm text-[var(--color-muted)]">No obvious gaps — good coverage.</p>
-          ) : (
-            <ul className="mt-2 space-y-1.5 text-sm">
-              {gaps.map((g, i) => (
-                <li key={i}>
-                  <span className="text-[var(--color-accent)]">{g.axis}:</span> {g.detail}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
+      <GapPanel ds={ds} onChanged={onChanged} />
 
       {pool.length === 0 ? (
         <p className="text-[var(--color-muted)]">No items in this scope.</p>
@@ -336,6 +294,253 @@ function ItemEditorCard({
           Cancel
         </button>
       </div>
+    </div>
+  );
+}
+
+// ---- "What's missing?" + add the missing items ----
+// One panel that runs the coverage sweep, then lets you research and add the missing
+// items: an auto-suggested count you can override (like the curate flow) and a
+// feedback box so your own opinion ("what about the Mona Lisa?") is weighed against the
+// curation rules — either folded into the additions or answered with a clear reason.
+function GapPanel({ ds, onChanged }: { ds: Dataset; onChanged: (ds: Dataset) => void }) {
+  const [gaps, setGaps] = useState<CoverageGap[] | null>(null);
+  const [loadingGaps, setLoadingGaps] = useState(false);
+  const [gapProgress, setGapProgress] = useState('');
+
+  // Add-items sub-flow. `count` starts from Claude's suggestion (sized to the gaps),
+  // the user can override it; `feedback` is the user's own steer; `pending` holds the
+  // researched-but-unsaved items reviewed before they're written; `note` is Claude's
+  // reply on how it handled the feedback.
+  const [count, setCount] = useState(8);
+  const [feedback, setFeedback] = useState('');
+  const [researching, setResearching] = useState(false);
+  const [addProgress, setAddProgress] = useState('');
+  const [note, setNote] = useState('');
+  const [pending, setPending] = useState<ProposedItem[] | null>(null);
+  const [pickerIndex, setPickerIndex] = useState<number | null>(null);
+  const [savingAdd, setSavingAdd] = useState(false);
+  const [error, setError] = useState('');
+
+  async function whatsMissing() {
+    setLoadingGaps(true);
+    setGaps(null);
+    setGapProgress('');
+    setPending(null);
+    setNote('');
+    setError('');
+    try {
+      const res = await api.findGaps(
+        { topic: ds.topic, description: ds.description, subtopics: ds.subtopics, items: ds.items },
+        setGapProgress,
+      );
+      setGaps(res.gaps);
+      setCount(res.suggestedCount);
+    } catch (e: any) {
+      setError(e?.message ?? 'Gap analysis failed');
+    } finally {
+      setLoadingGaps(false);
+      setGapProgress('');
+    }
+  }
+
+  async function research() {
+    setResearching(true);
+    setAddProgress('');
+    setError('');
+    setNote('');
+    setPending(null);
+    try {
+      const res = await api.fillGaps(
+        {
+          topic: ds.topic,
+          description: ds.description,
+          subtopics: ds.subtopics,
+          items: ds.items,
+          gaps: gaps ?? [],
+          count: Math.max(1, Math.min(50, count || 8)),
+          feedback,
+        },
+        setAddProgress,
+      );
+      setPending(res.items);
+      setNote(res.note);
+    } catch (e: any) {
+      setError(e?.message ?? 'Could not research additions');
+    } finally {
+      setResearching(false);
+      setAddProgress('');
+    }
+  }
+
+  async function addToDataset() {
+    if (!pending?.length) return;
+    setSavingAdd(true);
+    setError('');
+    try {
+      // Proposed items carry no id/createdAt; the server's PUT handler mints those
+      // (toItem). The cast mirrors the curate expansion path's existingItems handling.
+      const updated = await api.updateDataset(ds.id, {
+        items: [...ds.items, ...(pending as unknown as Item[])],
+      });
+      onChanged(updated);
+      // Clear the sub-flow; keep the gaps visible so the user can sweep again or add more.
+      setPending(null);
+      setNote('');
+      setFeedback('');
+    } catch (e: any) {
+      setError(e?.message ?? 'Could not add items');
+    } finally {
+      setSavingAdd(false);
+    }
+  }
+
+  const busy = loadingGaps || researching || savingAdd;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <button
+          onClick={whatsMissing}
+          disabled={busy}
+          className="rounded-full border border-[var(--color-line)] px-4 py-2 text-sm disabled:opacity-40"
+        >
+          {loadingGaps ? gapProgress || 'Sweeping the field…' : "What's missing?"}
+        </button>
+      </div>
+
+      {gaps && (
+        <div className="space-y-4 rounded-xl border border-[var(--color-accent)]/40 bg-[var(--color-card)] p-4">
+          <div>
+            <h3 className="serif text-lg">Coverage gaps</h3>
+            {gaps.length === 0 ? (
+              <p className="text-sm text-[var(--color-muted)]">No obvious gaps — good coverage.</p>
+            ) : (
+              <ul className="mt-2 space-y-1.5 text-sm">
+                {gaps.map((g, i) => (
+                  <li key={i}>
+                    <span className="text-[var(--color-accent)]">{g.axis}:</span> {g.detail}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* Research & add the missing items. */}
+          <div className="space-y-3 border-t border-[var(--color-line)] pt-4">
+            <label className="block">
+              <span className="text-sm text-[var(--color-muted)]">
+                Your steer <span className="text-[var(--color-muted)]">(optional)</span>
+              </span>
+              <textarea
+                className="mt-1 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-2 text-sm"
+                rows={2}
+                value={feedback}
+                onChange={(e) => setFeedback(e.target.value)}
+                placeholder="e.g. What about the Mona Lisa and other da Vinci works? — weighed against the curation rules, then added or answered."
+              />
+            </label>
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="block">
+                <span className="text-sm text-[var(--color-muted)]">How many to add</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  className="mt-1 w-24 rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-2"
+                  value={count}
+                  onChange={(e) => setCount(Number(e.target.value))}
+                />
+              </label>
+              <button
+                onClick={research}
+                disabled={busy}
+                className="rounded-full bg-[var(--color-accent)] px-5 py-2 text-sm text-white disabled:opacity-40"
+              >
+                {researching ? addProgress || 'Researching…' : `Research ${count} to add →`}
+              </button>
+            </div>
+            <p className="text-xs text-[var(--color-muted)]">
+              Claude sized this to the gaps — adjust if you like. Researched items are shown for
+              review before anything is saved.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {error && <p className="text-sm text-[var(--color-accent)]">{error}</p>}
+
+      {/* Claude's reply on how it handled your steer + the gaps. */}
+      {note && (
+        <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-wall-soft)] p-4 text-sm">
+          <h4 className="mb-1 text-xs uppercase tracking-wide text-[var(--color-muted)]">
+            How your request was handled
+          </h4>
+          <p>{note}</p>
+        </div>
+      )}
+
+      {/* Review the researched items before adding them. */}
+      {pending && (
+        <section className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 className="serif text-xl">
+              {pending.length} researched — review before adding
+            </h3>
+            <div className="flex gap-2">
+              <button
+                onClick={addToDataset}
+                disabled={savingAdd || pending.length === 0}
+                className="rounded-full bg-[var(--color-accent)] px-5 py-2 text-sm text-white disabled:opacity-40"
+              >
+                {savingAdd ? 'Adding…' : `Add ${pending.length} to dataset`}
+              </button>
+              <button
+                onClick={() => {
+                  setPending(null);
+                  setNote('');
+                }}
+                disabled={savingAdd}
+                className="rounded-full border border-[var(--color-line)] px-4 py-2 text-sm disabled:opacity-40"
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+
+          {pending.length === 0 ? (
+            <p className="text-sm text-[var(--color-muted)]">
+              Nothing to add — see the note above for why.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {pending.map((it, i) => (
+                <ReviewCard
+                  key={i}
+                  item={it}
+                  subtopics={ds.subtopics}
+                  onChange={(c) =>
+                    setPending((prev) => prev && prev.map((x, j) => (j === i ? { ...x, ...c } : x)))
+                  }
+                  onSwapImage={() => setPickerIndex(i)}
+                  onRemove={() => setPending((prev) => prev && prev.filter((_, j) => j !== i))}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {pickerIndex !== null && pending && pending[pickerIndex] && (
+        <ImagePicker
+          initialQuery={`${pending[pickerIndex].name} ${pending[pickerIndex].brand}`.trim()}
+          onPick={(url) => {
+            setPending((prev) => prev && prev.map((x, j) => (j === pickerIndex ? { ...x, image: url } : x)));
+            setPickerIndex(null);
+          }}
+          onClose={() => setPickerIndex(null)}
+        />
+      )}
     </div>
   );
 }

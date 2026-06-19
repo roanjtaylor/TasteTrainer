@@ -248,14 +248,16 @@ export async function generateItems(args: {
 
 /**
  * "What's missing?" — a breadth-first sweep that reports thin/missing axes so the
- * user can target the next expansion (3-curation.md).
+ * user can target the next expansion (3-curation.md). Also suggests how many items
+ * to add to meaningfully close the gaps, so the "add more" step can pre-fill a count
+ * the same way the curate flow does.
  */
 export async function findGaps(args: {
   topic: string;
   description: string;
   subtopics: Subtopic[];
   items: Item[];
-}, onProgress?: ProgressFn): Promise<CoverageGap[]> {
+}, onProgress?: ProgressFn): Promise<{ gaps: CoverageGap[]; suggestedCount: number }> {
   const { topic, description, subtopics, items } = args;
   const rules = await loadRules();
   const system = `You are the curation engine for TasteTrainer.\n\n${rules}\n\n${JSON_ONLY}`;
@@ -266,11 +268,67 @@ export async function findGaps(args: {
 
   const prompt = `Macro topic: "${topic}"\nField description: "${description}"\nSubtopics: ${subtopics
     .map((s) => s.name)
-    .join(', ')}\n\nCurrent items (${items.length}):\n${inventory || '(none yet)'}\n\nDo a breadth-first sweep of the WHOLE field and report what is thin or missing — brands/makers, movements, eras, regions, or subtopics that a representative set of this field should include but this set under-covers. Be concrete.\n\nReturn JSON of shape: { "gaps": [ { "axis": string, "detail": string } ] }`;
+    .join(', ')}\n\nCurrent items (${items.length}):\n${inventory || '(none yet)'}\n\nDo a breadth-first sweep of the WHOLE field and report what is thin or missing — brands/makers, movements, eras, regions, or subtopics that a representative set of this field should include but this set under-covers. Be concrete.\n\nAlso suggest how many NEW items it would take to meaningfully close these gaps — a single integer "suggestedCount" sized to the breadth of what's missing (enough for representative coverage of the gaps without padding; 0 if coverage is already good).\n\nReturn JSON of shape: { "gaps": [ { "axis": string, "detail": string } ], "suggestedCount": number }`;
 
   const json = await runJson(system, prompt, {
     onProgress,
     count: { key: 'axis', noun: 'gaps' },
   });
-  return (json.gaps ?? []) as CoverageGap[];
+  const gaps = (json.gaps ?? []) as CoverageGap[];
+  // Clamp to the same 1–50 bound the UI/API enforce; fall back to a sensible default
+  // when the model omits or fumbles the number (more gaps => suggest a touch more).
+  const raw = Number(json.suggestedCount);
+  const fallback = Math.max(1, Math.min(20, gaps.length || 8));
+  const suggestedCount = Number.isFinite(raw)
+    ? Math.max(1, Math.min(50, Math.round(raw)))
+    : fallback;
+  return { gaps, suggestedCount };
+}
+
+/**
+ * Research NEW items to close the reported gaps, taking the user's own feedback into
+ * account. Feedback is treated as a hypothesis to weigh against the curation rules and
+ * the field's objective reality — NOT an order: genuinely-defining requests get
+ * included; requests that wouldn't improve objective coverage are left out with a
+ * clear reason. The returned `note` explains how both the gaps and the feedback were
+ * handled, so the user sees either why their request was added or why it wasn't.
+ */
+export async function fillGaps(args: {
+  topic: string;
+  description: string;
+  subtopics: Subtopic[];
+  existingItems: Item[];
+  gaps: CoverageGap[];
+  count: number;
+  feedback: string;
+}, onProgress?: ProgressFn): Promise<{ items: ProposedItem[]; note: string }> {
+  const { topic, description, subtopics, existingItems, gaps, count, feedback } = args;
+  const rules = await loadRules();
+  const system = `You are the curation engine for TasteTrainer.\n\n${rules}\n\n${JSON_ONLY}`;
+
+  const subtopicList = subtopics.map((s) => `- ${s.name}: ${s.description}`).join('\n');
+
+  const existingBlock = existingItems.length
+    ? existingItems
+        .map((i) => `- ${i.name}${i.brand ? ` (${i.brand})` : ''} [${i.subtopic}]`)
+        .join('\n')
+    : '(none yet)';
+
+  const gapBlock = gaps.length
+    ? gaps.map((g) => `- ${g.axis}: ${g.detail}`).join('\n')
+    : '(no specific gaps were reported — use your own breadth-first judgement)';
+
+  const feedbackBlock = feedback.trim()
+    ? `\n\nThe user gave this feedback on what to add:\n"""\n${feedback.trim()}\n"""\nTreat it as a HYPOTHESIS to evaluate against the curation rules and the field's objective reality, NOT an order. Where it names work that genuinely belongs (objectively defining/representative of the field), include it. Where a request would NOT improve objective coverage — popularity bias, already covered, out of scope, or not actually defining — do NOT include it. Either way, account for every distinct request in your "note".`
+    : '';
+
+  const prompt = `Macro topic: "${topic}"\nField description: "${description}"\n\nCanonical subtopics (each item's "subtopic" MUST be exactly one of these names):\n${subtopicList}\n\nItems already in the set — do NOT repeat these:\n${existingBlock}\n\nReported coverage gaps to close (breadth first):\n${gapBlock}${feedbackBlock}\n\nPropose ${count} NEW defining items that best close these gaps and widen the field's coverage, countering popularity bias. Fill EVERY field.\n\nReturn JSON of shape:\n{ "items": [ { "name": string, "description": string, "year": number|null, "brand": string, "creator": string, "definingFact": string, "subtopic": string, "wikipediaTitle": string } ], "note": string }\n\nThe "note" is a short, plain-language explanation (2–5 sentences) of how you handled the gaps and the user's feedback: what you added and why, and for any user request you did NOT include, a clear reason why.`;
+
+  const json = await runJson(system, prompt, {
+    onProgress,
+    count: { key: 'name', total: count, noun: 'items' },
+  });
+  const items = (json.items ?? []) as Omit<ProposedItem, 'image'>[];
+  const note = typeof json.note === 'string' ? json.note : '';
+  return { items: items.map((it) => ({ ...it, image: '' })), note };
 }

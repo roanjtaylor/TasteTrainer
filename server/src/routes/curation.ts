@@ -1,8 +1,24 @@
 import { Router } from 'express';
 import type { Response } from 'express';
-import { findGaps, generateItems, proposeSubtopics } from '../services/claude.ts';
+import { fillGaps, findGaps, generateItems, proposeSubtopics } from '../services/claude.ts';
 import { wikimediaImage } from '../services/images.ts';
-import type { Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
+import type { CoverageGap, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
+
+/** Resolve a Wikimedia lead image per proposed item, reporting each as it lands. */
+async function attachImages(
+  proposed: ProposedItem[],
+  send: (event: 'progress' | 'done' | 'error', data: unknown) => void,
+): Promise<ProposedItem[]> {
+  let done = 0;
+  return Promise.all(
+    proposed.map(async (it) => {
+      const image = await wikimediaImage(it.wikipediaTitle);
+      done += 1;
+      send('progress', { line: `Fetching images… ${done} of ${proposed.length}` });
+      return { ...it, image };
+    }),
+  );
+}
 
 export const curationRouter = Router();
 
@@ -67,15 +83,7 @@ curationRouter.post('/items', async (req, res) => {
 
     // Resolve images in parallel; report each as it lands. Leave "" (needs image)
     // when none found.
-    let done = 0;
-    const withImages: ProposedItem[] = await Promise.all(
-      proposed.map(async (it) => {
-        const image = await wikimediaImage(it.wikipediaTitle);
-        done += 1;
-        send('progress', { line: `Fetching images… ${done} of ${proposed.length}` });
-        return { ...it, image };
-      }),
-    );
+    const withImages = await attachImages(proposed, send);
 
     send('done', { items: withImages });
   } catch (err: any) {
@@ -96,7 +104,7 @@ curationRouter.post('/gaps', async (req, res) => {
 
   const send = sse(res);
   try {
-    const gaps = await findGaps(
+    const { gaps, suggestedCount } = await findGaps(
       {
         topic: topic.trim(),
         description: description?.trim() ?? '',
@@ -105,9 +113,47 @@ curationRouter.post('/gaps', async (req, res) => {
       },
       (line) => send('progress', { line }),
     );
-    send('done', { gaps });
+    send('done', { gaps, suggestedCount });
   } catch (err: any) {
     send('error', { error: err?.message ?? 'Gap analysis failed' });
+  }
+  res.end();
+});
+
+// "Add what's missing" — research NEW items targeting the reported gaps, weighing the
+// user's own feedback, then fetch a Wikimedia lead image for each (same as /items).
+// Returns the proposed items plus a `note` explaining how the feedback was handled.
+curationRouter.post('/gap-fill', async (req, res) => {
+  const { topic, description, subtopics, items, gaps, count, feedback } = req.body as {
+    topic: string;
+    description: string;
+    subtopics: Subtopic[];
+    items: Item[];
+    gaps: CoverageGap[];
+    count: number;
+    feedback: string;
+  };
+  if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
+
+  const send = sse(res);
+  try {
+    const { items: proposed, note } = await fillGaps(
+      {
+        topic: topic.trim(),
+        description: description?.trim() ?? '',
+        subtopics: subtopics ?? [],
+        existingItems: items ?? [],
+        gaps: gaps ?? [],
+        count: Math.max(1, Math.min(50, Number(count) || 8)),
+        feedback: feedback ?? '',
+      },
+      (line) => send('progress', { line }),
+    );
+
+    const withImages = await attachImages(proposed, send);
+    send('done', { items: withImages, note });
+  } catch (err: any) {
+    send('error', { error: err?.message ?? 'Gap fill failed' });
   }
   res.end();
 });

@@ -122,7 +122,24 @@ export const api = {
   findGaps: (
     body: { topic: string; description: string; subtopics: Subtopic[]; items: Item[] },
     onProgress?: OnProgress,
-  ) => streamSSE<{ gaps: CoverageGap[] }>('/api/curation/gaps', body, onProgress),
+  ) => streamSSE<{ gaps: CoverageGap[]; suggestedCount: number }>(
+    '/api/curation/gaps',
+    body,
+    onProgress,
+  ),
+  fillGaps: (
+    body: {
+      topic: string;
+      description: string;
+      subtopics: Subtopic[];
+      items: Item[];
+      gaps: CoverageGap[];
+      count: number;
+      feedback: string;
+    },
+    onProgress?: OnProgress,
+  ) =>
+    streamSSE<{ items: ProposedItem[]; note: string }>('/api/curation/gap-fill', body, onProgress),
 
   // Images
   searchImages: (q: string) =>

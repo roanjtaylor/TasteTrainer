@@ -236,7 +236,9 @@ export function Curate() {
   );
 }
 
-function ReviewCard({
+// Exported so the dataset view's "add what's missing" flow reviews freshly-researched
+// items with the exact same card before they're saved.
+export function ReviewCard({
   item,
   subtopics,
   onChange,

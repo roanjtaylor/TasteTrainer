@@ -136,7 +136,8 @@ The curation behaviour above lives in a **single editable rules file** (see impl
 |---|---|---|---|
 | Map / Re-map field | `POST /api/curation/subtopics` | `proposeSubtopics` | the canonical subtopic list |
 | Research the best N | `POST /api/curation/items` | `generateItems` | N items (`name`, `year`, `brand`, `creator`, `definingFact`, `subtopic`, `wikipediaTitle`) — **then** each item's image is fetched from Wikimedia, not Claude |
-| What's missing | `POST /api/curation/gaps` | `findGaps` | thin / under-covered axes to expand next |
+| What's missing | `POST /api/curation/gaps` | `findGaps` | thin / under-covered axes to expand next, **plus** a `suggestedCount` sizing the next add |
+| Add what's missing | `POST /api/curation/gap-fill` | `fillGaps` | N new items that close the reported gaps (images fetched after, as for `/items`), **plus** a `note` explaining how the user's own feedback was weighed against the rules — folded in, or answered with a reason |
 
 All three build their prompt from the editable rules file `server/src/prompts/curation-rules.md` (loaded fresh each call — see *Curation rules visibility* above), then hand it to the same `runJson()`.
 
