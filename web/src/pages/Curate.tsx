@@ -67,9 +67,26 @@ export function Curate() {
       setError('A one-line description is required before saving.');
       return;
     }
-    const ds = await run('Saving…', () =>
-      api.createDataset({ topic: topic.trim(), description: description.trim(), subtopics, items }),
-    );
+    const ds = await run('Saving…', async () => {
+      const created = await api.createDataset({
+        topic: topic.trim(),
+        description: description.trim(),
+        subtopics,
+        items,
+      });
+      // Born with named era-periods so the Era filter timeline is sharp from the start
+      // (6-ui.md). Best-effort — a failure still leaves a usable dataset (the timeline
+      // falls back to century buckets, and "Generate periods" can fill them in later).
+      try {
+        const res = await api.generatePeriods(
+          { topic: created.topic, description: created.description, items: created.items },
+          setProgress,
+        );
+        return await api.updateDataset(created.id, { eraGroups: res.eraGroups });
+      } catch {
+        return created;
+      }
+    });
     if (ds) navigate(`/dataset/${ds.id}`);
   }
 

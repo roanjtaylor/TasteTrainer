@@ -3,6 +3,7 @@ import type {
   Dataset,
   DatasetSummary,
   EloEntry,
+  EraGroup,
   Item,
   ProposedItem,
   Subtopic,
@@ -119,6 +120,10 @@ export const api = {
     },
     onProgress?: OnProgress,
   ) => streamSSE<{ items: ProposedItem[] }>('/api/curation/items', body, onProgress),
+  generatePeriods: (
+    body: { topic: string; description: string; items: Item[] },
+    onProgress?: OnProgress,
+  ) => streamSSE<{ eraGroups: EraGroup[] }>('/api/curation/periods', body, onProgress),
   findGaps: (
     body: { topic: string; description: string; subtopics: Subtopic[]; items: Item[] },
     onProgress?: OnProgress,

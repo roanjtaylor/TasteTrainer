@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLAUDE_MODEL } from '../config.ts';
-import type { CoverageGap, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
+import type { CoverageGap, EraGroup, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
 
 // The Agent SDK doesn't call an HTTP API directly — it spawns a full Claude Code
 // CLI subprocess. By default that CLI does non-essential network work on startup
@@ -209,6 +209,49 @@ export async function proposeSubtopics(
   const raw = Number(json.suggestedCount);
   const suggestedCount = Number.isFinite(raw) ? Math.max(1, Math.min(50, Math.round(raw))) : 12;
   return { subtopics, suggestedCount };
+}
+
+/**
+ * Propose named ERA-PERIODS that group the dataset's time axis — the field's own
+ * meaningful divisions (art-historical movements for paintings, design eras for
+ * watches/cars), used by the Era filter timeline (6-ui.md). Periods are contiguous
+ * and non-overlapping and together span the items' year range, so every item falls in
+ * exactly one. The web app derives a century-bucket fallback when these are absent.
+ */
+export async function proposePeriods(args: {
+  topic: string;
+  description: string;
+  items: Item[];
+}, onProgress?: ProgressFn): Promise<EraGroup[]> {
+  const { topic, description, items } = args;
+  const rules = await loadRules();
+  const system = `You are the curation engine for TasteTrainer.\n\n${rules}\n\n${JSON_ONLY}`;
+
+  // The model needs the real span to bound the periods. Fall back to a wide default
+  // if no item carries a year yet.
+  const years = items.map((i) => i.year).filter((y): y is number => typeof y === 'number');
+  const minYear = years.length ? Math.min(...years) : 1900;
+  const maxYear = years.length ? Math.max(...years) : new Date().getFullYear();
+
+  const prompt = `Macro topic: "${topic}"\nField description: "${description}"\n\nThe work in this field spans roughly ${minYear}–${maxYear}.\n\nPropose the canonical ERA-PERIODS for this field — the named time divisions a knowledgeable person uses to structure its history (e.g. art movements for paintings, design eras for product fields). Use as few or as many as the field genuinely needs; do NOT aim for a fixed number.\n\nRules:\n- Periods must be CONTIGUOUS and NON-OVERLAPPING (each period's "start" equals the previous period's "end").\n- Together they must cover the whole span ${minYear}–${maxYear} (first period's start <= ${minYear}, last period's end > ${maxYear}).\n- "start" is inclusive, "end" is exclusive, both whole years.\n- Order from earliest to latest.\n\nReturn JSON of shape: { "eraGroups": [ { "label": string, "start": number, "end": number } ] }`;
+
+  const json = await runJson(system, prompt, {
+    onProgress,
+    count: { key: 'label', noun: 'periods' },
+  });
+  const raw = (json.eraGroups ?? []) as EraGroup[];
+  // Keep only well-formed, ordered ranges; sort by start so the timeline renders left→right.
+  return raw
+    .filter(
+      (g) =>
+        g &&
+        typeof g.label === 'string' &&
+        Number.isFinite(g.start) &&
+        Number.isFinite(g.end) &&
+        g.end > g.start,
+    )
+    .map((g) => ({ label: g.label.trim(), start: Math.round(g.start), end: Math.round(g.end) }))
+    .sort((a, b) => a.start - b.start);
 }
 
 /**

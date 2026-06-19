@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { Response } from 'express';
-import { fillGaps, findGaps, generateItems, proposeSubtopics } from '../services/claude.ts';
+import { fillGaps, findGaps, generateItems, proposePeriods, proposeSubtopics } from '../services/claude.ts';
 import { wikimediaImage } from '../services/images.ts';
 import type { CoverageGap, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
 
@@ -53,6 +53,29 @@ curationRouter.post('/subtopics', async (req, res) => {
     send('done', { subtopics, suggestedCount });
   } catch (err: any) {
     send('error', { error: err?.message ?? 'Subtopic proposal failed' });
+  }
+  res.end();
+});
+
+// Propose named era-periods for the time axis (used by the Era filter timeline, and
+// generated at dataset creation). Input carries the items so the span can be read.
+curationRouter.post('/periods', async (req, res) => {
+  const { topic, description, items } = req.body as {
+    topic: string;
+    description: string;
+    items: Item[];
+  };
+  if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
+
+  const send = sse(res);
+  try {
+    const eraGroups = await proposePeriods(
+      { topic: topic.trim(), description: description?.trim() ?? '', items: items ?? [] },
+      (line) => send('progress', { line }),
+    );
+    send('done', { eraGroups });
+  } catch (err: any) {
+    send('error', { error: err?.message ?? 'Period proposal failed' });
   }
   res.end();
 });

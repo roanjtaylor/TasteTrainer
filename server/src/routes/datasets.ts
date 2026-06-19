@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { deleteDataset, getDataset, listDatasets, saveDataset } from '../storage.ts';
 import { newId, now } from '../util.ts';
-import type { Dataset, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
+import type { Dataset, EraGroup, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
 
 export const datasetsRouter = Router();
 
@@ -33,10 +33,11 @@ datasetsRouter.get('/:id', async (req, res) => {
 
 // Create a dataset from the review screen.
 datasetsRouter.post('/', async (req, res) => {
-  const { topic, description, subtopics, items } = req.body as {
+  const { topic, description, subtopics, eraGroups, items } = req.body as {
     topic: string;
     description: string;
     subtopics: Subtopic[];
+    eraGroups?: EraGroup[];
     items: ProposedItem[];
   };
   if (!topic?.trim() || !description?.trim()) {
@@ -47,6 +48,7 @@ datasetsRouter.post('/', async (req, res) => {
     topic: topic.trim(),
     description: description.trim(),
     subtopics: subtopics ?? [],
+    eraGroups: eraGroups ?? [],
     items: (items ?? []).map(toItem),
     createdAt: now(),
     updatedAt: now(),
@@ -64,6 +66,7 @@ datasetsRouter.put('/:id', async (req, res) => {
     topic: body.topic?.trim() || existing.topic,
     description: body.description?.trim() || existing.description,
     subtopics: body.subtopics ?? existing.subtopics,
+    eraGroups: body.eraGroups ?? existing.eraGroups,
     items: (body.items ?? existing.items).map(toItem),
   };
   res.json(await saveDataset(ds));

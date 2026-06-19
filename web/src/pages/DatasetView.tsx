@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import type {
   CoverageGap,
   Dataset,
   EloEntry,
+  EraGroup,
   Item,
   ProposedItem,
   Subtopic,
 } from '../../../shared/types';
 import { api, type Progress, type ScopeQuery } from '../lib/api';
-import { eraOf, erasOf } from '../lib/format';
+import { eraOf, eraGroupsOf, decadesInRange, itemsInGroup } from '../lib/format';
 import { ItemCard, Chip } from '../components/ItemCard';
 import { ImagePicker } from '../components/ImagePicker';
 import { Photo } from '../components/Photo';
@@ -18,6 +19,13 @@ import { ReviewCard } from './Curate';
 
 type Mode = 'browse' | 'rank' | 'leaderboard';
 
+// The single active filter — one axis at a time (a subtopic OR an era-group), or none.
+// Derived from the URL so it's shareable and back-button friendly.
+type ActiveFilter =
+  | { kind: 'subtopic'; name: string }
+  | { kind: 'era'; group: EraGroup }
+  | null;
+
 // The Dataset view (6-ui.md): browse the items, pick a scope, run the 1v1
 // forced choice, and see the leaderboard — all one screen.
 export function DatasetView() {
@@ -25,35 +33,52 @@ export function DatasetView() {
   const [ds, setDs] = useState<Dataset | null>(null);
   const [mode, setMode] = useState<Mode>('browse');
 
-  // Scope (shared across browse / rank / leaderboard).
-  const [selSubtopics, setSelSubtopics] = useState<Set<string>>(new Set());
-  const [selEras, setSelEras] = useState<Set<string>>(new Set());
+  // The single active filter lives in the URL (?sub=… or ?era=start-end), so it's
+  // shareable and the back button steps through filter states. The Filters subpage
+  // sets it; the pill's × clears it. One axis at a time (decision 3).
+  const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
     api.getDataset(id).then(setDs);
   }, [id]);
 
-  const eras = useMemo(() => (ds ? erasOf(ds.items) : []), [ds]);
+  const groups = useMemo(() => (ds ? eraGroupsOf(ds) : []), [ds]);
 
-  const scope: ScopeQuery = useMemo(
-    () => ({ subtopics: [...selSubtopics], eras: [...selEras] }),
-    [selSubtopics, selEras],
-  );
+  const filter = useMemo<ActiveFilter>(() => {
+    const sub = searchParams.get('sub');
+    if (sub) return { kind: 'subtopic', name: sub };
+    const era = searchParams.get('era');
+    if (era) {
+      const [s, e] = era.split('-').map(Number);
+      if (Number.isFinite(s) && Number.isFinite(e)) {
+        // Resolve the named group from the dataset; fall back to a bare range label.
+        const group = groups.find((g) => g.start === s && g.end === e) ?? {
+          label: `${s}–${e}`,
+          start: s,
+          end: e,
+        };
+        return { kind: 'era', group };
+      }
+    }
+    return null;
+  }, [searchParams, groups]);
+
+  const scope: ScopeQuery = useMemo(() => {
+    if (!filter) return {};
+    if (filter.kind === 'subtopic') return { subtopics: [filter.name] };
+    // An era-group maps to the decade strings the backend scope filters on.
+    return { eras: decadesInRange(filter.group.start, filter.group.end) };
+  }, [filter]);
 
   const pool = useMemo(() => {
     if (!ds) return [];
-    return ds.items.filter(
-      (it) =>
-        (selSubtopics.size === 0 || selSubtopics.has(it.subtopic)) &&
-        (selEras.size === 0 || selEras.has(eraOf(it.year))),
-    );
-  }, [ds, selSubtopics, selEras]);
+    if (!filter) return ds.items;
+    if (filter.kind === 'subtopic') return ds.items.filter((it) => it.subtopic === filter.name);
+    return itemsInGroup(ds.items, filter.group);
+  }, [ds, filter]);
 
-  function toggle(set: Set<string>, setter: (s: Set<string>) => void, value: string) {
-    const next = new Set(set);
-    next.has(value) ? next.delete(value) : next.add(value);
-    setter(next);
-  }
+  const filterLabel =
+    filter == null ? null : filter.kind === 'subtopic' ? filter.name : filter.group.label;
 
   if (!ds) return <p className="mt-8 text-[var(--color-muted)]">Loading…</p>;
 
@@ -67,88 +92,55 @@ export function DatasetView() {
           <h1 className="serif text-4xl">{ds.topic}</h1>
           <p className="mt-1 max-w-2xl text-[var(--color-muted)]">{ds.description}</p>
         </div>
-        <div className="flex gap-1 rounded-full border border-[var(--color-line)] bg-[var(--color-card)] p-1">
-          {(['browse', 'rank', 'leaderboard'] as Mode[]).map((m) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              className={`rounded-full px-4 py-1.5 text-sm capitalize ${
-                mode === m
-                  ? 'bg-[var(--color-ink)] text-[var(--color-wall)]'
-                  : 'text-[var(--color-muted)]'
-              }`}
-            >
-              {m}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          {/* Filters live behind this button — opens the /dataset/:id/filters subpage. */}
+          <Link
+            to="filters"
+            className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
+          >
+            Filters
+          </Link>
+          <div className="flex gap-1 rounded-full border border-[var(--color-line)] bg-[var(--color-card)] p-1">
+            {(['browse', 'rank', 'leaderboard'] as Mode[]).map((m) => (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                className={`rounded-full px-4 py-1.5 text-sm capitalize ${
+                  mode === m
+                    ? 'bg-[var(--color-ink)] text-[var(--color-wall)]'
+                    : 'text-[var(--color-muted)]'
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
-      {/* Scope picker */}
-      <section className="space-y-3 rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs uppercase tracking-wide text-[var(--color-muted)]">Subtopic</span>
-          {ds.subtopics.map((s) => (
-            <FilterChip
-              key={s.name}
-              active={selSubtopics.has(s.name)}
-              onClick={() => toggle(selSubtopics, setSelSubtopics, s.name)}
-            >
-              {s.name}
-            </FilterChip>
-          ))}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs uppercase tracking-wide text-[var(--color-muted)]">Era</span>
-          {eras.map((e) => (
-            <FilterChip key={e} active={selEras.has(e)} onClick={() => toggle(selEras, setSelEras, e)}>
-              {e}
-            </FilterChip>
-          ))}
-        </div>
-        <p className="text-xs text-[var(--color-muted)]">
-          {pool.length} of {ds.items.length} items in scope
-          {selSubtopics.size + selEras.size > 0 && (
+      {/* Active-filter read: a pill (with × to clear) + the in-scope count. */}
+      <div className="flex flex-wrap items-center gap-3 text-sm text-[var(--color-muted)]">
+        {filterLabel && (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-accent)] px-3 py-1 text-xs text-white">
+            {filterLabel}
             <button
-              className="ml-2 underline"
-              onClick={() => {
-                setSelSubtopics(new Set());
-                setSelEras(new Set());
-              }}
+              onClick={() => setSearchParams({})}
+              aria-label="Clear filter"
+              className="text-white/80 hover:text-white"
             >
-              clear
+              ✕
             </button>
-          )}
-        </p>
-      </section>
+          </span>
+        )}
+        <span>
+          {pool.length} of {ds.items.length} items{filterLabel ? ' in scope' : ''}
+        </span>
+      </div>
 
       {mode === 'browse' && <Browse ds={ds} pool={pool} onChanged={setDs} />}
       {mode === 'rank' && <Rank datasetId={ds.id} scope={scope} poolSize={pool.length} />}
       {mode === 'leaderboard' && <Leaderboard datasetId={ds.id} scope={scope} />}
     </div>
-  );
-}
-
-function FilterChip({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`rounded-full px-3 py-1 text-xs transition-colors ${
-        active
-          ? 'bg-[var(--color-accent)] text-white'
-          : 'border border-[var(--color-line)] text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]'
-      }`}
-    >
-      {children}
-    </button>
   );
 }
 

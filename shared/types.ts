@@ -9,6 +9,21 @@ export interface Subtopic {
   description: string;
 }
 
+/**
+ * A named period grouping the dataset's time axis (e.g. "Renaissance", 1400–1600).
+ * AI-initialised per dataset like subtopics, but for ERA. Era is still derived from
+ * each item's `year`; era-groups are just a meaningful grouping of that axis (2-data.md).
+ * Ranges are contiguous and non-overlapping; `start` is inclusive, `end` exclusive.
+ */
+export interface EraGroup {
+  /** Period name, e.g. "Baroque & Rococo" or "Mid-century". */
+  label: string;
+  /** Inclusive start year. */
+  start: number;
+  /** Exclusive end year. */
+  end: number;
+}
+
 /** A single piece of work in a dataset. */
 export interface Item {
   id: string;
@@ -40,6 +55,12 @@ export interface Dataset {
   description: string;
   /** The canonical, AI-initialised list of subtopics. */
   subtopics: Subtopic[];
+  /**
+   * Named era-periods grouping the time axis (AI-initialised). Optional: older
+   * datasets predate this field, and the web app derives a century-bucket fallback
+   * when it's absent (web/src/lib/format.ts: eraGroupsOf).
+   */
+  eraGroups?: EraGroup[];
   items: Item[];
   createdAt: string;
   updatedAt: string;

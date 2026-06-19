@@ -6,6 +6,7 @@ import { Nav } from './components/Nav';
 import { Home } from './pages/Home';
 import { Curate } from './pages/Curate';
 import { DatasetView } from './pages/DatasetView';
+import { FilterPicker } from './pages/FilterPicker';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
@@ -16,6 +17,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <Route path="/" element={<Home />} />
           <Route path="/new" element={<Curate />} />
           <Route path="/dataset/:id" element={<DatasetView />} />
+          <Route path="/dataset/:id/filters" element={<FilterPicker />} />
         </Routes>
       </main>
     </BrowserRouter>

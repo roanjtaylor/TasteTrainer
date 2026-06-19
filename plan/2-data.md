@@ -19,6 +19,7 @@ Within a dataset, every item sits on two **independent, filterable** axes:
   - **Tool & Sports Watches** — Purpose-built designs like dive, pilot, and field watches.
   - **Fashion & Designer Watches** — Style-focused timepieces made by clothing or lifestyle brands.
 - **Era** — the time range, e.g. *1990s*. **Derived, not stored:** era is computed from each item's `year` (default bucket = decade). No separate era field to keep consistent — the years do the work, and a dataset's eras are simply the decades its items span.
+  - **Era-periods (`eraGroups`) — a named grouping of this axis.** For browsing, raw decades are too granular and unnamed. So a dataset also carries an **AI-initialised list of named periods** — the field's own meaningful time divisions (art movements for paintings, design eras for product fields), e.g. `{ label: "Renaissance", start: 1400, end: 1600 }`. Periods are **contiguous and non-overlapping** and together span the items' years, so each item falls in exactly one. This is a *grouping of the derived era axis*, not a new per-item field — era is still computed from `year`. `eraGroups` is **optional**: older datasets predate it, and the UI derives a **century-bucket fallback** when it's absent, so the Era filter always works. Generated at save time (sized to the real span) and regenerable via a button (`3-curation.md`, `6-ui.md`).
 
 "Independent" means you can browse the **whole macro topic**, or narrow by **subtopic AND/OR era** — e.g. *Watches → 1990s*, or *Paintings → Nature landscapes → 1960s*. Build a broad macro set first, then discover niches and compare at any depth (this powers the filtering + scoped ranking in `5-comparison.md`).
 
@@ -45,7 +46,7 @@ data/
   datasets/<id>.json          # one macro topic per file
   results/<datasetId>.json     # comparison outcomes / rankings (see 5-comparison.md)
 ```
-A **dataset** record holds: `id`, `topic` (the macro name), **`description` (required)**, `subtopics[]` (each `{ name, description }`, the canonical AI-initialised list), `items[]`, `createdAt`, `updatedAt`. Eras are **derived** from item `year`s, not stored. Subtopics are a browsing/grouping structure *within* the one file — not separate folders on disk — so the catalogue stays a single, inspectable JSON per macro topic.
+A **dataset** record holds: `id`, `topic` (the macro name), **`description` (required)**, `subtopics[]` (each `{ name, description }`, the canonical AI-initialised list), **`eraGroups[]` (optional**, each `{ label, start, end }`, the canonical AI-initialised time periods — a named grouping of the era axis), `items[]`, `createdAt`, `updatedAt`. Eras are **derived** from item `year`s, not stored. Subtopics are a browsing/grouping structure *within* the one file — not separate folders on disk — so the catalogue stays a single, inspectable JSON per macro topic.
 
 The dataset `description` is **required** — a concise capture of the field's core idea (e.g. *Cars — machines for transport across land on tyres*). Forcing this one sentence keeps each catalogue's scope clear and well understood.
 
@@ -65,6 +66,7 @@ A field is naturally a **network of connected nodes** (subtopic → era → bran
 - Dataset **`description` is required** (concise core-idea capture). ✅
 - **One subtopic per item.** ✅
 - **Era derived from `year`** (default = decade); no stored era field. ✅
+- **Era-periods (`eraGroups`) added (2026-06-19)** — an optional, AI-initialised `{ label, start, end }[]` naming the field's time divisions; a *grouping* of the derived era axis (not a per-item field), with a UI century-bucket fallback when absent. Powers the Era filter timeline (`6-ui.md`). ✅
 - **Source dropped** — the `image` URL is the only address we keep. ✅
 - **Structure = graph derived from facets**, not a stored tree; explicit `edges[]` deferred until a relationship can't be derived from facets. ✅ (mirrors `3-curation.md`)
 

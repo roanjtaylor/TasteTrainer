@@ -24,6 +24,7 @@ But "the best work" isn't enough on its own. The deeper job of curation here is 
 **Flow (topic → research → review → save):**
 1. You type a **topic** and roughly **how many** items (e.g. "20 most iconic chairs").
 2. On a **new topic**, Claude first proposes the **subtopics** (the canonical axes of the field — see `2-data.md`) so the dataset is initialised with a sound structure before any items are added.
+   - **Era-periods** (the other browsing axis — named time divisions like *Renaissance 1400–1600*; see `2-data.md`) are proposed too, but **at save time** rather than up front, because they're sized to the items' actual year span. They're stored on the dataset as `eraGroups[]` and power the Era filter timeline (`6-ui.md`). Generation is **best-effort**: if it fails, the dataset still saves and the Era timeline falls back to century buckets, with a **"Generate periods"** button to fill them in later. Existing datasets (made before this step) use the same button.
 3. The backend asks **Claude** to return a clean list of items, **filling every field** for each one (`name`, `description`, `year`, `brand`, `creator`, `definingFact`, `subtopic`) — fully populated so you can just glance across a row to sanity-check it rather than fill gaps yourself. (`image` comes from the fetch step — see `4-images.md`.)
 4. The app fetches an image per item and shows everything on a **review screen** — a grid of proposed items.
 5. You **edit freely before saving**: deselect, fix text, swap images, or "ask Claude for more". Nothing is saved until you say so. **(Confirmed: review-before-save is the right default — fast init by Claude, final taste call by you.)**
@@ -130,16 +131,17 @@ The curation behaviour above lives in a **single editable rules file** (see impl
                          JSON response ──▶ Vite proxy ──▶ Browser renders
 ```
 
-**The three AI calls, by step:**
+**The AI calls, by step:**
 
 | UI action | Endpoint | Claude function | What Claude returns |
 |---|---|---|---|
 | Map / Re-map field | `POST /api/curation/subtopics` | `proposeSubtopics` | the canonical subtopic list |
 | Research the best N | `POST /api/curation/items` | `generateItems` | N items (`name`, `year`, `brand`, `creator`, `definingFact`, `subtopic`, `wikipediaTitle`) — **then** each item's image is fetched from Wikimedia, not Claude |
+| Generate periods (at save, or the Era filter's button) | `POST /api/curation/periods` | `proposePeriods` | named, contiguous, non-overlapping era-periods (`label`, `start`, `end`) spanning the items' years — the time-axis grouping for the Era filter timeline; a century-bucket fallback renders when absent |
 | What's missing | `POST /api/curation/gaps` | `findGaps` | thin / under-covered axes to expand next, **plus** a `suggestedCount` sizing the next add |
 | Add what's missing | `POST /api/curation/gap-fill` | `fillGaps` | N new items that close the reported gaps (images fetched after, as for `/items`), **plus** a `note` explaining how the user's own feedback was weighed against the rules — folded in, or answered with a reason |
 
-All three build their prompt from the editable rules file `server/src/prompts/curation-rules.md` (loaded fresh each call — see *Curation rules visibility* above), then hand it to the same `runJson()`.
+All of them build their prompt from the editable rules file `server/src/prompts/curation-rules.md` (loaded fresh each call — see *Curation rules visibility* above), then hand it to the same `runJson()`.
 
 ### Billing & auth — uses your subscription, not API credits
 
