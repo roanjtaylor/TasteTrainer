@@ -33,6 +33,12 @@ export function DatasetView() {
   const [ds, setDs] = useState<Dataset | null>(null);
   const [mode, setMode] = useState<Mode>('browse');
 
+  const [gaps, setGaps] = useState<CoverageGap[] | null>(null);
+  const [loadingGaps, setLoadingGaps] = useState(false);
+  const [gapProgress, setGapProgress] = useState('');
+  const [gapSuggestedCount, setGapSuggestedCount] = useState(8);
+  const [gapError, setGapError] = useState('');
+
   // The single active filter lives in the URL (?sub=… or ?era=start-end), so it's
   // shareable and the back button steps through filter states. The Filters subpage
   // sets it; the pill's × clears it. One axis at a time (decision 3).
@@ -43,6 +49,28 @@ export function DatasetView() {
   }, [id]);
 
   const groups = useMemo(() => (ds ? eraGroupsOf(ds) : []), [ds]);
+
+  async function whatsMissing() {
+    if (!ds) return;
+    setMode('browse');
+    setLoadingGaps(true);
+    setGaps(null);
+    setGapProgress('');
+    setGapError('');
+    try {
+      const res = await api.findGaps(
+        { topic: ds.topic, description: ds.description, subtopics: ds.subtopics, items: ds.items },
+        setGapProgress,
+      );
+      setGaps(res.gaps);
+      setGapSuggestedCount(res.suggestedCount);
+    } catch (e: any) {
+      setGapError(e?.message ?? 'Gap analysis failed');
+    } finally {
+      setLoadingGaps(false);
+      setGapProgress('');
+    }
+  }
 
   const filter = useMemo<ActiveFilter>(() => {
     const sub = searchParams.get('sub');
@@ -72,7 +100,10 @@ export function DatasetView() {
 
   const pool = useMemo(() => {
     if (!ds) return [];
-    if (!filter) return ds.items;
+    if (!filter) {
+      // No filter — show all items in chronological order (nulls last).
+      return [...ds.items].sort((a, b) => (a.year ?? Infinity) - (b.year ?? Infinity));
+    }
     if (filter.kind === 'subtopic') return ds.items.filter((it) => it.subtopic === filter.name);
     return itemsInGroup(ds.items, filter.group);
   }, [ds, filter]);
@@ -100,6 +131,13 @@ export function DatasetView() {
           >
             Filters
           </Link>
+          <button
+            onClick={whatsMissing}
+            disabled={loadingGaps || !ds}
+            className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)] disabled:opacity-40"
+          >
+            {loadingGaps ? gapProgress || 'Sweeping…' : "What's missing?"}
+          </button>
           <div className="flex gap-1 rounded-full border border-[var(--color-line)] bg-[var(--color-card)] p-1">
             {(['browse', 'rank', 'leaderboard'] as Mode[]).map((m) => (
               <button
@@ -137,7 +175,16 @@ export function DatasetView() {
         </span>
       </div>
 
-      {mode === 'browse' && <Browse ds={ds} pool={pool} onChanged={setDs} />}
+      {mode === 'browse' && (
+        <Browse
+          ds={ds}
+          pool={pool}
+          gaps={gaps}
+          gapSuggestedCount={gapSuggestedCount}
+          gapError={gapError}
+          onChanged={setDs}
+        />
+      )}
       {mode === 'rank' && <Rank datasetId={ds.id} scope={scope} poolSize={pool.length} />}
       {mode === 'leaderboard' && <Leaderboard datasetId={ds.id} scope={scope} />}
     </div>
@@ -148,10 +195,16 @@ export function DatasetView() {
 function Browse({
   ds,
   pool,
+  gaps,
+  gapSuggestedCount,
+  gapError,
   onChanged,
 }: {
   ds: Dataset;
   pool: Item[];
+  gaps: CoverageGap[] | null;
+  gapSuggestedCount: number;
+  gapError: string;
   onChanged: (ds: Dataset) => void;
 }) {
   // Inline editing: `editing` holds a working copy of the item being edited; `picker`
@@ -184,7 +237,7 @@ function Browse({
 
   return (
     <div className="space-y-4">
-      <GapPanel ds={ds} onChanged={onChanged} />
+      <GapPanel ds={ds} gaps={gaps} suggestedCount={gapSuggestedCount} gapError={gapError} onChanged={onChanged} />
 
       {pool.length === 0 ? (
         <p className="text-[var(--color-muted)]">No items in this scope.</p>
@@ -290,21 +343,23 @@ function ItemEditorCard({
   );
 }
 
-// ---- "What's missing?" + add the missing items ----
-// One panel that runs the coverage sweep, then lets you research and add the missing
-// items: an auto-suggested count you can override (like the curate flow) and a
-// feedback box so your own opinion ("what about the Mona Lisa?") is weighed against the
-// curation rules — either folded into the additions or answered with a clear reason.
-function GapPanel({ ds, onChanged }: { ds: Dataset; onChanged: (ds: Dataset) => void }) {
-  const [gaps, setGaps] = useState<CoverageGap[] | null>(null);
-  const [loadingGaps, setLoadingGaps] = useState(false);
-  const [gapProgress, setGapProgress] = useState('');
-
-  // Add-items sub-flow. `count` starts from Claude's suggestion (sized to the gaps),
-  // the user can override it; `feedback` is the user's own steer; `pending` holds the
-  // researched-but-unsaved items reviewed before they're written; `note` is Claude's
-  // reply on how it handled the feedback.
-  const [count, setCount] = useState(8);
+// ---- "What's missing?" results panel ----
+// Triggered from the header button; receives gap data from DatasetView.
+// Manages only the add-items sub-flow: count, feedback, pending items, image picker.
+function GapPanel({
+  ds,
+  gaps,
+  suggestedCount,
+  gapError,
+  onChanged,
+}: {
+  ds: Dataset;
+  gaps: CoverageGap[] | null;
+  suggestedCount: number;
+  gapError: string;
+  onChanged: (ds: Dataset) => void;
+}) {
+  const [count, setCount] = useState(suggestedCount);
   const [feedback, setFeedback] = useState('');
   const [researching, setResearching] = useState(false);
   const [addProgress, setAddProgress] = useState('');
@@ -314,27 +369,8 @@ function GapPanel({ ds, onChanged }: { ds: Dataset; onChanged: (ds: Dataset) => 
   const [savingAdd, setSavingAdd] = useState(false);
   const [error, setError] = useState('');
 
-  async function whatsMissing() {
-    setLoadingGaps(true);
-    setGaps(null);
-    setGapProgress('');
-    setPending(null);
-    setNote('');
-    setError('');
-    try {
-      const res = await api.findGaps(
-        { topic: ds.topic, description: ds.description, subtopics: ds.subtopics, items: ds.items },
-        setGapProgress,
-      );
-      setGaps(res.gaps);
-      setCount(res.suggestedCount);
-    } catch (e: any) {
-      setError(e?.message ?? 'Gap analysis failed');
-    } finally {
-      setLoadingGaps(false);
-      setGapProgress('');
-    }
-  }
+  // Sync count when a new gap analysis completes with a fresh suggestion.
+  useEffect(() => { setCount(suggestedCount); }, [suggestedCount]);
 
   async function research() {
     setResearching(true);
@@ -387,19 +423,13 @@ function GapPanel({ ds, onChanged }: { ds: Dataset; onChanged: (ds: Dataset) => 
     }
   }
 
-  const busy = loadingGaps || researching || savingAdd;
+  const busy = researching || savingAdd;
+
+  if (!gaps && !gapError) return null;
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <button
-          onClick={whatsMissing}
-          disabled={busy}
-          className="rounded-full border border-[var(--color-line)] px-4 py-2 text-sm disabled:opacity-40"
-        >
-          {loadingGaps ? gapProgress || 'Sweeping the field…' : "What's missing?"}
-        </button>
-      </div>
+      {gapError && <p className="text-sm text-[var(--color-accent)]">{gapError}</p>}
 
       {gaps && (
         <div className="space-y-4 rounded-xl border border-[var(--color-accent)]/40 bg-[var(--color-card)] p-4">
@@ -680,9 +710,7 @@ function Leaderboard({ datasetId, scope }: { datasetId: string; scope: ScopeQuer
         >
           <span className="serif w-8 text-center text-2xl text-[var(--color-muted)]">{i + 1}</span>
           <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-[var(--color-wall-soft)]">
-            {row.item.image && (
-              <img src={row.item.image} alt="" className="h-full w-full object-cover" />
-            )}
+            <Photo src={row.item.image} alt={row.item.name} />
           </div>
           <div className="min-w-0 flex-1">
             <p className="truncate font-medium">{row.item.name}</p>

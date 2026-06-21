@@ -5,17 +5,39 @@
 const UA =
   'TasteTrainer/0.1 (personal local tool; https://example.local) Node fetch';
 
-/** Resolve a Wikipedia title to its lead-image URL, or "" if none. */
+/** Resolve a Wikipedia title to its lead-image URL at display quality, or "" if none.
+ *
+ *  Uses the MediaWiki Action API with `pithumbsize=800` so Wikimedia generates and
+ *  caches a thumbnail at roughly 800 px. The returned URL is guaranteed to resolve —
+ *  unlike manually-constructed /thumb/ paths, which 4xx when that size isn't cached.
+ *  Falls back to the REST v1 summary thumbnail/original if the Action API gives nothing. */
 export async function wikimediaImage(title: string): Promise<string> {
   if (!title) return '';
-  const url = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(
-    title.replace(/\s+/g, '_'),
-  )}`;
+  const slug = encodeURIComponent(title.replace(/\s+/g, '_'));
+
+  // Primary: Action API — triggers thumbnail generation at the requested size.
   try {
-    const res = await fetch(url, { headers: { 'User-Agent': UA, accept: 'application/json' } });
+    const res = await fetch(
+      `https://en.wikipedia.org/w/api.php?action=query&titles=${slug}&prop=pageimages&pithumbsize=800&format=json&formatversion=2&redirects=1`,
+      { headers: { 'User-Agent': UA, accept: 'application/json' } },
+    );
+    if (res.ok) {
+      const data: any = await res.json();
+      const pages: any[] = data?.query?.pages ?? [];
+      const thumb = pages[0]?.thumbnail?.source as string | undefined;
+      if (thumb) return thumb;
+    }
+  } catch { /* fall through */ }
+
+  // Fallback: REST v1 summary (pre-generated thumbnail, usually ~320 px).
+  try {
+    const res = await fetch(
+      `https://en.wikipedia.org/api/rest_v1/page/summary/${slug}`,
+      { headers: { 'User-Agent': UA, accept: 'application/json' } },
+    );
     if (!res.ok) return '';
     const data: any = await res.json();
-    return data?.originalimage?.source || data?.thumbnail?.source || '';
+    return (data?.thumbnail?.source ?? data?.originalimage?.source) || '';
   } catch {
     return '';
   }

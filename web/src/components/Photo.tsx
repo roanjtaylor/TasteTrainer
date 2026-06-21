@@ -3,6 +3,10 @@
 // image fills the background — so the gaps blend smoothly into the picture rather
 // than showing flat dead space. Used by every display/review card so portrait and
 // landscape images both render fully and consistently.
+//
+// Both img tags share the same src so the browser only makes one network request;
+// the blur copy is served from the in-memory image cache. loading="lazy" defers
+// off-screen images so the page renders fast and only fetches what's visible.
 export function Photo({
   src,
   alt,
@@ -23,15 +27,21 @@ export function Photo({
   }
   return (
     <div className={`relative h-full w-full overflow-hidden ${className}`}>
-      {/* Blurred fill behind: same image, zoomed so the blur has no hard edge. */}
+      {/* Blurred fill behind: same URL — browser serves the blur from cache. */}
       <img
         src={src}
         alt=""
         aria-hidden
+        loading="lazy"
         className="absolute inset-0 h-full w-full scale-110 object-cover opacity-60 blur-xl"
       />
       {/* The real image, shown in full. */}
-      <img src={src} alt={alt} className="relative h-full w-full object-contain" />
+      <img
+        src={src}
+        alt={alt}
+        loading="lazy"
+        className="relative h-full w-full object-contain"
+      />
     </div>
   );
 }

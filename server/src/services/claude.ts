@@ -113,11 +113,17 @@ interface RunOpts {
    * (if known) drives an "X of N" line, otherwise we show "Found X …".
    */
   count?: { key: string; total?: number; noun: string };
+  /**
+   * Hard cap on the entire Claude call in ms. Defaults to 90 s for short calls;
+   * callers that generate many items should pass a larger value (e.g. scaled by
+   * item count) so large batches aren't killed early.
+   */
+  timeoutMs?: number;
 }
 
 /** One-shot prompt -> parsed JSON. No tools, single turn. */
 async function runJson(system: string, prompt: string, opts: RunOpts = {}): Promise<any> {
-  const { onProgress, count } = opts;
+  const { onProgress, count, timeoutMs = 90_000 } = opts;
   onProgress?.('Reaching Claude…');
   const query = await getQuery();
   const cwd = await ensureClaudeCwd();
@@ -180,8 +186,8 @@ async function runJson(system: string, prompt: string, opts: RunOpts = {}): Prom
 
   try {
     onProgress?.('Claude is researching the field…');
-    // A healthy call takes ~15–25s; the cap turns a stuck call into a clear error.
-    const result = await withTimeout(consume(), 90_000, 'Claude query');
+    // The cap turns a stuck call into a clear error. Callers scale this by item count.
+    const result = await withTimeout(consume(), timeoutMs, 'Claude query');
     onProgress?.('Composing results…');
     return extractJson(result);
   } finally {
@@ -284,6 +290,8 @@ export async function generateItems(args: {
   const json = await runJson(system, prompt, {
     onProgress,
     count: { key: 'name', total: count, noun: 'items' },
+    // ~7 s per item + 90 s base; generous enough for large batches, still caps stuck calls.
+    timeoutMs: 90_000 + count * 7_000,
   });
   const items = (json.items ?? []) as Omit<ProposedItem, 'image'>[];
   return items.map((it) => ({ ...it, image: '' }));
@@ -370,6 +378,8 @@ export async function fillGaps(args: {
   const json = await runJson(system, prompt, {
     onProgress,
     count: { key: 'name', total: count, noun: 'items' },
+    // ~7 s per item + 90 s base; generous enough for large batches, still caps stuck calls.
+    timeoutMs: 90_000 + count * 7_000,
   });
   const items = (json.items ?? []) as Omit<ProposedItem, 'image'>[];
   const note = typeof json.note === 'string' ? json.note : '';
