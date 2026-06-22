@@ -26,8 +26,22 @@ async function writeJson(file: string, data: unknown): Promise<void> {
   await fs.writeFile(file, JSON.stringify(data, null, 2), 'utf8');
 }
 
-const datasetPath = (id: string) => path.join(DATASETS_DIR, `${id}.json`);
-const resultsPath = (id: string) => path.join(RESULTS_DIR, `${id}.json`);
+function slugify(topic: string): string {
+  return topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+const datasetPath = (topic: string) => path.join(DATASETS_DIR, `${slugify(topic)}.json`);
+const resultsPath = (topic: string) => path.join(RESULTS_DIR, `${slugify(topic)}.json`);
+
+async function findDatasetById(id: string): Promise<Dataset | null> {
+  await ensureDirs();
+  const files = (await fs.readdir(DATASETS_DIR)).filter((f) => f.endsWith('.json'));
+  for (const f of files) {
+    const ds = await readJson<Dataset>(path.join(DATASETS_DIR, f));
+    if (ds?.id === id) return ds;
+  }
+  return null;
+}
 
 export async function listDatasets(): Promise<DatasetSummary[]> {
   await ensureDirs();
@@ -49,26 +63,32 @@ export async function listDatasets(): Promise<DatasetSummary[]> {
 }
 
 export async function getDataset(id: string): Promise<Dataset | null> {
-  return readJson<Dataset>(datasetPath(id));
+  return findDatasetById(id);
 }
 
 export async function saveDataset(ds: Dataset): Promise<Dataset> {
   ds.updatedAt = now();
-  await writeJson(datasetPath(ds.id), ds);
+  await writeJson(datasetPath(ds.topic), ds);
   return ds;
 }
 
 export async function deleteDataset(id: string): Promise<void> {
-  await fs.rm(datasetPath(id), { force: true });
-  await fs.rm(resultsPath(id), { force: true });
+  const ds = await findDatasetById(id);
+  if (!ds) return;
+  await fs.rm(datasetPath(ds.topic), { force: true });
+  await fs.rm(resultsPath(ds.topic), { force: true });
 }
 
-export async function getResults(id: string): Promise<ResultsFile | null> {
-  return readJson<ResultsFile>(resultsPath(id));
+export async function getResults(datasetId: string): Promise<ResultsFile | null> {
+  const ds = await findDatasetById(datasetId);
+  if (!ds) return null;
+  return readJson<ResultsFile>(resultsPath(ds.topic));
 }
 
 export async function saveResults(results: ResultsFile): Promise<ResultsFile> {
+  const ds = await findDatasetById(results.datasetId);
+  if (!ds) throw new Error(`Dataset ${results.datasetId} not found`);
   results.updatedAt = now();
-  await writeJson(resultsPath(results.datasetId), results);
+  await writeJson(resultsPath(ds.topic), results);
   return results;
 }
