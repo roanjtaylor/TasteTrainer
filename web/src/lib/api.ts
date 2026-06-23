@@ -9,8 +9,12 @@ import type {
   Subtopic,
 } from '../../../shared/types';
 
+// In dev the Vite proxy forwards /api to localhost:5174 (vite.config.ts).
+// In production VITE_API_BASE_URL points at the deployed backend on Render.
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
+
 async function http<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
+  const res = await fetch(API_BASE + url, {
     headers: { 'Content-Type': 'application/json' },
     ...options,
   });
@@ -38,7 +42,7 @@ export type OnProgress = (line: string) => void;
 // single `done` payload resolves (or an `error` rejects). We use fetch + a stream
 // reader rather than EventSource because EventSource can't POST a request body.
 async function streamSSE<T>(url: string, body: unknown, onProgress?: OnProgress): Promise<T> {
-  const res = await fetch(url, {
+  const res = await fetch(API_BASE + url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
