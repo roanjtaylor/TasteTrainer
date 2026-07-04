@@ -84,8 +84,8 @@ No change needed to `Subtopic`, `EraGroup`, `EloEntry`, or the comparison/rankin
 
 ---
 
-## Open questions (yours to weigh in on before this gets built)
+## Resolved (2026-07-04)
 
-1. **Entry point — dedicated first screen vs. persistent nav toggle** (§1). Leaning toggle-with-first-run-prompt for lower long-term friction, but you framed it as "an initial selector," so tell me if you want the fuller gate every time.
-2. **Screenshot source — `mshots` (free, zero-setup, async/best-effort) vs. a paid screenshot API from day one** (better reliability/quality, costs money, needs an API key — breaks the "no setup" MVP bar every other image source in this app has held to). Recommend starting free and upgrading only if quality disappoints in practice.
-3. **Seed datasets** — which 2-4 software fields do you want curated first, to prove this the same way *Watches*/*Cars*/*Paintings* proved the hardware MVP? Worth naming now so the curation-rules software branch is written against real examples, not hypotheticals.
+1. **Entry point: dedicated landing screen, every session.** Opening the app shows a Hardware/Software choice first, *then* the familiar shelf for that domain — the fuller gate, not a nav toggle. Screen map (`6-ui.md` §1) gains one screen: **Domain select** → Datasets home (filtered to that domain) → everything else unchanged downstream.
+2. **Screenshot source: `mshots` (free, zero-setup) to start.** Matches the "no API key or setup" bar every other image source in this app holds to (Wikimedia, DuckDuckGo). The async/best-effort behaviour (§3) is an accepted risk, same posture as the DuckDuckGo call in `4-images.md`. A paid API is the upgrade path only if quality disappoints in practice, not a day-one requirement.
+3. **Seed datasets (build these first to prove the domain):** Websites & landing pages, Operating systems & desktop UI, Social networks & consumer apps, SaaS/product dashboards. Deliberately spans very different screenshot shapes — full web pages, desktop chrome, long-lived evolving products, dense data UI — so the pipeline (§3) and the curation-rules software branch (§4) get proven against real variety, not one easy case.
