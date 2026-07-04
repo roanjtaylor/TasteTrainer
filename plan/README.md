@@ -11,7 +11,7 @@ We decide each aspect **doc by doc** before building. Each doc is short and uses
 
 ## The core themes
 
-Numbered **1 → 6 by increasing concreteness** — from the abstract skeleton, through the data model, to the concrete features and the interface built on them.
+Numbered **1 → 6 by increasing concreteness** — from the abstract skeleton, through the data model, to the concrete features and the interface built on them. `7` is a later addition, extending the concrete build rather than the original skeleton-to-interface arc.
 
 | Doc | The one core thing it decides |
 |---|---|
@@ -21,6 +21,7 @@ Numbered **1 → 6 by increasing concreteness** — from the abstract skeleton, 
 | [4-images.md](4-images.md) | How each item gets a *real image* — Wikimedia + an alternative picker |
 | [5-comparison.md](5-comparison.md) | How taste gets *trained* — 1v1 forced choice → a ranking |
 | [6-ui.md](6-ui.md) | How you *use* it — the screen map, design language, and styling tooling that tie it all together |
+| [7-software-design.md](7-software-design.md) | The deferred second domain — training taste in *digital/software* design (websites, apps) alongside physical objects |
 
 **UI lives in two places by design:** the *coherent whole* (screen map, visual language, styling) is owned by `6-ui.md`; *feature-specific interactions* stay in their feature doc (`3`–`5`), each flagged with a **UI →** pointer at the top. `2-data.md` has no UI of its own (it's the model the screens render).
 
