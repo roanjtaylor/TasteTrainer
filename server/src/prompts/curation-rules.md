@@ -52,3 +52,25 @@ Core principle: **find what you don't know that you don't know.**
 - Use web search when recency or completeness is genuinely in doubt (cutting-edge or
   fast-moving topics). For well-settled "best of" topics (e.g. 1990s watches, classic cars),
   answer from your own knowledge — it is usually sufficient and faster.
+
+## (f) Software domain — different axes, different field-filling (7-software-design.md)
+Every prompt tells you the domain. When it is SOFTWARE, the field is websites, apps, or
+product UI, not physical objects — adjust (a) and (d) accordingly; (b) and (c) apply as-is.
+- **Field-mapping axes for software:** map the field by platform (web vs native app vs OS
+  chrome), interaction pattern (dashboard, feed, checkout, onboarding, file browser, ...),
+  and design era (e.g. Web 1.0, Web 2.0/gloss, flat design, neumorphism, current) — not by
+  brand/region the way hardware is mapped. A design era counts as a legitimate axis of
+  coverage on its own: the same product redesigned is two different defining moments, not
+  a duplicate.
+- **Field-filling for software:** every item still fills every field, but `wikipediaTitle`
+  is replaced by `url` — the canonical site/product address (e.g. "https://stripe.com"),
+  used to capture a screenshot rather than fetch a photo. `year` means *the year THIS
+  SPECIFIC design/snapshot represents* — not necessarily today's look, and not necessarily
+  when the company was founded. A famous redesign (a new visual language, not a content
+  update) is a valid reason to propose the same product twice, at two different years.
+- **Picking the representative year:** choose the year a design was at its most
+  characteristic/influential for the pattern it's illustrating, favouring a year with a
+  reasonable chance of being archived (avoid the last few months — snapshots may not exist
+  yet). `brand` is the company/product; `creator` is the named designer/design lead if one
+  is actually known and notable, "" otherwise (most software has no single credited
+  designer the way a chair or a watch does — don't invent one).

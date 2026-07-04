@@ -3,6 +3,8 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import './index.css';
 import { Nav } from './components/Nav';
+import { DomainProvider } from './lib/domain';
+import { DomainSelect } from './pages/DomainSelect';
 import { Home } from './pages/Home';
 import { Curate } from './pages/Curate';
 import { DatasetView } from './pages/DatasetView';
@@ -10,16 +12,19 @@ import { FilterPicker } from './pages/FilterPicker';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <Nav />
-      <main className="mx-auto max-w-6xl px-6 pb-24 pt-8">
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/new" element={<Curate />} />
-          <Route path="/dataset/:id" element={<DatasetView />} />
-          <Route path="/dataset/:id/filters" element={<FilterPicker />} />
-        </Routes>
-      </main>
-    </BrowserRouter>
+    <DomainProvider>
+      <BrowserRouter>
+        <Nav />
+        <main className="mx-auto max-w-6xl px-6 pb-24 pt-8">
+          <Routes>
+            <Route path="/" element={<DomainSelect />} />
+            <Route path="/datasets" element={<Home />} />
+            <Route path="/new" element={<Curate />} />
+            <Route path="/dataset/:id" element={<DatasetView />} />
+            <Route path="/dataset/:id/filters" element={<FilterPicker />} />
+          </Routes>
+        </main>
+      </BrowserRouter>
+    </DomainProvider>
   </React.StrictMode>,
 );

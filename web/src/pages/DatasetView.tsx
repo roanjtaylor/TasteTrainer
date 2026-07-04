@@ -3,6 +3,7 @@ import { useParams, Link, useSearchParams } from 'react-router-dom';
 import type {
   CoverageGap,
   Dataset,
+  Domain,
   EloEntry,
   EraGroup,
   Item,
@@ -10,6 +11,7 @@ import type {
   Subtopic,
 } from '../../../shared/types';
 import { api, type Progress, type ScopeQuery } from '../lib/api';
+import { useDomain } from '../lib/domain';
 import { eraOf, eraGroupsOf, decadesInRange, itemsInGroup } from '../lib/format';
 import { ItemCard, Chip } from '../components/ItemCard';
 import { ImagePicker } from '../components/ImagePicker';
@@ -30,6 +32,7 @@ type ActiveFilter =
 // forced choice, and see the leaderboard — all one screen.
 export function DatasetView() {
   const { id = '' } = useParams();
+  const { setDomain } = useDomain();
   const [ds, setDs] = useState<Dataset | null>(null);
   const [mode, setMode] = useState<Mode>('browse');
 
@@ -45,7 +48,14 @@ export function DatasetView() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
-    api.getDataset(id).then(setDs);
+    // Landing on a dataset directly (a bookmark, the back button) still needs the
+    // domain context set — the dataset itself knows which world it belongs to
+    // (7-software-design.md), so this keeps Nav's "Datasets"/"+ New" links correct.
+    api.getDataset(id).then((loaded) => {
+      setDs(loaded);
+      setDomain(loaded.domain);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   const groups = useMemo(() => (ds ? eraGroupsOf(ds) : []), [ds]);
@@ -59,7 +69,13 @@ export function DatasetView() {
     setGapError('');
     try {
       const res = await api.findGaps(
-        { topic: ds.topic, description: ds.description, subtopics: ds.subtopics, items: ds.items },
+        {
+          topic: ds.topic,
+          description: ds.description,
+          subtopics: ds.subtopics,
+          items: ds.items,
+          domain: ds.domain,
+        },
         setGapProgress,
       );
       setGaps(res.gaps);
@@ -117,7 +133,7 @@ export function DatasetView() {
     <div className="space-y-6">
       <header className="mt-4 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <Link to="/" className="text-sm text-[var(--color-muted)]">
+          <Link to="/datasets" className="text-sm text-[var(--color-muted)]">
             ← all fields
           </Link>
           <h1 className="serif text-4xl">{ds.topic}</h1>
@@ -249,6 +265,7 @@ function Browse({
                 key={item.id}
                 draft={editing}
                 subtopics={ds.subtopics}
+                domain={ds.domain}
                 saving={saving}
                 onChange={(c) => setEditing((e) => (e ? { ...e, ...c } : e))}
                 onSwapImage={() => setPicker(true)}
@@ -276,7 +293,11 @@ function Browse({
 
       {picker && editing && (
         <ImagePicker
-          initialQuery={`${editing.name} ${editing.brand}`.trim()}
+          target={
+            ds.domain === 'software'
+              ? { kind: 'screenshot', url: editing.url ?? '', year: editing.year }
+              : { kind: 'search', query: `${editing.name} ${editing.brand}`.trim() }
+          }
           onPick={(url) => {
             setEditing((e) => (e ? { ...e, image: url } : e));
             setPicker(false);
@@ -293,6 +314,7 @@ function Browse({
 function ItemEditorCard({
   draft,
   subtopics,
+  domain,
   saving,
   onChange,
   onSwapImage,
@@ -301,6 +323,7 @@ function ItemEditorCard({
 }: {
   draft: Item;
   subtopics: Subtopic[];
+  domain: Domain;
   saving: boolean;
   onChange: (change: Partial<Item>) => void;
   onSwapImage: () => void;
@@ -318,7 +341,7 @@ function ItemEditorCard({
           Swap image
         </button>
       </div>
-      <ItemFields item={draft} subtopics={subtopics} onChange={onChange} />
+      <ItemFields item={draft} subtopics={subtopics} domain={domain} onChange={onChange} />
       <div className="flex gap-2 pt-1">
         <button
           onClick={onSave}
@@ -384,6 +407,7 @@ function GapPanel({
           gaps: gaps ?? [],
           count: Math.max(1, Math.min(50, count || 8)),
           feedback,
+          domain: ds.domain,
         },
         setAddProgress,
       );
@@ -537,6 +561,7 @@ function GapPanel({
                   key={i}
                   item={it}
                   subtopics={ds.subtopics}
+                  domain={ds.domain}
                   onChange={(c) =>
                     setPending((prev) => prev && prev.map((x, j) => (j === i ? { ...x, ...c } : x)))
                   }
@@ -551,7 +576,14 @@ function GapPanel({
 
       {pickerIndex !== null && pending && pending[pickerIndex] && (
         <ImagePicker
-          initialQuery={`${pending[pickerIndex].name} ${pending[pickerIndex].brand}`.trim()}
+          target={
+            ds.domain === 'software'
+              ? { kind: 'screenshot', url: pending[pickerIndex].url ?? '', year: pending[pickerIndex].year }
+              : {
+                  kind: 'search',
+                  query: `${pending[pickerIndex].name} ${pending[pickerIndex].brand}`.trim(),
+                }
+          }
           onPick={(url) => {
             setPending((prev) => prev && prev.map((x, j) => (j === pickerIndex ? { ...x, image: url } : x)));
             setPickerIndex(null);

@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } from './config.ts';
 import { now } from './util.ts';
-import type { Dataset, DatasetSummary, ResultsFile } from '../../shared/types.ts';
+import type { Dataset, DatasetSummary, Domain, ResultsFile } from '../../shared/types.ts';
 
 function slugify(topic: string): string {
   return topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -9,20 +9,31 @@ function slugify(topic: string): string {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-export async function listDatasets(): Promise<DatasetSummary[]> {
+// Datasets created before the domain split (7-software-design.md) predate this field —
+// treat them as 'hardware' (the only domain that existed then), same fallback posture as
+// the eraGroups migration in 2-data.md.
+function withDomain(ds: Dataset): Dataset {
+  return ds.domain ? ds : { ...ds, domain: 'hardware' };
+}
+
+export async function listDatasets(domain?: Domain): Promise<DatasetSummary[]> {
   const { data, error } = await supabase
     .from('taste_datasets')
     .select('id, data')
     .order('updated_at', { ascending: false });
   if (error) throw new Error(error.message);
-  return (data ?? []).map(({ id, data: ds }: { id: string; data: Dataset }) => ({
-    id,
-    topic: ds.topic,
-    description: ds.description,
-    itemCount: (ds.items ?? []).length,
-    subtopicCount: (ds.subtopics ?? []).length,
-    updatedAt: ds.updatedAt,
-  }));
+  return (data ?? [])
+    .map(({ id, data: raw }: { id: string; data: Dataset }) => ({ id, ds: withDomain(raw) }))
+    .filter(({ ds }) => !domain || ds.domain === domain)
+    .map(({ id, ds }) => ({
+      id,
+      domain: ds.domain,
+      topic: ds.topic,
+      description: ds.description,
+      itemCount: (ds.items ?? []).length,
+      subtopicCount: (ds.subtopics ?? []).length,
+      updatedAt: ds.updatedAt,
+    }));
 }
 
 export async function getDataset(id: string): Promise<Dataset | null> {
@@ -33,7 +44,7 @@ export async function getDataset(id: string): Promise<Dataset | null> {
     .single();
   if (error?.code === 'PGRST116') return null;
   if (error) throw new Error(error.message);
-  return (data?.data as Dataset) ?? null;
+  return data?.data ? withDomain(data.data as Dataset) : null;
 }
 
 export async function saveDataset(ds: Dataset): Promise<Dataset> {

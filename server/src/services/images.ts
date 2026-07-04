@@ -121,3 +121,95 @@ export async function searchImages(queryText: string, limit = 9): Promise<string
   if (primary.length) return primary;
   return commonsImages(q, limit);
 }
+
+// ---- Software domain: screenshots (7-software-design.md) ----
+//
+// A website has no pre-existing hosted photo the way a physical object does on
+// Wikimedia, so the "image" has to be generated. Two hops, mirroring the
+// wikimediaImage() pattern above:
+//   1. Resolve WHICH page to capture — the live url, or (for a past year) the
+//      closest Wayback Machine snapshot, via the CDX API.
+//   2. Turn that page url into an image url via mshots — a free, no-key,
+//      URL-in/image-out screenshot service — so `item.image` is still just a
+//      link (2-data.md #3), never a downloaded file.
+// mshots renders asynchronously: the first hit can return a "generating…"
+// placeholder before the real screenshot is ready moments later. Accepted,
+// documented risk (7-software-design.md) — same posture as the DuckDuckGo call
+// above; the picker's "Swap image" flow is the retry path.
+
+const MSHOTS_BASE = 'https://s.wordpress.com/mshots/v1/';
+
+function mshotsUrl(pageUrl: string, w = 1200, h = 900): string {
+  return `${MSHOTS_BASE}${encodeURIComponent(pageUrl)}?w=${w}&h=${h}`;
+}
+
+function waybackPageUrl(url: string, timestamp: string): string {
+  // `if_` renders the archived page standalone, without the Wayback toolbar.
+  return `https://web.archive.org/web/${timestamp}if_/${url}`;
+}
+
+interface WaybackHit {
+  timestamp: string;
+  year: number;
+}
+
+/** Snapshots of `url` in the CDX index within [fromYear, toYear], closest-first is NOT
+ *  guaranteed by the API — caller sorts. Returns [] on any failure (rate limit, bad url). */
+async function waybackHits(url: string, fromYear: number, toYear: number, limit: number): Promise<WaybackHit[]> {
+  try {
+    const res = await fetch(
+      `http://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(url)}&output=json` +
+        `&from=${fromYear}0101&to=${toYear}1231&filter=statuscode:200&collapse=timestamp:6&limit=${limit * 3}`,
+      { headers: { 'User-Agent': UA } },
+    );
+    if (!res.ok) return [];
+    const rows = (await res.json()) as any[];
+    // First row is the column header (["urlkey","timestamp","original",...]); skip it.
+    return rows
+      .slice(1)
+      .map((r) => {
+        const timestamp = String(r[1] ?? '');
+        const year = Number(timestamp.slice(0, 4));
+        return { timestamp, year };
+      })
+      .filter((h) => h.timestamp && Number.isFinite(h.year));
+  } catch {
+    return [];
+  }
+}
+
+/** The single best screenshot for a curated item: the live site for a current/undated
+ *  item, otherwise the closest Wayback snapshot to `year`. Always returns a usable
+ *  mshots url (falls back to screenshotting the live url if no snapshot is found). */
+export async function screenshotForYear(url: string, year: number | null): Promise<string> {
+  if (!url.trim()) return '';
+  const currentYear = new Date().getFullYear();
+  if (year == null || year >= currentYear - 1) {
+    return mshotsUrl(url);
+  }
+  const hits = await waybackHits(url, year - 2, year + 2, 5);
+  if (!hits.length) return mshotsUrl(url);
+  const closest = hits.reduce((best, h) => (Math.abs(h.year - year) < Math.abs(best.year - year) ? h : best));
+  return mshotsUrl(waybackPageUrl(url, closest.timestamp));
+}
+
+/** Candidate screenshots for the picker grid: a spread of nearby Wayback snapshots
+ *  (plus the live site) around an optional target year, newest/closest first. */
+export async function screenshotCandidates(url: string, year: number | null, limit = 9): Promise<string[]> {
+  if (!url.trim()) return [];
+  const currentYear = new Date().getFullYear();
+  const target = year ?? currentYear;
+  const hits = await waybackHits(url, target - 6, Math.min(target + 6, currentYear), limit);
+
+  // One snapshot per year, closest years to the target first.
+  const byYear = new Map<number, WaybackHit>();
+  for (const h of hits) if (!byYear.has(h.year)) byYear.set(h.year, h);
+  const sorted = [...byYear.values()].sort((a, b) => Math.abs(a.year - target) - Math.abs(b.year - target));
+
+  const images = sorted.slice(0, limit - 1).map((h) => mshotsUrl(waybackPageUrl(url, h.timestamp)));
+  // Always offer the live site too, unless the target year is clearly historical.
+  if (year == null || year >= currentYear - 1 || images.length < limit) {
+    images.push(mshotsUrl(url));
+  }
+  return images.slice(0, limit);
+}
