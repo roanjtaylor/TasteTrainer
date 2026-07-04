@@ -45,12 +45,12 @@ export async function wikimediaImage(title: string): Promise<string> {
 
 /**
  * First N image results from DuckDuckGo for a query (default 9 -> the 3x3 picker).
- * Unofficial endpoint: fetch a vqd token, then hit i.js. Acceptable for a personal
- * tool; if it breaks it's a small, contained fix (4-images.md).
+ * Unofficial endpoint: fetch a vqd token, then hit i.js. DuckDuckGo changes this
+ * scrape's shape often, so a broken/empty result here is expected — falls through
+ * to Wikimedia Commons search so the picker is never left with nothing to show.
  */
-export async function searchImages(queryText: string, limit = 9): Promise<string[]> {
-  if (!queryText.trim()) return [];
-  const q = encodeURIComponent(queryText.trim());
+async function duckDuckGoImages(queryText: string, limit: number): Promise<string[]> {
+  const q = encodeURIComponent(queryText);
   const headers = {
     'User-Agent':
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
@@ -90,4 +90,34 @@ export async function searchImages(queryText: string, limit = 9): Promise<string
   } catch {
     return [];
   }
+}
+
+/** Fallback image source: Wikimedia Commons search. Official, stable JSON API
+ *  (no scraping), so it's what keeps the picker working when the DuckDuckGo
+ *  scrape above breaks. */
+async function commonsImages(queryText: string, limit: number): Promise<string[]> {
+  const q = encodeURIComponent(queryText);
+  try {
+    const res = await fetch(
+      `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${q}&gsrnamespace=6&gsrlimit=${limit}&prop=imageinfo&iiprop=url&iiurlwidth=800&format=json&formatversion=2`,
+      { headers: { 'User-Agent': UA, accept: 'application/json' } },
+    );
+    if (!res.ok) return [];
+    const data: any = await res.json();
+    const pages: any[] = data?.query?.pages ?? [];
+    return pages
+      .map((p) => p?.imageinfo?.[0]?.thumburl as string | undefined)
+      .filter(Boolean)
+      .slice(0, limit) as string[];
+  } catch {
+    return [];
+  }
+}
+
+export async function searchImages(queryText: string, limit = 9): Promise<string[]> {
+  const q = queryText.trim();
+  if (!q) return [];
+  const primary = await duckDuckGoImages(q, limit);
+  if (primary.length) return primary;
+  return commonsImages(q, limit);
 }

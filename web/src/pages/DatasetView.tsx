@@ -256,22 +256,18 @@ function Browse({
                 onCancel={() => setEditing(null)}
               />
             ) : (
-              <div key={item.id} className="group relative">
-                <ItemCard item={item} />
-                <div className="absolute right-2 top-2 hidden gap-1 group-hover:flex">
-                  <button
-                    onClick={() => setEditing({ ...item })}
-                    className="rounded-full bg-[var(--color-ink)]/80 px-2 py-1 text-xs text-[var(--color-wall)]"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    onClick={() => removeItem(item.id)}
-                    className="rounded-full bg-[var(--color-ink)]/80 px-2 py-1 text-xs text-[var(--color-wall)]"
-                  >
-                    Remove
-                  </button>
-                </div>
+              <div key={item.id} className="relative">
+                {/* The card itself opens the editor — works on touch, not just hover. */}
+                <ItemCard item={item} onClick={() => setEditing({ ...item })} />
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeItem(item.id);
+                  }}
+                  className="absolute right-2 top-2 rounded-full bg-[var(--color-ink)]/80 px-2 py-1 text-xs text-[var(--color-wall)]"
+                >
+                  Remove
+                </button>
               </div>
             ),
           )}
