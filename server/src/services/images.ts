@@ -1,6 +1,7 @@
 // Image sourcing (4-images.md): Wikimedia/Wikipedia as the default lead image,
 // plus an unofficial DuckDuckGo image search that powers the 3x3 swap picker.
 // URLs only — nothing is downloaded (2-data.md).
+import { renderAndStore } from './screenshotRender.ts';
 
 const UA =
   'TasteTrainer/0.1 (personal local tool; https://example.local) Node fetch';
@@ -230,11 +231,24 @@ async function verifyImage(url: string, timeoutMs = 6000): Promise<boolean> {
   }
 }
 
-/** The single best screenshot for a curated item: the closest verified Wayback
- *  snapshot to `year`, walking outward candidate-by-candidate if the closest one
- *  doesn't actually resolve; falls back to the live site; falls back to "" (needs
- *  image, same as a hardware item Wikimedia couldn't resolve) rather than ever
- *  returning a url that 404s in the browser. */
+/** Render `pageUrl` with our own request-blocking Chromium (screenshotRender.ts) —
+ *  the real fix, since only a renderer we control can stop a Wayback replay page
+ *  hydrating from the live web. Falls back to a verified mshots screenshot of the
+ *  same page (imperfect for JS-heavy sites, but still real for static ones, and a
+ *  safety net if Chromium/Storage isn't working for some reason), then to null. */
+async function bestScreenshot(pageUrl: string, isHistorical: boolean): Promise<string | null> {
+  try {
+    return await renderAndStore(pageUrl, isHistorical);
+  } catch {
+    const fallback = mshotsUrl(pageUrl);
+    return (await verifyImage(fallback)) ? fallback : null;
+  }
+}
+
+/** The single best screenshot for a curated item: the closest Wayback snapshot to
+ *  `year` that actually renders, walking outward candidate-by-candidate; falls back
+ *  to the live site; falls back to "" (needs image, same as a hardware item
+ *  Wikimedia couldn't resolve) rather than ever returning a broken/wrong image. */
 export async function screenshotForYear(rawUrl: string, year: number | null): Promise<string> {
   const url = normalizeUrl(rawUrl);
   if (!url) return '';
@@ -244,19 +258,18 @@ export async function screenshotForYear(rawUrl: string, year: number | null): Pr
     const hits = await findWaybackHits(url, year - 3, year + 3, 6);
     const sorted = [...hits].sort((a, b) => Math.abs(a.year - year) - Math.abs(b.year - year));
     for (const h of sorted) {
-      const candidate = mshotsUrl(waybackPageUrl(url, h.timestamp));
-      if (await verifyImage(candidate)) return candidate;
+      const shot = await bestScreenshot(waybackPageUrl(url, h.timestamp), true);
+      if (shot) return shot;
     }
   }
 
-  const live = mshotsUrl(url);
-  if (await verifyImage(live)) return live;
-  return '';
+  return (await bestScreenshot(url, false)) ?? '';
 }
 
-/** Candidate screenshots for the picker grid: a spread of nearby, VERIFIED Wayback
- *  snapshots (plus the live site) around an optional target year, closest first. Only
- *  urls that actually resolve to an image are returned — no broken thumbnails. */
+/** Candidate screenshots for the picker grid: a spread of nearby Wayback snapshots
+ *  (plus the live site) around an optional target year, closest first — each
+ *  rendered the same way a real curation call would, so what you pick is what
+ *  you'll get. Only candidates that actually produced an image are returned. */
 export async function screenshotCandidates(rawUrl: string, year: number | null, limit = 9): Promise<string[]> {
   const url = normalizeUrl(rawUrl);
   if (!url) return [];
@@ -267,11 +280,14 @@ export async function screenshotCandidates(rawUrl: string, year: number | null, 
   // One snapshot per year, closest years to the target first.
   const byYear = new Map<number, WaybackHit>();
   for (const h of hits) if (!byYear.has(h.year)) byYear.set(h.year, h);
-  const sorted = [...byYear.values()].sort((a, b) => Math.abs(a.year - target) - Math.abs(b.year - target));
+  const sorted = [...byYear.values()]
+    .sort((a, b) => Math.abs(a.year - target) - Math.abs(b.year - target))
+    .slice(0, limit);
 
-  const candidates = sorted.slice(0, limit).map((h) => mshotsUrl(waybackPageUrl(url, h.timestamp)));
-  candidates.push(mshotsUrl(url)); // always offer the live site too
+  const historical = await Promise.all(
+    sorted.map((h) => bestScreenshot(waybackPageUrl(url, h.timestamp), true)),
+  );
+  const live = await bestScreenshot(url, false); // always offer the live site too
 
-  const checked = await Promise.all(candidates.map(async (u) => ((await verifyImage(u)) ? u : null)));
-  return checked.filter((u): u is string => !!u).slice(0, limit);
+  return [...historical, live].filter((u): u is string => !!u).slice(0, limit);
 }

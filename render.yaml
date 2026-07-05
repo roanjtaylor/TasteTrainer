@@ -1,10 +1,14 @@
 services:
   - type: web
     name: tastetrainer-server
-    runtime: node
-    rootDir: server
-    buildCommand: npm install
-    startCommand: npm start
+    # Docker, not Render's native Node runtime: the software-domain screenshot
+    # pipeline (7-software-design.md) needs headless Chromium, and its system
+    # libraries can only be installed with the root/apt access a Docker build has —
+    # Render's native buildCommand has neither. dockerContext is the repo root (not
+    # server/) so the Dockerfile's COPY can also reach ../shared.
+    runtime: docker
+    dockerfilePath: server/Dockerfile
+    dockerContext: .
     envVars:
       - key: PORT
         value: 10000
