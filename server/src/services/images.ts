@@ -148,18 +148,43 @@ function waybackPageUrl(url: string, timestamp: string): string {
   return `https://web.archive.org/web/${timestamp}if_/${url}`;
 }
 
+/** Claude doesn't always return a bare url with a scheme despite the prompt's example —
+ *  a protocol-less "stripe.com" breaks both the CDX lookup and mshots. Cheap, high-value fix. */
+function normalizeUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url.replace(/^https?:\/\//i, '').split('/')[0];
+  }
+}
+
 interface WaybackHit {
   timestamp: string;
   year: number;
 }
 
-/** Snapshots of `url` in the CDX index within [fromYear, toYear], closest-first is NOT
- *  guaranteed by the API — caller sorts. Returns [] on any failure (rate limit, bad url). */
-async function waybackHits(url: string, fromYear: number, toYear: number, limit: number): Promise<WaybackHit[]> {
+/** Snapshots within [fromYear, toYear] in the CDX index. `matchType: 'domain'` matches
+ *  ANY path on the host rather than requiring the exact url — the fix for cases like a
+ *  Tesla product page where the exact path was never archived but the site clearly was.
+ *  Closest-first is NOT guaranteed by the API — caller sorts. [] on any failure. */
+async function waybackHits(
+  target: string,
+  fromYear: number,
+  toYear: number,
+  limit: number,
+  matchType: 'exact' | 'domain' = 'exact',
+): Promise<WaybackHit[]> {
   try {
     const res = await fetch(
-      `http://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(url)}&output=json` +
-        `&from=${fromYear}0101&to=${toYear}1231&filter=statuscode:200&collapse=timestamp:6&limit=${limit * 3}`,
+      `http://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(target)}&output=json` +
+        `&from=${fromYear}0101&to=${toYear}1231&filter=statuscode:200&collapse=timestamp:6&limit=${limit * 3}` +
+        (matchType === 'domain' ? '&matchType=domain' : ''),
       { headers: { 'User-Agent': UA } },
     );
     if (!res.ok) return [];
@@ -178,38 +203,75 @@ async function waybackHits(url: string, fromYear: number, toYear: number, limit:
   }
 }
 
-/** The single best screenshot for a curated item: the live site for a current/undated
- *  item, otherwise the closest Wayback snapshot to `year`. Always returns a usable
- *  mshots url (falls back to screenshotting the live url if no snapshot is found). */
-export async function screenshotForYear(url: string, year: number | null): Promise<string> {
-  if (!url.trim()) return '';
-  const currentYear = new Date().getFullYear();
-  if (year == null || year >= currentYear - 1) {
-    return mshotsUrl(url);
-  }
-  const hits = await waybackHits(url, year - 2, year + 2, 5);
-  if (!hits.length) return mshotsUrl(url);
-  const closest = hits.reduce((best, h) => (Math.abs(h.year - year) < Math.abs(best.year - year) ? h : best));
-  return mshotsUrl(waybackPageUrl(url, closest.timestamp));
+/** Exact-url match first (most specific — the actual page); if that's empty, fall back
+ *  to any capture of the whole domain in the window (broader, but real sites are far
+ *  better archived at the domain level than any one deep path). */
+async function findWaybackHits(url: string, fromYear: number, toYear: number, limit: number): Promise<WaybackHit[]> {
+  const exact = await waybackHits(url, fromYear, toYear, limit, 'exact');
+  if (exact.length) return exact;
+  return waybackHits(hostOf(url), fromYear, toYear, limit, 'domain');
 }
 
-/** Candidate screenshots for the picker grid: a spread of nearby Wayback snapshots
- *  (plus the live site) around an optional target year, newest/closest first. */
-export async function screenshotCandidates(url: string, year: number | null, limit = 9): Promise<string[]> {
-  if (!url.trim()) return [];
+/** Confirms a candidate screenshot url actually resolves to an image before we ever
+ *  hand it to the browser — the fix for items rendering as a broken/404 <img>. mshots
+ *  itself can fail outright (blocked host, malformed input, dead archived page), and
+ *  this is the one place that catches it instead of trusting the URL blindly. */
+async function verifyImage(url: string, timeoutMs = 6000): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': UA } });
+    const contentType = res.headers.get('content-type') ?? '';
+    return res.ok && contentType.startsWith('image/');
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The single best screenshot for a curated item: the closest verified Wayback
+ *  snapshot to `year`, walking outward candidate-by-candidate if the closest one
+ *  doesn't actually resolve; falls back to the live site; falls back to "" (needs
+ *  image, same as a hardware item Wikimedia couldn't resolve) rather than ever
+ *  returning a url that 404s in the browser. */
+export async function screenshotForYear(rawUrl: string, year: number | null): Promise<string> {
+  const url = normalizeUrl(rawUrl);
+  if (!url) return '';
+  const currentYear = new Date().getFullYear();
+
+  if (year != null && year < currentYear - 1) {
+    const hits = await findWaybackHits(url, year - 3, year + 3, 6);
+    const sorted = [...hits].sort((a, b) => Math.abs(a.year - year) - Math.abs(b.year - year));
+    for (const h of sorted) {
+      const candidate = mshotsUrl(waybackPageUrl(url, h.timestamp));
+      if (await verifyImage(candidate)) return candidate;
+    }
+  }
+
+  const live = mshotsUrl(url);
+  if (await verifyImage(live)) return live;
+  return '';
+}
+
+/** Candidate screenshots for the picker grid: a spread of nearby, VERIFIED Wayback
+ *  snapshots (plus the live site) around an optional target year, closest first. Only
+ *  urls that actually resolve to an image are returned — no broken thumbnails. */
+export async function screenshotCandidates(rawUrl: string, year: number | null, limit = 9): Promise<string[]> {
+  const url = normalizeUrl(rawUrl);
+  if (!url) return [];
   const currentYear = new Date().getFullYear();
   const target = year ?? currentYear;
-  const hits = await waybackHits(url, target - 6, Math.min(target + 6, currentYear), limit);
+  const hits = await findWaybackHits(url, target - 8, Math.min(target + 8, currentYear), limit * 2);
 
   // One snapshot per year, closest years to the target first.
   const byYear = new Map<number, WaybackHit>();
   for (const h of hits) if (!byYear.has(h.year)) byYear.set(h.year, h);
   const sorted = [...byYear.values()].sort((a, b) => Math.abs(a.year - target) - Math.abs(b.year - target));
 
-  const images = sorted.slice(0, limit - 1).map((h) => mshotsUrl(waybackPageUrl(url, h.timestamp)));
-  // Always offer the live site too, unless the target year is clearly historical.
-  if (year == null || year >= currentYear - 1 || images.length < limit) {
-    images.push(mshotsUrl(url));
-  }
-  return images.slice(0, limit);
+  const candidates = sorted.slice(0, limit).map((h) => mshotsUrl(waybackPageUrl(url, h.timestamp)));
+  candidates.push(mshotsUrl(url)); // always offer the live site too
+
+  const checked = await Promise.all(candidates.map(async (u) => ((await verifyImage(u)) ? u : null)));
+  return checked.filter((u): u is string => !!u).slice(0, limit);
 }

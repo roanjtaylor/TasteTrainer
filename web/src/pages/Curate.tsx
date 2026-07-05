@@ -3,6 +3,7 @@ import { useNavigate, Navigate } from 'react-router-dom';
 import type { Domain, ProposedItem, Subtopic } from '../../../shared/types';
 import { api } from '../lib/api';
 import { useDomain } from '../lib/domain';
+import { SOFTWARE_FIELD_SUGGESTIONS } from '../lib/softwareFields';
 import { ImagePicker } from '../components/ImagePicker';
 import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
@@ -111,6 +112,31 @@ export function Curate() {
         </p>
       </header>
 
+      {/* Software fields aren't as obvious to name as hardware ones (7-software-design.md,
+          problem #3) — an info box of starter categories with real, well-archived
+          examples, shown until a field has been mapped. */}
+      {domain === 'software' && subtopics.length === 0 && (
+        <section className="space-y-3 rounded-xl border border-[var(--color-line)] bg-[var(--color-wall-soft)] p-5">
+          <h2 className="text-sm font-medium text-[var(--color-muted)]">
+            Not sure what to study? Core software fields to start with:
+          </h2>
+          <div className="flex flex-wrap gap-2">
+            {SOFTWARE_FIELD_SUGGESTIONS.map((s) => (
+              <button
+                key={s.topic}
+                onClick={() => {
+                  setTopic(s.topic);
+                  setDescription(s.description);
+                }}
+                className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-3 py-1.5 text-sm hover:border-[var(--color-accent)] hover:bg-[var(--color-wall)]"
+              >
+                {s.topic}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Step 1: the field. (No item count here — Claude sizes the collection after
           mapping the field, so the count lives in step 2 to avoid implying the user
           sets the field's structure.) */}
@@ -121,7 +147,7 @@ export function Curate() {
             className="mt-1 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-2"
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
-            placeholder="e.g. Watches"
+            placeholder={domain === 'software' ? 'e.g. Booking systems' : 'e.g. Watches'}
           />
         </label>
         <label className="block">

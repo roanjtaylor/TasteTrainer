@@ -209,6 +209,16 @@ function itemShapeLine(domain: Domain): string {
     : '"subtopic": string, "wikipediaTitle": string';
 }
 
+/** A request-specific reinforcement of curation-rules.md §f's era-spread rule, sized to
+ *  the actual count being asked for — a generic rules-file mention is easy to default
+ *  away from under a concrete "give me N items" instruction, so this spells out the
+ *  per-subtopic era math explicitly for THIS call. */
+function eraSpreadLine(count: number, subtopicCount: number): string {
+  const perSubtopic = Math.max(1, Math.round(count / Math.max(1, subtopicCount)));
+  const eras = Math.max(2, Math.min(5, perSubtopic));
+  return `\n\nCRITICAL: spread these ${count} items across TIME, not just across subtopics. Within each subtopic, aim for roughly ${perSubtopic} items spanning ~${eras} distinct design eras of that category's history (its earliest plausible archived era through today) — do NOT let most items land in the present day. Reusing the same iconic, well-archived product at multiple different years is the ideal way to do this (see curation-rules.md §f) — it is not a duplicate.`;
+}
+
 export async function generateItems(args: {
   topic: string;
   description: string;
@@ -228,7 +238,7 @@ export async function generateItems(args: {
         .join('\n')}`
     : '';
 
-  const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\n\nCanonical subtopics (each item's "subtopic" MUST be exactly one of these names):\n${subtopicList}\n\nPropose ${count} defining items for this field. Spread them across the field's brands/makers, movements, eras and regions (breadth first), countering popularity bias.${existingBlock}\n\nFill EVERY field. Return JSON of shape:\n{ "items": [ { "name": string, "description": string, "year": number|null, "brand": string, "creator": string, "definingFact": string, ${itemShapeLine(domain)} } ] }`;
+  const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\n\nCanonical subtopics (each item's "subtopic" MUST be exactly one of these names):\n${subtopicList}\n\nPropose ${count} defining items for this field. Spread them across the field's brands/makers, movements, eras and regions (breadth first), countering popularity bias.${domain === 'software' ? eraSpreadLine(count, subtopics.length) : ''}${existingBlock}\n\nFill EVERY field. Return JSON of shape:\n{ "items": [ { "name": string, "description": string, "year": number|null, "brand": string, "creator": string, "definingFact": string, ${itemShapeLine(domain)} } ] }`;
 
   const json = await runJson(system, prompt, {
     onProgress,
@@ -298,7 +308,7 @@ export async function fillGaps(args: {
     ? `\n\nThe user gave this feedback on what to add:\n"""\n${feedback.trim()}\n"""\nTreat it as a HYPOTHESIS to evaluate against the curation rules and the field's objective reality, NOT an order. Where it names work that genuinely belongs (objectively defining/representative of the field), include it. Where a request would NOT improve objective coverage — popularity bias, already covered, out of scope, or not actually defining — do NOT include it. Either way, account for every distinct request in your "note".`
     : '';
 
-  const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\n\nCanonical subtopics (each item's "subtopic" MUST be exactly one of these names):\n${subtopicList}\n\nItems already in the set — do NOT repeat these:\n${existingBlock}\n\nReported coverage gaps to close (breadth first):\n${gapBlock}${feedbackBlock}\n\nPropose ${count} NEW defining items that best close these gaps and widen the field's coverage, countering popularity bias. Fill EVERY field.\n\nReturn JSON of shape:\n{ "items": [ { "name": string, "description": string, "year": number|null, "brand": string, "creator": string, "definingFact": string, ${itemShapeLine(domain)} } ], "note": string }\n\nThe "note" is a short, plain-language explanation (2–5 sentences) of how you handled the gaps and the user's feedback: what you added and why, and for any user request you did NOT include, a clear reason why.`;
+  const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\n\nCanonical subtopics (each item's "subtopic" MUST be exactly one of these names):\n${subtopicList}\n\nItems already in the set — do NOT repeat these:\n${existingBlock}\n\nReported coverage gaps to close (breadth first):\n${gapBlock}${feedbackBlock}\n\nPropose ${count} NEW defining items that best close these gaps and widen the field's coverage, countering popularity bias.${domain === 'software' ? eraSpreadLine(count, subtopics.length) : ''} Fill EVERY field.\n\nReturn JSON of shape:\n{ "items": [ { "name": string, "description": string, "year": number|null, "brand": string, "creator": string, "definingFact": string, ${itemShapeLine(domain)} } ], "note": string }\n\nThe "note" is a short, plain-language explanation (2–5 sentences) of how you handled the gaps and the user's feedback: what you added and why, and for any user request you did NOT include, a clear reason why.`;
 
   const json = await runJson(system, prompt, {
     onProgress,
