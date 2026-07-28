@@ -5,9 +5,49 @@
 /**
  * Which world a dataset belongs to (7-software-design.md). A dataset is wholly one
  * domain or the other — it's a property of the macro topic, not of individual items.
- * Datasets created before this field existed are treated as 'hardware'.
+ *
+ * Named for the WORLD the work exists in, not the medium it's built with: a painting
+ * is not "hardware" and a motion graphic is not "software", but both sit cleanly on
+ * the physical/digital line. Renamed from 'hardware'|'software' on 2026-07-28.
  */
-export type Domain = 'hardware' | 'software';
+export type Domain = 'physical' | 'digital';
+
+/** The pre-rename values, still present in rows written before 2026-07-28. */
+const LEGACY_DOMAINS: Record<string, Domain> = { hardware: 'physical', software: 'digital' };
+
+/**
+ * Coerce anything stored or sent over the wire into a valid Domain. Accepts the
+ * legacy 'hardware'/'software' spellings so old rows and any stale client keep
+ * working, and falls back to 'physical' — the only world that existed before the
+ * split, so an absent value can only have meant that.
+ */
+export function normalizeDomain(raw: unknown): Domain {
+  const value = String(raw ?? '').toLowerCase();
+  if (value === 'physical' || value === 'digital') return value;
+  return LEGACY_DOMAINS[value] ?? 'physical';
+}
+
+/** Same as normalizeDomain, but keeps "no domain given" distinct from "physical". */
+export function optionalDomain(raw: unknown): Domain | undefined {
+  const value = String(raw ?? '').toLowerCase();
+  if (!value) return undefined;
+  if (value === 'physical' || value === 'digital') return value;
+  return LEGACY_DOMAINS[value];
+}
+
+/** The one place each world's user-facing wording lives. */
+export const DOMAIN_LABELS: Record<Domain, { title: string; short: string; tagline: string }> = {
+  physical: {
+    title: 'Physical world',
+    short: 'Physical',
+    tagline: 'Things you can touch — watches, cars, chairs, paintings, buildings.',
+  },
+  digital: {
+    title: 'Digital world',
+    short: 'Digital',
+    tagline: 'Things on a screen — websites, apps, product UI, graphics.',
+  },
+};
 
 /** One canonical category within a macro topic (e.g. Watches -> "Mechanical Watches"). */
 export interface Subtopic {
@@ -51,9 +91,9 @@ export interface Item {
   /** The one canonical subtopic it belongs to (references a Subtopic.name). */
   subtopic: string;
   /**
-   * Canonical site/product address (software domain only — 7-software-design.md).
+   * Canonical site/product address (digital domain only — 7-software-design.md).
    * Drives the screenshot pipeline: `image` is a screenshot of this url, at `year`.
-   * "" / absent for hardware items.
+   * "" / absent for physical items.
    */
   url?: string;
   createdAt: string;
@@ -62,7 +102,7 @@ export interface Item {
 /** A dataset = a macro topic (the field you're cataloguing). One JSON file per dataset. */
 export interface Dataset {
   id: string;
-  /** Hardware (physical objects) or software (digital design) — 7-software-design.md. */
+  /** Which world this field belongs to — physical or digital (7-software-design.md). */
   domain: Domain;
   /** The macro topic name, e.g. "Watches". */
   topic: string;
@@ -102,13 +142,59 @@ export interface EloEntry {
   games: number;
 }
 
-/** Comparison outcomes / rankings for one dataset (data/results/<id>.json). */
+/**
+ * Who is doing the ranking. Arcade-cabinet identity: you type a name, that name owns
+ * your scores — no account, no password, no login round-trip. `key` is the normalised
+ * form used for storage/equality (so "Roan" and "roan " are the same player);
+ * `name` is what gets displayed, spelled the way it was first entered.
+ */
+export interface Ranker {
+  key: string;
+  name: string;
+}
+
+/** Longest name the cabinet accepts. Long enough to be a real name, short enough to fit a row. */
+export const RANKER_NAME_MAX = 16;
+
+/** The storage/equality form of a ranker name. Shared so web and server agree exactly. */
+export function rankerKeyOf(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, ' ').slice(0, RANKER_NAME_MAX);
+}
+
+/** Trim/collapse a typed name for display. Returns "" when nothing usable was typed. */
+export function cleanRankerName(name: string): string {
+  return name.trim().replace(/\s+/g, ' ').slice(0, RANKER_NAME_MAX);
+}
+
+/** One person's comparison outcomes for one dataset. */
 export interface ResultsFile {
   datasetId: string;
+  /** Whose ranking this is. Absent on rows written before per-person rankings existed. */
+  ranker?: Ranker;
   ratings: Record<string, EloEntry>;
   /** Total comparisons recorded across the whole dataset. */
   comparisons: number;
   updatedAt: string;
+}
+
+/** A person who has ranked a dataset — the cabinet's high-score name plate. */
+export interface RankerSummary extends Ranker {
+  /** How many 1v1 choices this person has made in this dataset. */
+  comparisons: number;
+  /** How many distinct items they've actually judged. */
+  itemsJudged: number;
+  updatedAt: string;
+}
+
+/** The pseudo-ranker key meaning "everyone's rankings, pooled". */
+export const EVERYONE = 'everyone';
+
+/** One row of a leaderboard. `rankerCount` is only set on the pooled view. */
+export interface LeaderboardRow {
+  item: Item;
+  entry: EloEntry;
+  /** Pooled view only: how many people have judged this item. */
+  rankerCount?: number;
 }
 
 // ---- Curation request/response payloads (server <-> web) ----
@@ -122,9 +208,9 @@ export interface ProposedItem {
   creator: string;
   definingFact: string;
   subtopic: string;
-  /** Hardware domain: likely Wikipedia title, used to fetch the lead image. */
+  /** Physical domain: likely Wikipedia title, used to fetch the lead image. */
   wikipediaTitle?: string;
-  /** Software domain: canonical site/product url, used by the screenshot pipeline. */
+  /** Digital domain: canonical site/product url, used by the screenshot pipeline. */
   url?: string;
   /** Resolved image URL (filled by the server's image step). "" => needs image. */
   image: string;

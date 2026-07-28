@@ -1,4 +1,4 @@
-// Self-hosted screenshot renderer for the software domain (7-software-design.md).
+// Self-hosted screenshot renderer for the digital world (7-software-design.md).
 //
 // Why this exists: a URL-in/image-out service like mshots can't stop a Wayback
 // Machine replay page's own client-side JS from reaching the LIVE internet for
@@ -16,7 +16,21 @@ import { chromium, type Browser } from 'playwright';
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } from '../config.ts';
 
+// Bucket name predates the physical/digital rename and is deliberately NOT renamed:
+// every already-stored screenshot's public URL contains it, and those URLs are saved
+// inside dataset rows. Renaming would break every existing image to gain nothing.
 const BUCKET = 'software-screenshots';
+
+// Object keys are a hash of the exact page url (storageKeyFor), so a given key's bytes
+// never change — the content IS the identity. That makes these safely cacheable
+// forever, and leaving them on Supabase Storage's one-hour default meant every browser
+// re-downloaded every screenshot roughly hourly, which is pure egress for no benefit.
+// A year means each viewer fetches a given screenshot exactly once.
+//
+// Bare seconds, not a full directive: supabase-js sends this as `max-age=${value}`,
+// so anything more elaborate here would produce a malformed header.
+const IMAGE_CACHE_SECONDS = '31536000';
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 let bucketReady: Promise<void> | null = null;
@@ -132,6 +146,7 @@ export async function renderAndStore(pageUrl: string, blockLiveRequests: boolean
   const png = await renderScreenshot(pageUrl, blockLiveRequests);
   const { error } = await supabase.storage.from(BUCKET).upload(path, png, {
     contentType: 'image/png',
+    cacheControl: IMAGE_CACHE_SECONDS,
     upsert: true,
   });
   if (error) throw new Error(`Could not upload screenshot: ${error.message}`);

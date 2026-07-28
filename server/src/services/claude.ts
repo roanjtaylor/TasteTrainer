@@ -9,12 +9,12 @@ import { CLAUDE_MODEL, HF_BASE_URL, HF_APP_SECRET } from '../config.ts';
 import type { CoverageGap, Domain, EraGroup, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
 
 /** One line of domain context folded into every curation prompt (7-software-design.md) —
- *  the rules file's software-aware section (curation-rules.md §f) only applies correctly
+ *  the rules file's domain-aware section (curation-rules.md §f) only applies correctly
  *  once the model knows which world it's mapping. */
 function domainLine(domain: Domain): string {
-  return domain === 'software'
-    ? 'Domain: SOFTWARE / digital design — this field is websites, apps, or product UI. There is no physical object; think in platforms, interaction patterns, and design eras.'
-    : 'Domain: HARDWARE / physical design — this field is tangible objects.';
+  return domain === 'digital'
+    ? 'Domain: THE DIGITAL WORLD — this field lives on a screen: websites, apps, product UI, motion and graphics. There is no physical object; think in platforms, interaction patterns, and design eras.'
+    : 'Domain: THE PHYSICAL WORLD — this field is work you can stand in front of or hold: objects, paintings, buildings, vehicles, printed matter.';
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -201,10 +201,10 @@ export async function proposePeriods(args: {
 }
 
 /** The one field that differs by domain in every returned item: a Wikipedia title
- *  to resolve a photo (hardware) vs a canonical site/product url to screenshot
- *  (software) — see attachImages() in routes/curation.ts. */
+ *  to resolve a photo (physical world) vs a canonical site/product url to screenshot
+ *  (digital world) — see attachImages() in routes/curation.ts. */
 function itemShapeLine(domain: Domain): string {
-  return domain === 'software'
+  return domain === 'digital'
     ? '"subtopic": string, "url": string (the canonical site/product address, e.g. "https://stripe.com" — used to capture a screenshot; "year" should be the year THIS SPECIFIC design/snapshot represents, which may be a past redesign, not necessarily today\'s look)'
     : '"subtopic": string, "wikipediaTitle": string';
 }
@@ -238,7 +238,7 @@ export async function generateItems(args: {
         .join('\n')}`
     : '';
 
-  const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\n\nCanonical subtopics (each item's "subtopic" MUST be exactly one of these names):\n${subtopicList}\n\nPropose ${count} defining items for this field. Spread them across the field's brands/makers, movements, eras and regions (breadth first), countering popularity bias.${domain === 'software' ? eraSpreadLine(count, subtopics.length) : ''}${existingBlock}\n\nFill EVERY field. Return JSON of shape:\n{ "items": [ { "name": string, "description": string, "year": number|null, "brand": string, "creator": string, "definingFact": string, ${itemShapeLine(domain)} } ] }`;
+  const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\n\nCanonical subtopics (each item's "subtopic" MUST be exactly one of these names):\n${subtopicList}\n\nPropose ${count} defining items for this field. Spread them across the field's brands/makers, movements, eras and regions (breadth first), countering popularity bias.${domain === 'digital' ? eraSpreadLine(count, subtopics.length) : ''}${existingBlock}\n\nFill EVERY field. Return JSON of shape:\n{ "items": [ { "name": string, "description": string, "year": number|null, "brand": string, "creator": string, "definingFact": string, ${itemShapeLine(domain)} } ] }`;
 
   const json = await runJson(system, prompt, {
     onProgress,
@@ -308,7 +308,7 @@ export async function fillGaps(args: {
     ? `\n\nThe user gave this feedback on what to add:\n"""\n${feedback.trim()}\n"""\nTreat it as a HYPOTHESIS to evaluate against the curation rules and the field's objective reality, NOT an order. Where it names work that genuinely belongs (objectively defining/representative of the field), include it. Where a request would NOT improve objective coverage — popularity bias, already covered, out of scope, or not actually defining — do NOT include it. Either way, account for every distinct request in your "note".`
     : '';
 
-  const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\n\nCanonical subtopics (each item's "subtopic" MUST be exactly one of these names):\n${subtopicList}\n\nItems already in the set — do NOT repeat these:\n${existingBlock}\n\nReported coverage gaps to close (breadth first):\n${gapBlock}${feedbackBlock}\n\nPropose ${count} NEW defining items that best close these gaps and widen the field's coverage, countering popularity bias.${domain === 'software' ? eraSpreadLine(count, subtopics.length) : ''} Fill EVERY field.\n\nReturn JSON of shape:\n{ "items": [ { "name": string, "description": string, "year": number|null, "brand": string, "creator": string, "definingFact": string, ${itemShapeLine(domain)} } ], "note": string }\n\nThe "note" is a short, plain-language explanation (2–5 sentences) of how you handled the gaps and the user's feedback: what you added and why, and for any user request you did NOT include, a clear reason why.`;
+  const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\n\nCanonical subtopics (each item's "subtopic" MUST be exactly one of these names):\n${subtopicList}\n\nItems already in the set — do NOT repeat these:\n${existingBlock}\n\nReported coverage gaps to close (breadth first):\n${gapBlock}${feedbackBlock}\n\nPropose ${count} NEW defining items that best close these gaps and widen the field's coverage, countering popularity bias.${domain === 'digital' ? eraSpreadLine(count, subtopics.length) : ''} Fill EVERY field.\n\nReturn JSON of shape:\n{ "items": [ { "name": string, "description": string, "year": number|null, "brand": string, "creator": string, "definingFact": string, ${itemShapeLine(domain)} } ], "note": string }\n\nThe "note" is a short, plain-language explanation (2–5 sentences) of how you handled the gaps and the user's feedback: what you added and why, and for any user request you did NOT include, a clear reason why.`;
 
   const json = await runJson(system, prompt, {
     onProgress,

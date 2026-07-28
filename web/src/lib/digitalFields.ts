@@ -1,14 +1,14 @@
-// Curated starter categories for the software domain (7-software-design.md, problem #3):
-// unlike hardware, "what are the fields to study?" isn't obvious, so this is the info
-// box of suggestions the Curate flow offers instead of a blank topic input. Each is a
-// functional category with real, well-archived, long-running examples — the kind that
-// can show a clean design history from an early era through today.
-export interface SoftwareFieldSuggestion {
+// Curated starter categories for the digital world (7-software-design.md, problem #3):
+// unlike the physical world, "what are the fields to study?" isn't obvious here, so
+// this is the info box of suggestions the Curate flow offers instead of a blank topic
+// input. Each is a functional category with real, well-archived, long-running examples
+// — the kind that can show a clean design history from an early era through today.
+export interface DigitalFieldSuggestion {
   topic: string;
   description: string;
 }
 
-export const SOFTWARE_FIELD_SUGGESTIONS: SoftwareFieldSuggestion[] = [
+export const DIGITAL_FIELD_SUGGESTIONS: DigitalFieldSuggestion[] = [
   {
     topic: 'Search engines',
     description: 'Search engines — the query box and results page, from Web 1.0 portals to today.',

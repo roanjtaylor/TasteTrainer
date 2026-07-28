@@ -21,7 +21,7 @@ Numbered **1 → 6 by increasing concreteness** — from the abstract skeleton, 
 | [4-images.md](4-images.md) | How each item gets a *real image* — Wikimedia + an alternative picker |
 | [5-comparison.md](5-comparison.md) | How taste gets *trained* — 1v1 forced choice → a ranking |
 | [6-ui.md](6-ui.md) | How you *use* it — the screen map, design language, and styling tooling that tie it all together |
-| [7-software-design.md](7-software-design.md) | The deferred second domain — training taste in *digital/software* design (websites, apps) alongside physical objects |
+| [7-software-design.md](7-software-design.md) | The deferred second domain — training taste in the *digital world* (websites, apps, product UI) alongside the *physical world* |
 
 **UI lives in two places by design:** the *coherent whole* (screen map, visual language, styling) is owned by `6-ui.md`; *feature-specific interactions* stay in their feature doc (`3`–`5`), each flagged with a **UI →** pointer at the top. `2-data.md` has no UI of its own (it's the model the screens render).
 
@@ -32,3 +32,7 @@ Read a doc, accept or change the **Recommended default**, answer the **Open ques
 **Status (2026-06-18):** all six docs have **confirmed core decisions** (each carries a *Resolved* / *Decisions locked* section). Only small, non-blocking residuals remain (era bucket size, exact "done" multiple, a look-and-feel reference). The plan is intended as the **canonical, regenerable source of truth** — the software is spun up from it, and can be wiped and regenerated if a core decision changes, so the docs are kept internally consistent.
 
 **Update (2026-06-19):** the dataset view's filtering was redesigned — the always-visible chip rows became an on-demand **Filters subpage** (`/dataset/:id/filters`) with a SUBTOPIC view (fan-card collections) and an ERA view (a timeline of named **era-periods**). This added an optional `eraGroups[]` to the dataset (`2-data.md`) and a `proposePeriods` AI call (`3-curation.md`); the full screen/interaction spec is the *Resolved (2026-06-19)* block in `6-ui.md`.
+
+**Update (2026-07-28):** two changes to the built app, both driven by use rather than by a new core decision, so they amend the docs above rather than adding an eighth.
+- **Domains renamed** `hardware`/`software` → **`physical`/`digital`** (rationale and scope: the note at the top of `7-software-design.md`).
+- **Rankings are per-person.** `5-comparison.md`'s one-ranking-per-dataset model became one ranking per *(dataset, name)*: you type a name arcade-style before ranking — no account — and the leaderboard gains a tab per person plus a pooled "Everyone" view. Storage moved from a single `taste_comparison_results` blob to a `taste_rankings` row per person, so a vote's cost doesn't grow with the number of people ranking.

@@ -13,10 +13,10 @@ interface ScreenshotTarget {
 
 // The image swap picker: a grid of candidates, click one to set the item's image, or
 // paste a URL directly. Two sourcing modes (7-software-design.md):
-// - 'search' — the 3x3 DuckDuckGo picker (4-images.md), for hardware items.
+// - 'search' — the 3x3 DuckDuckGo picker (4-images.md), for physical-world items.
 // - 'screenshot' — nearby Wayback/live screenshots for a site url + optional target
-//   year, for software items (DuckDuckGo image search is meaningless for "this exact
-//   site, this exact year"). Same grid/manual-paste UI either way.
+//   year, for digital-world items (DuckDuckGo image search is meaningless for "this
+//   exact site, this exact year"). Same grid/manual-paste UI either way.
 export function ImagePicker({
   target,
   onPick,

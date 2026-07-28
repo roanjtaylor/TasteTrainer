@@ -1,7 +1,7 @@
 services:
   - type: web
     name: tastetrainer-server
-    # Docker, not Render's native Node runtime: the software-domain screenshot
+    # Docker, not Render's native Node runtime: the digital-world screenshot
     # pipeline (7-software-design.md) needs headless Chromium, and its system
     # libraries can only be installed with the root/apt access a Docker build has —
     # Render's native buildCommand has neither. dockerContext is the repo root (not

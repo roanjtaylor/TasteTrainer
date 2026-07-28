@@ -45,7 +45,8 @@ Core principle: **find what you don't know that you don't know.**
   brand (company/maker — "" if none, e.g. a painting), creator (the individual designer/
   artist/architect — "" if not applicable), definingFact (a one-sentence notable fact),
   subtopic (must be exactly one of the dataset's canonical subtopics), and wikipediaTitle
-  (the most likely English Wikipedia article title, used to fetch an image).
+  (the most likely English Wikipedia article title, used to fetch an image — replaced by
+  `url` in the digital world, see (f)).
 - Be accurate. If unsure of a year, give your best estimate rather than null, unless truly unknown.
 
 ## (e) Web-search policy
@@ -53,18 +54,19 @@ Core principle: **find what you don't know that you don't know.**
   fast-moving topics). For well-settled "best of" topics (e.g. 1990s watches, classic cars),
   answer from your own knowledge — it is usually sufficient and faster.
 
-## (f) Software domain — different axes, different field-filling (7-software-design.md)
-Every prompt tells you the domain. When it is SOFTWARE, the field is websites, apps, or
-product UI, not physical objects — adjust (a) and (d) accordingly; (b) and (c) apply as-is.
+## (f) The digital world — different axes, different field-filling (7-software-design.md)
+Every prompt tells you which world the field belongs to. When it is THE DIGITAL WORLD, the
+field lives on a screen — websites, apps, product UI, motion and graphics — not in physical
+space, so adjust (a) and (d) accordingly; (b) and (c) apply as-is.
 
-- **Subtopics = functional categories, not brands.** A software field's subtopics are what
-  the software actually DOES — e.g. for "Booking systems": Flight search, Seat/room
+- **Subtopics = functional categories, not brands.** A digital field's subtopics are what
+  the work actually DOES — e.g. for "Booking systems": Flight search, Seat/room
   selection, Checkout & confirmation. For "Developer tools": Text editors, Terminals,
-  Debuggers, Version control UIs. Not "Google vs Microsoft" — that's not how software fields
-  divide the way brands divide a hardware field.
+  Debuggers, Version control UIs. Not "Google vs Microsoft" — that's not how digital fields
+  divide the way makers divide a physical one.
 
 - **The primary axis of coverage is TIME, not brand.** This is the single most important
-  difference from hardware curation. The point of a software dataset is to show a category's
+  difference from curating the physical world. The point of a digital dataset is to show a category's
   **design evolution**, era by era — so within each subtopic, items must be spread across the
   field's WHOLE plausible design history, not clustered in the present:
   - Web-based software: roughly mid-1990s (Web 1.0) → today.
@@ -73,7 +75,7 @@ product UI, not physical objects — adjust (a) and (d) accordingly; (b) and (c)
   Distribute the requested item count roughly EVENLY across that span per subtopic. If asked
   for 12 items in one subtopic, that should read as 3–4 distinct eras with 3–4 examples each,
   not 10 current products and 2 old ones. Do not default to the present just because it's
-  most familiar — the historical eras are the actual point of a software dataset.
+  most familiar — the historical eras are the actual point of a digital dataset.
 
 - **Reuse the same iconic product across multiple eras — this is the ideal case, not a
   duplicate.** A product with a long, well-documented redesign history (e.g. Amazon, Google
@@ -85,7 +87,7 @@ product UI, not physical objects — adjust (a) and (d) accordingly; (b) and (c)
   actually be found and screenshotted successfully. When a single product can't span the
   whole history (it didn't exist yet), pick that era's most representative product instead.
 
-- **Field-filling for software:** every item still fills every field, but `wikipediaTitle`
+- **Field-filling in the digital world:** every item still fills every field, but `wikipediaTitle`
   is replaced by `url` — the canonical site/product address (e.g. "https://stripe.com"),
   used to capture a screenshot rather than fetch a photo. `year` means *the year THIS
   SPECIFIC design/snapshot represents* — not today's look, and not when the company was
@@ -97,5 +99,5 @@ product UI, not physical objects — adjust (a) and (d) accordingly; (b) and (c)
   yet; very early years of the web, pre-1996 or so, are also thinly archived — 1996+ is
   much safer ground for "earliest era" items). `brand` is the company/product; `creator` is
   the named designer/design lead if one is actually known and notable, "" otherwise (most
-  software has no single credited designer the way a chair or a watch does — don't invent
-  one).
+  digital work has no single credited designer the way a chair or a watch does — don't
+  invent one).

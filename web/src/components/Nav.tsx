@@ -1,11 +1,14 @@
 import { Link, useLocation } from 'react-router-dom';
+import { DOMAIN_LABELS } from '../../../shared/types';
 import { useDomain } from '../lib/domain';
+import { useRanker } from '../lib/ranker';
 
 // Persistent, centred pill-style top nav — a floating rounded bar (6-ui.md),
 // not a full-width banner.
 export function Nav() {
   const { pathname } = useLocation();
   const { domain } = useDomain();
+  const { ranker, release } = useRanker();
   const onDatasets = pathname === '/datasets';
   return (
     <div className="sticky top-4 z-20 flex justify-center px-4">
@@ -23,10 +26,10 @@ export function Nav() {
                 landing screen is the gate, this is just a reminder + escape hatch. */}
             <Link
               to="/"
-              title="Switch domain"
-              className="rounded-full px-3 py-1.5 text-xs capitalize text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
+              title="Switch world"
+              className="rounded-full px-3 py-1.5 text-xs text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
             >
-              {domain} ⇄
+              {DOMAIN_LABELS[domain].short} ⇄
             </Link>
           </>
         )}
@@ -37,6 +40,19 @@ export function Nav() {
         <PillLink to="/new" active={pathname === '/new'}>
           + New
         </PillLink>
+        {/* Whose scores the next vote lands on. Click to hand the cabinet over. */}
+        {ranker && (
+          <>
+            <span className="mx-1 h-5 w-px bg-[var(--color-line)]" />
+            <button
+              onClick={release}
+              title="Rank as someone else"
+              className="rounded-full px-3 py-1.5 text-xs uppercase tracking-wider text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
+            >
+              {ranker.name}
+            </button>
+          </>
+        )}
       </nav>
     </div>
   );

@@ -1,5 +1,7 @@
 // Elo ranking for the 1v1 comparison pillar (5-comparison.md). Elo only, MVP.
-import type { EloEntry, Item, ResultsFile } from '../../shared/types.ts';
+// Ratings are per-person (each name keeps its own ResultsFile) — `pool()` below is
+// what turns the set of them into the one shared "everyone" board.
+import type { EloEntry, Item, LeaderboardRow, Ranker, ResultsFile } from '../../shared/types.ts';
 import { now } from './util.ts';
 
 export const START_RATING = 1000;
@@ -8,14 +10,18 @@ const K = 32;
 /** Comparisons-per-item target that defines a "done" session (5-comparison.md). */
 export const TARGET_PER_ITEM = 5;
 
-export function emptyResults(datasetId: string): ResultsFile {
-  return { datasetId, ratings: {}, comparisons: 0, updatedAt: now() };
+export function emptyResults(datasetId: string, ranker?: Ranker): ResultsFile {
+  return { datasetId, ranker, ratings: {}, comparisons: 0, updatedAt: now() };
+}
+
+function blankEntry(itemId: string): EloEntry {
+  return { itemId, rating: START_RATING, wins: 0, losses: 0, games: 0 };
 }
 
 function entryFor(results: ResultsFile, itemId: string): EloEntry {
   let e = results.ratings[itemId];
   if (!e) {
-    e = { itemId, rating: START_RATING, wins: 0, losses: 0, games: 0 };
+    e = blankEntry(itemId);
     results.ratings[itemId] = e;
   }
   return e;
@@ -63,18 +69,51 @@ export function pickPair(results: ResultsFile, pool: Item[]): [Item, Item] | nul
   return Math.random() < 0.5 ? [a, b] : [b, a];
 }
 
-/** Leaderboard for a scoped pool: best -> worst by rating. */
-export function leaderboard(results: ResultsFile, pool: Item[]) {
+/** One person's leaderboard for a scoped pool: best -> worst by rating. */
+export function leaderboard(results: ResultsFile, pool: Item[]): LeaderboardRow[] {
   return pool
-    .map((item) => ({
-      item,
-      entry: results.ratings[item.id] ?? {
-        itemId: item.id,
-        rating: START_RATING,
-        wins: 0,
-        losses: 0,
-        games: 0,
-      },
-    }))
-    .sort((a, b) => b.entry.rating - a.entry.rating);
+    .map((item) => ({ item, entry: results.ratings[item.id] ?? blankEntry(item.id) }))
+    .sort(byRating);
+}
+
+/**
+ * The pooled "everyone" board: what the room as a whole prefers.
+ *
+ * An item's rating is the games-weighted mean of each person's rating for it, so
+ * someone who ran a full session on a dataset counts for more than someone who cast
+ * two votes — without letting either drown the other out the way summing ratings
+ * would. Wins/losses/games are plain totals, and `rankerCount` records how many
+ * people actually judged the item, which is the honest read on how settled a row is.
+ * Items nobody has judged sit at the start rating, exactly as on a personal board.
+ */
+export function pooledLeaderboard(all: ResultsFile[], pool: Item[]): LeaderboardRow[] {
+  return pool
+    .map((item) => {
+      const entries = all
+        .map((r) => r.ratings[item.id])
+        .filter((e): e is EloEntry => !!e && e.games > 0);
+
+      if (!entries.length) return { item, entry: blankEntry(item.id), rankerCount: 0 };
+
+      const games = entries.reduce((sum, e) => sum + e.games, 0);
+      const weighted = entries.reduce((sum, e) => sum + e.rating * e.games, 0);
+      return {
+        item,
+        entry: {
+          itemId: item.id,
+          rating: Math.round(weighted / games),
+          wins: entries.reduce((sum, e) => sum + e.wins, 0),
+          losses: entries.reduce((sum, e) => sum + e.losses, 0),
+          games,
+        },
+        rankerCount: entries.length,
+      };
+    })
+    .sort(byRating);
+}
+
+/** Best first. Ties break toward the more-judged item, so a settled row outranks a
+ *  coincidentally-equal one that nobody has really tested. */
+function byRating(a: LeaderboardRow, b: LeaderboardRow): number {
+  return b.entry.rating - a.entry.rating || b.entry.games - a.entry.games;
 }

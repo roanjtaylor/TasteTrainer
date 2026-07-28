@@ -1,4 +1,15 @@
-# Software design — a second domain, digital work
+# The digital world — a second domain
+
+> **Renamed (2026-07-28).** This doc was written as "Hardware vs Software", and the code
+> used `domain: 'hardware' | 'software'`. That naming was wrong on its own terms: a painting
+> is not hardware and a motion graphic is not software, yet both sit cleanly on the line
+> this split actually draws — *does the work exist in the room with you, or on a screen?*
+> The domains are now **`physical`** and **`digital`** everywhere: the `Domain` type, the
+> stored dataset rows (`supabase/migrations/002_*.sql`), the landing gate, and the curation
+> prompts. Legacy values are still accepted on read, so nothing written before the rename
+> breaks. The decisions below stand unchanged — read "hardware" as "physical" and "software"
+> as "digital" throughout; the filename is kept so the ~30 code comments citing it stay valid.
+
 
 > **UI →** the domain split is a screen-map change (owned here, cross-referenced into `6-ui.md`
 > when resolved). Feature-specific interaction (the screenshot picker) stays in this doc,

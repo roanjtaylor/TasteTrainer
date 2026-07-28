@@ -1,34 +1,17 @@
-import { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
-import type { DatasetSummary } from '../../../shared/types';
-import { api } from '../lib/api';
+import { DOMAIN_LABELS } from '../../../shared/types';
 import { useDomain } from '../lib/domain';
+import { deleteDataset, prefetchDataset, useDatasetList } from '../lib/data';
 
-// Datasets home — the shelf (6-ui.md), scoped to one domain (7-software-design.md).
+// Datasets home — the shelf (6-ui.md), scoped to one world (7-software-design.md).
 export function Home() {
   const { domain } = useDomain();
-  const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  async function load() {
-    if (!domain) return;
-    setLoading(true);
-    try {
-      setDatasets(await api.listDatasets(domain));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [domain]);
+  const { data: datasets, loading, error, refresh } = useDatasetList(domain);
 
   async function remove(id: string, topic: string) {
     if (!confirm(`Delete the "${topic}" dataset? This cannot be undone.`)) return;
-    await api.deleteDataset(id);
-    load();
+    await deleteDataset(id);
+    refresh();
   }
 
   // No domain chosen (direct nav, back button, or a fresh reload) — back to the gate.
@@ -37,16 +20,18 @@ export function Home() {
   return (
     <div>
       <header className="mb-8 mt-4">
-        <h1 className="serif text-4xl capitalize">Your {domain} fields</h1>
+        <h1 className="serif text-4xl">{DOMAIN_LABELS[domain].title} fields</h1>
         <p className="mt-2 max-w-2xl text-[var(--color-muted)]">
           Each dataset is a field of human work. Build one, browse it, then train your eye by
           choosing the better of two.
         </p>
       </header>
 
-      {loading ? (
+      {error ? (
+        <p className="text-[var(--color-accent)]">{error}</p>
+      ) : loading ? (
         <p className="text-[var(--color-muted)]">Loading…</p>
-      ) : datasets.length === 0 ? (
+      ) : datasets?.length === 0 ? (
         <div className="rounded-xl border border-dashed border-[var(--color-line)] p-12 text-center">
           <p className="text-[var(--color-muted)]">No datasets yet.</p>
           <Link
@@ -58,10 +43,15 @@ export function Home() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {datasets.map((ds) => (
+          {(datasets ?? []).map((ds) => (
             <div
               key={ds.id}
               className="group relative rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-5"
+              // Fetch the dataset while the pointer is on its way to the click — by
+              // the time the route changes it's usually already cached, so the
+              // dataset view opens without a loading state at all.
+              onMouseEnter={() => prefetchDataset(ds.id)}
+              onFocus={() => prefetchDataset(ds.id)}
             >
               <Link to={`/dataset/${ds.id}`} className="block">
                 <h2 className="serif text-2xl leading-tight">{ds.topic}</h2>

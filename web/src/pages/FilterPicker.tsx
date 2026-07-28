@@ -1,22 +1,19 @@
-import { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import type { Dataset } from '../../../shared/types';
-import { api } from '../lib/api';
+import { useDataset } from '../lib/data';
 import { EraTimeline } from '../components/EraTimeline';
 
 export function FilterPicker() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
-  const [ds, setDs] = useState<Dataset | null>(null);
-
-  useEffect(() => {
-    api.getDataset(id).then(setDs);
-  }, [id]);
+  // Shares the dataset view's cache entry, so arriving here from the Filters button
+  // renders straight away instead of re-fetching what was on screen a moment ago.
+  const { data: ds, error } = useDataset(id || null);
 
   function choose(subtopic: string) {
     navigate(`/dataset/${id}?sub=${encodeURIComponent(subtopic)}`);
   }
 
+  if (error) return <p className="mt-8 text-[var(--color-accent)]">{error}</p>;
   if (!ds) return <p className="mt-8 text-[var(--color-muted)]">Loading…</p>;
 
   return (

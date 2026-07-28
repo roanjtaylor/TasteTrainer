@@ -2,14 +2,15 @@ import { useState } from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
 import type { Domain, ProposedItem, Subtopic } from '../../../shared/types';
 import { api } from '../lib/api';
+import { createDataset, saveDataset } from '../lib/data';
 import { useDomain } from '../lib/domain';
-import { SOFTWARE_FIELD_SUGGESTIONS } from '../lib/softwareFields';
+import { DIGITAL_FIELD_SUGGESTIONS } from '../lib/digitalFields';
 import { ImagePicker } from '../components/ImagePicker';
 import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
 
 // Curate flow (3-curation.md / 6-ui.md): topic -> AI subtopics -> review grid -> save.
-// Scoped to the active domain (7-software-design.md) — chosen at the landing gate.
+// Scoped to the active world (7-software-design.md) — chosen at the landing gate.
 export function Curate() {
   const navigate = useNavigate();
   const { domain } = useDomain();
@@ -76,7 +77,7 @@ export function Curate() {
       return;
     }
     const ds = await run('Saving…', async () => {
-      const created = await api.createDataset({
+      const created = await createDataset({
         topic: topic.trim(),
         description: description.trim(),
         subtopics,
@@ -91,7 +92,7 @@ export function Curate() {
           { topic: created.topic, description: created.description, items: created.items, domain: dom },
           setProgress,
         );
-        return await api.updateDataset(created.id, { eraGroups: res.eraGroups });
+        return await saveDataset(created.id, { eraGroups: res.eraGroups });
       } catch {
         return created;
       }
@@ -112,16 +113,16 @@ export function Curate() {
         </p>
       </header>
 
-      {/* Software fields aren't as obvious to name as hardware ones (7-software-design.md,
+      {/* Digital fields aren't as obvious to name as physical ones (7-software-design.md,
           problem #3) — an info box of starter categories with real, well-archived
           examples, shown until a field has been mapped. */}
-      {domain === 'software' && subtopics.length === 0 && (
+      {domain === 'digital' && subtopics.length === 0 && (
         <section className="space-y-3 rounded-xl border border-[var(--color-line)] bg-[var(--color-wall-soft)] p-5">
           <h2 className="text-sm font-medium text-[var(--color-muted)]">
-            Not sure what to study? Core software fields to start with:
+            Not sure what to study? Core digital fields to start with:
           </h2>
           <div className="flex flex-wrap gap-2">
-            {SOFTWARE_FIELD_SUGGESTIONS.map((s) => (
+            {DIGITAL_FIELD_SUGGESTIONS.map((s) => (
               <button
                 key={s.topic}
                 onClick={() => {
@@ -147,7 +148,7 @@ export function Curate() {
             className="mt-1 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-2"
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
-            placeholder={domain === 'software' ? 'e.g. Booking systems' : 'e.g. Watches'}
+            placeholder={domain === 'digital' ? 'e.g. Booking systems' : 'e.g. Watches'}
           />
         </label>
         <label className="block">
@@ -277,7 +278,7 @@ export function Curate() {
       {pickerIndex !== null && (
         <ImagePicker
           target={
-            dom === 'software'
+            dom === 'digital'
               ? { kind: 'screenshot', url: items[pickerIndex].url ?? '', year: items[pickerIndex].year }
               : { kind: 'search', query: `${items[pickerIndex].name} ${items[pickerIndex].brand}`.trim() }
           }

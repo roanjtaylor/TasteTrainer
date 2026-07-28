@@ -15,8 +15,8 @@ export interface EditableItem {
 
 // One minimalist form for editing an item's fields, reused wherever an item is
 // edited so the look and behaviour stay consistent. `domain` adds a url field for
-// software items (7-software-design.md) — the address the screenshot pipeline
-// captures — hidden for hardware, where it has no meaning.
+// digital-world items (7-software-design.md) — the address the screenshot pipeline
+// captures — hidden in the physical world, where it has no meaning.
 export function ItemFields({
   item,
   subtopics,
@@ -38,7 +38,7 @@ export function ItemFields({
         placeholder="name"
         onChange={(e) => onChange({ name: e.target.value })}
       />
-      {domain === 'software' && (
+      {domain === 'digital' && (
         <input
           className={field}
           value={item.url ?? ''}

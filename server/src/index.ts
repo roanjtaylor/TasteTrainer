@@ -17,6 +17,7 @@
 // keeps the Claude CLI's scratch writes out of the project tree.)
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import { PORT } from './config.ts';
 import { datasetsRouter } from './routes/datasets.ts';
 import { curationRouter } from './routes/curation.ts';
@@ -24,8 +25,34 @@ import { imagesRouter } from './routes/images.ts';
 import { comparisonRouter } from './routes/comparison.ts';
 
 const app = express();
-app.use(cors());
+
+// Dataset JSON is highly repetitive (the same field names on every item), so gzip
+// takes a typical response down by roughly 80% — the cheapest single win available
+// on both first-load time and bandwidth.
+//
+// Curation's live progress (routes/curation.ts) is Server-Sent Events, and a
+// compressor holds bytes back until it has a worthwhile block to emit — which for a
+// stream of short `progress` lines means the UI would sit silent and then catch up in
+// a burst. So SSE is excluded explicitly rather than left to the default filter.
+app.use(
+  compression({
+    filter: (req, res) => {
+      const type = String(res.getHeader('Content-Type') ?? '');
+      if (type.includes('text/event-stream')) return false;
+      return compression.filter(req, res);
+    },
+  }),
+);
+
+app.use(cors({
+  // Let the browser read the validator so a client-side cache can send it back.
+  exposedHeaders: ['ETag'],
+}));
 app.use(express.json({ limit: '5mb' }));
+
+// Strong-ish validators on JSON bodies: routes set Cache-Control, Express computes the
+// ETag, and a revisit that hasn't changed costs an empty 304 instead of the payload.
+app.set('etag', 'strong');
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 app.use('/api/datasets', datasetsRouter);
@@ -37,6 +64,9 @@ app.use('/api/comparison', comparisonRouter);
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   console.error('[server] request error:', err);
   if (res.headersSent) return;
+  // Routes set Cache-Control only after their reads succeed, but a failure must never
+  // be storable — a cached 500 would outlive the fault that caused it.
+  res.set('Cache-Control', 'no-store');
   res.status(500).json({ error: err?.message ?? 'Internal server error' });
 });
 

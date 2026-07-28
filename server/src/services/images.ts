@@ -123,7 +123,7 @@ export async function searchImages(queryText: string, limit = 9): Promise<string
   return commonsImages(q, limit);
 }
 
-// ---- Software domain: screenshots (7-software-design.md) ----
+// ---- Digital world: screenshots (7-software-design.md) ----
 //
 // A website has no pre-existing hosted photo the way a physical object does on
 // Wikimedia, so the "image" has to be generated. Two hops, mirroring the
@@ -247,7 +247,7 @@ async function bestScreenshot(pageUrl: string, isHistorical: boolean): Promise<s
 
 /** The single best screenshot for a curated item: the closest Wayback snapshot to
  *  `year` that actually renders, walking outward candidate-by-candidate; falls back
- *  to the live site; falls back to "" (needs image, same as a hardware item
+ *  to the live site; falls back to "" (needs image, same as a physical-world item
  *  Wikimedia couldn't resolve) rather than ever returning a broken/wrong image. */
 export async function screenshotForYear(rawUrl: string, year: number | null): Promise<string> {
   const url = normalizeUrl(rawUrl);

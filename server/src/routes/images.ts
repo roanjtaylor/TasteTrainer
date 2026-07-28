@@ -17,7 +17,7 @@ imagesRouter.get('/search', async (req: Request, res: Response, next: NextFuncti
   } catch (err) { next(err); }
 });
 
-// Software domain's alternative picker (4-images.md's DuckDuckGo grid doesn't apply —
+// The digital world's alternative picker (4-images.md's DuckDuckGo grid doesn't apply —
 // see 7-software-design.md): candidate Wayback/live screenshots for a site url, an
 // optional target year, same string[] shape as /search so the picker UI is shared.
 imagesRouter.get('/screenshot', async (req: Request, res: Response, next: NextFunction) => {

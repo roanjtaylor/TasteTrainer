@@ -2,11 +2,12 @@ import { Router } from 'express';
 import type { Response } from 'express';
 import { fillGaps, findGaps, generateItems, proposePeriods, proposeSubtopics } from '../services/claude.ts';
 import { screenshotForYear, wikimediaImage } from '../services/images.ts';
+import { normalizeDomain } from '../../../shared/types.ts';
 import type { CoverageGap, Domain, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
 
-/** Resolve each proposed item's image — Wikimedia by wikipediaTitle for hardware,
- *  a Wayback/live screenshot by url+year for software (7-software-design.md) —
- *  reporting each as it lands. */
+/** Resolve each proposed item's image — Wikimedia by wikipediaTitle in the physical
+ *  world, a Wayback/live screenshot by url+year in the digital one
+ *  (7-software-design.md) — reporting each as it lands. */
 async function attachImages(
   proposed: ProposedItem[],
   domain: Domain,
@@ -16,7 +17,7 @@ async function attachImages(
   return Promise.all(
     proposed.map(async (it) => {
       const image =
-        domain === 'software'
+        domain === 'digital'
           ? await screenshotForYear(it.url ?? '', it.year)
           : await wikimediaImage(it.wikipediaTitle ?? '');
       done += 1;
@@ -54,7 +55,7 @@ curationRouter.post('/subtopics', async (req, res) => {
     const { subtopics, suggestedCount } = await proposeSubtopics(
       topic.trim(),
       description?.trim() ?? '',
-      domain === 'software' ? 'software' : 'hardware',
+      normalizeDomain(domain),
       (line) => send('progress', { line }),
     );
     send('done', { subtopics, suggestedCount });
@@ -82,7 +83,7 @@ curationRouter.post('/periods', async (req, res) => {
         topic: topic.trim(),
         description: description?.trim() ?? '',
         items: items ?? [],
-        domain: domain === 'software' ? 'software' : 'hardware',
+        domain: normalizeDomain(domain),
       },
       (line) => send('progress', { line }),
     );
@@ -104,7 +105,7 @@ curationRouter.post('/items', async (req, res) => {
     domain: Domain;
   };
   if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
-  const dom: Domain = domain === 'software' ? 'software' : 'hardware';
+  const dom: Domain = normalizeDomain(domain);
 
   const send = sse(res);
   try {
@@ -150,7 +151,7 @@ curationRouter.post('/gaps', async (req, res) => {
         description: description?.trim() ?? '',
         subtopics: subtopics ?? [],
         items: items ?? [],
-        domain: domain === 'software' ? 'software' : 'hardware',
+        domain: normalizeDomain(domain),
       },
       (line) => send('progress', { line }),
     );
@@ -176,7 +177,7 @@ curationRouter.post('/gap-fill', async (req, res) => {
     domain: Domain;
   };
   if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
-  const dom: Domain = domain === 'software' ? 'software' : 'hardware';
+  const dom: Domain = normalizeDomain(domain);
 
   const send = sse(res);
   try {

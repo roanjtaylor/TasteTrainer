@@ -3,11 +3,13 @@ import type {
   Dataset,
   DatasetSummary,
   Domain,
-  EloEntry,
   EraGroup,
   Item,
-  ProposedItem,
+  LeaderboardRow,
+  Ranker,
+  RankerSummary,
   Subtopic,
+  ProposedItem,
 } from '../../../shared/types';
 
 // In dev the Vite proxy forwards /api to localhost:5174 (vite.config.ts).
@@ -171,20 +173,27 @@ export const api = {
       `/api/images/screenshot?url=${encodeURIComponent(url)}${year != null ? `&year=${year}` : ''}`,
     ),
 
-  // Comparison
-  getPair: (id: string, scope: ScopeQuery) =>
+  // Comparison — every call is scoped to a ranker (a typed name), so each person
+  // builds their own ranking of the same dataset. `getLeaderboard` also accepts the
+  // pseudo-ranker "everyone" for the pooled view.
+  listRankers: (id: string) =>
+    http<{ rankers: RankerSummary[] }>(`/api/comparison/${id}/rankers`),
+  getPair: (id: string, ranker: Ranker, scope: ScopeQuery) =>
     http<{ pair: { a: Item; b: Item } | null; progress: Progress }>(
-      `/api/comparison/${id}/pair?${scopeQuery(scope)}`,
+      `/api/comparison/${id}/pair?${scopeQuery(scope, ranker.name)}`,
     ),
-  vote: (id: string, winnerId: string, loserId: string) =>
-    http<{ ok: true }>(`/api/comparison/${id}/vote`, {
+  vote: (id: string, ranker: Ranker, winnerId: string, loserId: string) =>
+    http<{ ok: true; comparisons: number }>(`/api/comparison/${id}/vote`, {
       method: 'POST',
-      body: JSON.stringify({ winnerId, loserId }),
+      body: JSON.stringify({ ranker: ranker.name, winnerId, loserId }),
     }),
-  getLeaderboard: (id: string, scope: ScopeQuery) =>
-    http<{ leaderboard: Array<{ item: Item; entry: EloEntry }>; progress: Progress }>(
-      `/api/comparison/${id}/leaderboard?${scopeQuery(scope)}`,
-    ),
+  getLeaderboard: (id: string, ranker: string, scope: ScopeQuery) =>
+    http<{
+      ranker: string;
+      rankerCount?: number;
+      leaderboard: LeaderboardRow[];
+      progress: Progress;
+    }>(`/api/comparison/${id}/leaderboard?${scopeQuery(scope, ranker)}`),
 };
 
 export interface Progress {
@@ -198,9 +207,10 @@ export interface ScopeQuery {
   eras?: string[];
 }
 
-function scopeQuery(scope: ScopeQuery): string {
+function scopeQuery(scope: ScopeQuery, ranker?: string): string {
   const params = new URLSearchParams();
   if (scope.subtopics?.length) params.set('subtopics', scope.subtopics.join(','));
   if (scope.eras?.length) params.set('eras', scope.eras.join(','));
+  if (ranker) params.set('ranker', ranker);
   return params.toString();
 }
