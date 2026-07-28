@@ -1,17 +1,20 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import type { DatasetSummary } from '../../../shared/types';
 import { api } from '../lib/api';
+import { useDomain } from '../lib/domain';
 
-// Datasets home — the shelf (6-ui.md). Every macro topic as a card.
+// Datasets home — the shelf (6-ui.md), scoped to one domain (7-software-design.md).
 export function Home() {
+  const { domain } = useDomain();
   const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
   async function load() {
+    if (!domain) return;
     setLoading(true);
     try {
-      setDatasets(await api.listDatasets());
+      setDatasets(await api.listDatasets(domain));
     } finally {
       setLoading(false);
     }
@@ -19,7 +22,8 @@ export function Home() {
 
   useEffect(() => {
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [domain]);
 
   async function remove(id: string, topic: string) {
     if (!confirm(`Delete the "${topic}" dataset? This cannot be undone.`)) return;
@@ -27,10 +31,13 @@ export function Home() {
     load();
   }
 
+  // No domain chosen (direct nav, back button, or a fresh reload) — back to the gate.
+  if (!domain) return <Navigate to="/" replace />;
+
   return (
     <div>
       <header className="mb-8 mt-4">
-        <h1 className="serif text-4xl">Your fields</h1>
+        <h1 className="serif text-4xl capitalize">Your {domain} fields</h1>
         <p className="mt-2 max-w-2xl text-[var(--color-muted)]">
           Each dataset is a field of human work. Build one, browse it, then train your eye by
           choosing the better of two.

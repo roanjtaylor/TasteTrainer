@@ -1,18 +1,24 @@
 import { Router } from 'express';
 import type { Response } from 'express';
 import { fillGaps, findGaps, generateItems, proposePeriods, proposeSubtopics } from '../services/claude.ts';
-import { wikimediaImage } from '../services/images.ts';
-import type { CoverageGap, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
+import { screenshotForYear, wikimediaImage } from '../services/images.ts';
+import type { CoverageGap, Domain, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
 
-/** Resolve a Wikimedia lead image per proposed item, reporting each as it lands. */
+/** Resolve each proposed item's image — Wikimedia by wikipediaTitle for hardware,
+ *  a Wayback/live screenshot by url+year for software (7-software-design.md) —
+ *  reporting each as it lands. */
 async function attachImages(
   proposed: ProposedItem[],
+  domain: Domain,
   send: (event: 'progress' | 'done' | 'error', data: unknown) => void,
 ): Promise<ProposedItem[]> {
   let done = 0;
   return Promise.all(
     proposed.map(async (it) => {
-      const image = await wikimediaImage(it.wikipediaTitle);
+      const image =
+        domain === 'software'
+          ? await screenshotForYear(it.url ?? '', it.year)
+          : await wikimediaImage(it.wikipediaTitle ?? '');
       done += 1;
       send('progress', { line: `Fetching images… ${done} of ${proposed.length}` });
       return { ...it, image };
@@ -40,7 +46,7 @@ function sse(res: Response) {
 
 // Step 2: propose canonical subtopics for a new topic.
 curationRouter.post('/subtopics', async (req, res) => {
-  const { topic, description } = req.body as { topic: string; description: string };
+  const { topic, description, domain } = req.body as { topic: string; description: string; domain: Domain };
   if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
 
   const send = sse(res);
@@ -48,6 +54,7 @@ curationRouter.post('/subtopics', async (req, res) => {
     const { subtopics, suggestedCount } = await proposeSubtopics(
       topic.trim(),
       description?.trim() ?? '',
+      domain === 'software' ? 'software' : 'hardware',
       (line) => send('progress', { line }),
     );
     send('done', { subtopics, suggestedCount });
@@ -60,17 +67,23 @@ curationRouter.post('/subtopics', async (req, res) => {
 // Propose named era-periods for the time axis (used by the Era filter timeline, and
 // generated at dataset creation). Input carries the items so the span can be read.
 curationRouter.post('/periods', async (req, res) => {
-  const { topic, description, items } = req.body as {
+  const { topic, description, items, domain } = req.body as {
     topic: string;
     description: string;
     items: Item[];
+    domain: Domain;
   };
   if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
 
   const send = sse(res);
   try {
     const eraGroups = await proposePeriods(
-      { topic: topic.trim(), description: description?.trim() ?? '', items: items ?? [] },
+      {
+        topic: topic.trim(),
+        description: description?.trim() ?? '',
+        items: items ?? [],
+        domain: domain === 'software' ? 'software' : 'hardware',
+      },
       (line) => send('progress', { line }),
     );
     send('done', { eraGroups });
@@ -82,14 +95,16 @@ curationRouter.post('/periods', async (req, res) => {
 
 // Step 3: generate items, then fetch a Wikimedia lead image for each.
 curationRouter.post('/items', async (req, res) => {
-  const { topic, description, subtopics, count, existingItems } = req.body as {
+  const { topic, description, subtopics, count, existingItems, domain } = req.body as {
     topic: string;
     description: string;
     subtopics: Subtopic[];
     count: number;
     existingItems?: Item[];
+    domain: Domain;
   };
   if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
+  const dom: Domain = domain === 'software' ? 'software' : 'hardware';
 
   const send = sse(res);
   try {
@@ -99,6 +114,7 @@ curationRouter.post('/items', async (req, res) => {
         description: description?.trim() ?? '',
         subtopics: subtopics ?? [],
         count: Math.max(1, Math.min(50, Number(count) || 12)),
+        domain: dom,
         existingItems: existingItems ?? [],
       },
       (line) => send('progress', { line }),
@@ -106,7 +122,7 @@ curationRouter.post('/items', async (req, res) => {
 
     // Resolve images in parallel; report each as it lands. Leave "" (needs image)
     // when none found.
-    const withImages = await attachImages(proposed, send);
+    const withImages = await attachImages(proposed, dom, send);
 
     send('done', { items: withImages });
   } catch (err: any) {
@@ -117,11 +133,12 @@ curationRouter.post('/items', async (req, res) => {
 
 // "What's missing?" — breadth-first coverage sweep.
 curationRouter.post('/gaps', async (req, res) => {
-  const { topic, description, subtopics, items } = req.body as {
+  const { topic, description, subtopics, items, domain } = req.body as {
     topic: string;
     description: string;
     subtopics: Subtopic[];
     items: Item[];
+    domain: Domain;
   };
   if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
 
@@ -133,6 +150,7 @@ curationRouter.post('/gaps', async (req, res) => {
         description: description?.trim() ?? '',
         subtopics: subtopics ?? [],
         items: items ?? [],
+        domain: domain === 'software' ? 'software' : 'hardware',
       },
       (line) => send('progress', { line }),
     );
@@ -147,7 +165,7 @@ curationRouter.post('/gaps', async (req, res) => {
 // user's own feedback, then fetch a Wikimedia lead image for each (same as /items).
 // Returns the proposed items plus a `note` explaining how the feedback was handled.
 curationRouter.post('/gap-fill', async (req, res) => {
-  const { topic, description, subtopics, items, gaps, count, feedback } = req.body as {
+  const { topic, description, subtopics, items, gaps, count, feedback, domain } = req.body as {
     topic: string;
     description: string;
     subtopics: Subtopic[];
@@ -155,8 +173,10 @@ curationRouter.post('/gap-fill', async (req, res) => {
     gaps: CoverageGap[];
     count: number;
     feedback: string;
+    domain: Domain;
   };
   if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
+  const dom: Domain = domain === 'software' ? 'software' : 'hardware';
 
   const send = sse(res);
   try {
@@ -169,11 +189,12 @@ curationRouter.post('/gap-fill', async (req, res) => {
         gaps: gaps ?? [],
         count: Math.max(1, Math.min(50, Number(count) || 8)),
         feedback: feedback ?? '',
+        domain: dom,
       },
       (line) => send('progress', { line }),
     );
 
-    const withImages = await attachImages(proposed, send);
+    const withImages = await attachImages(proposed, dom, send);
     send('done', { items: withImages, note });
   } catch (err: any) {
     send('error', { error: err?.message ?? 'Gap fill failed' });

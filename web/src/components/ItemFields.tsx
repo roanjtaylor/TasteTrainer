@@ -1,4 +1,4 @@
-import type { Subtopic } from '../../../shared/types';
+import type { Domain, Subtopic } from '../../../shared/types';
 
 // The editable fields shared by a proposed item (Curate review grid) and a saved
 // item (dataset edit). Both Item and ProposedItem carry this subset.
@@ -10,17 +10,22 @@ export interface EditableItem {
   creator: string;
   definingFact: string;
   subtopic: string;
+  url?: string;
 }
 
 // One minimalist form for editing an item's fields, reused wherever an item is
-// edited so the look and behaviour stay consistent.
+// edited so the look and behaviour stay consistent. `domain` adds a url field for
+// software items (7-software-design.md) — the address the screenshot pipeline
+// captures — hidden for hardware, where it has no meaning.
 export function ItemFields({
   item,
   subtopics,
+  domain,
   onChange,
 }: {
   item: EditableItem;
   subtopics: Subtopic[];
+  domain?: Domain;
   onChange: (change: Partial<EditableItem>) => void;
 }) {
   const field =
@@ -33,6 +38,14 @@ export function ItemFields({
         placeholder="name"
         onChange={(e) => onChange({ name: e.target.value })}
       />
+      {domain === 'software' && (
+        <input
+          className={field}
+          value={item.url ?? ''}
+          placeholder="url (e.g. https://stripe.com)"
+          onChange={(e) => onChange({ url: e.target.value })}
+        />
+      )}
       <div className="flex gap-2">
         <input
           className={field}

@@ -1,7 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { deleteDataset, getDataset, listDatasets, saveDataset } from '../storage.ts';
 import { newId, now } from '../util.ts';
-import type { Dataset, EraGroup, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
+import type { Dataset, Domain, EraGroup, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
 
 export const datasetsRouter = Router();
 
@@ -16,13 +16,15 @@ function toItem(raw: Partial<Item> & Partial<ProposedItem>): Item {
     creator: raw.creator ?? '',
     definingFact: raw.definingFact ?? '',
     subtopic: raw.subtopic ?? '',
+    url: raw.url ?? '',
     createdAt: (raw as Item).createdAt || now(),
   };
 }
 
-datasetsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
+datasetsRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    res.json(await listDatasets());
+    const domain = req.query.domain as Domain | undefined;
+    res.json(await listDatasets(domain === 'hardware' || domain === 'software' ? domain : undefined));
   } catch (err) { next(err); }
 });
 
@@ -36,18 +38,20 @@ datasetsRouter.get('/:id', async (req: Request, res: Response, next: NextFunctio
 
 datasetsRouter.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { topic, description, subtopics, eraGroups, items } = req.body as {
+    const { topic, description, subtopics, eraGroups, items, domain } = req.body as {
       topic: string;
       description: string;
       subtopics: Subtopic[];
       eraGroups?: EraGroup[];
       items: ProposedItem[];
+      domain: Domain;
     };
     if (!topic?.trim() || !description?.trim()) {
       return res.status(400).json({ error: 'topic and description are required' });
     }
     const ds: Dataset = {
       id: newId(),
+      domain: domain === 'software' ? 'software' : 'hardware',
       topic: topic.trim(),
       description: description.trim(),
       subtopics: subtopics ?? [],

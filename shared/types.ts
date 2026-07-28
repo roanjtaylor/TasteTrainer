@@ -2,6 +2,13 @@
 // Canonical shape decided in /plan/2-data.md. Both the server and the web app
 // import these types so the catalogue shape stays in sync everywhere.
 
+/**
+ * Which world a dataset belongs to (7-software-design.md). A dataset is wholly one
+ * domain or the other — it's a property of the macro topic, not of individual items.
+ * Datasets created before this field existed are treated as 'hardware'.
+ */
+export type Domain = 'hardware' | 'software';
+
 /** One canonical category within a macro topic (e.g. Watches -> "Mechanical Watches"). */
 export interface Subtopic {
   name: string;
@@ -43,12 +50,20 @@ export interface Item {
   definingFact: string;
   /** The one canonical subtopic it belongs to (references a Subtopic.name). */
   subtopic: string;
+  /**
+   * Canonical site/product address (software domain only — 7-software-design.md).
+   * Drives the screenshot pipeline: `image` is a screenshot of this url, at `year`.
+   * "" / absent for hardware items.
+   */
+  url?: string;
   createdAt: string;
 }
 
 /** A dataset = a macro topic (the field you're cataloguing). One JSON file per dataset. */
 export interface Dataset {
   id: string;
+  /** Hardware (physical objects) or software (digital design) — 7-software-design.md. */
+  domain: Domain;
   /** The macro topic name, e.g. "Watches". */
   topic: string;
   /** REQUIRED concise capture of the field's core idea (2-data.md #4). */
@@ -69,6 +84,7 @@ export interface Dataset {
 /** A lightweight summary for the datasets home shelf. */
 export interface DatasetSummary {
   id: string;
+  domain: Domain;
   topic: string;
   description: string;
   itemCount: number;
@@ -106,8 +122,10 @@ export interface ProposedItem {
   creator: string;
   definingFact: string;
   subtopic: string;
-  /** Likely Wikipedia title, used to fetch the lead image. */
-  wikipediaTitle: string;
+  /** Hardware domain: likely Wikipedia title, used to fetch the lead image. */
+  wikipediaTitle?: string;
+  /** Software domain: canonical site/product url, used by the screenshot pipeline. */
+  url?: string;
   /** Resolved image URL (filled by the server's image step). "" => needs image. */
   image: string;
 }

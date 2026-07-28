@@ -2,6 +2,7 @@ import type {
   CoverageGap,
   Dataset,
   DatasetSummary,
+  Domain,
   EloEntry,
   EraGroup,
   Item,
@@ -95,23 +96,25 @@ async function streamSSE<T>(url: string, body: unknown, onProgress?: OnProgress)
 
 export const api = {
   // Datasets
-  listDatasets: () => http<DatasetSummary[]>('/api/datasets'),
+  listDatasets: (domain?: Domain) =>
+    http<DatasetSummary[]>(`/api/datasets${domain ? `?domain=${domain}` : ''}`),
   getDataset: (id: string) => http<Dataset>(`/api/datasets/${id}`),
   createDataset: (body: {
     topic: string;
     description: string;
     subtopics: Subtopic[];
     items: ProposedItem[];
+    domain: Domain;
   }) => http<Dataset>('/api/datasets', { method: 'POST', body: JSON.stringify(body) }),
   updateDataset: (id: string, body: Partial<Dataset>) =>
     http<Dataset>(`/api/datasets/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteDataset: (id: string) => http<void>(`/api/datasets/${id}`, { method: 'DELETE' }),
 
   // Curation — these stream live progress (onProgress) and resolve with the result.
-  proposeSubtopics: (topic: string, description: string, onProgress?: OnProgress) =>
+  proposeSubtopics: (topic: string, description: string, domain: Domain, onProgress?: OnProgress) =>
     streamSSE<{ subtopics: Subtopic[]; suggestedCount: number }>(
       '/api/curation/subtopics',
-      { topic, description },
+      { topic, description, domain },
       onProgress,
     ),
   generateItems: (
@@ -120,16 +123,23 @@ export const api = {
       description: string;
       subtopics: Subtopic[];
       count: number;
+      domain: Domain;
       existingItems?: Item[];
     },
     onProgress?: OnProgress,
   ) => streamSSE<{ items: ProposedItem[] }>('/api/curation/items', body, onProgress),
   generatePeriods: (
-    body: { topic: string; description: string; items: Item[] },
+    body: { topic: string; description: string; items: Item[]; domain: Domain },
     onProgress?: OnProgress,
   ) => streamSSE<{ eraGroups: EraGroup[] }>('/api/curation/periods', body, onProgress),
   findGaps: (
-    body: { topic: string; description: string; subtopics: Subtopic[]; items: Item[] },
+    body: {
+      topic: string;
+      description: string;
+      subtopics: Subtopic[];
+      items: Item[];
+      domain: Domain;
+    },
     onProgress?: OnProgress,
   ) => streamSSE<{ gaps: CoverageGap[]; suggestedCount: number }>(
     '/api/curation/gaps',
@@ -145,6 +155,7 @@ export const api = {
       gaps: CoverageGap[];
       count: number;
       feedback: string;
+      domain: Domain;
     },
     onProgress?: OnProgress,
   ) =>
@@ -153,6 +164,12 @@ export const api = {
   // Images
   searchImages: (q: string) =>
     http<{ images: string[] }>(`/api/images/search?q=${encodeURIComponent(q)}`),
+  // Software domain's alternative picker (7-software-design.md): candidate Wayback/live
+  // screenshots for a site url, near an optional target year.
+  screenshotCandidates: (url: string, year: number | null) =>
+    http<{ images: string[] }>(
+      `/api/images/screenshot?url=${encodeURIComponent(url)}${year != null ? `&year=${year}` : ''}`,
+    ),
 
   // Comparison
   getPair: (id: string, scope: ScopeQuery) =>

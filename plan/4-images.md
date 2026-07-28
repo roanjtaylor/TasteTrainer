@@ -25,5 +25,5 @@ This is the genuinely hard part. Claude can reliably tell you *what* the best 50
 4. **Licensing: not a concern** — personal use, image URL only.
 
 **Deferred for later (post-MVP)**
-- Website/digital-design domains → screenshot capture + Wayback Machine, planned in their own doc when the time comes.
+- Website/digital-design domains → screenshot capture + Wayback Machine — now planned in [7-software-design.md](7-software-design.md).
 - Stale/dead-link detection & repair (beyond manual re-pick).

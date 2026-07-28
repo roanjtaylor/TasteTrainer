@@ -3,13 +3,15 @@ import { eraOf } from '../lib/format';
 import { Photo } from './Photo';
 
 // Gallery-style display card: the work is the hero, chrome stays quiet.
-export function ItemCard({ item }: { item: Item }) {
-  return (
-    <figure className="overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-card)]">
+// When `onClick` is given the whole card is a button that opens the item for
+// editing — not just a hover-only affordance, so it works on touch devices too.
+export function ItemCard({ item, onClick }: { item: Item; onClick?: () => void }) {
+  const body = (
+    <>
       <div className="aspect-[4/3] w-full bg-[var(--color-wall-soft)]">
         <Photo src={item.image} alt={item.name} />
       </div>
-      <figcaption className="space-y-1.5 p-4">
+      <div className="space-y-1.5 p-4">
         <div className="flex items-baseline justify-between gap-2">
           <h3 className="serif text-lg leading-tight">{item.name}</h3>
           <span className="shrink-0 text-sm text-[var(--color-muted)]">
@@ -27,7 +29,24 @@ export function ItemCard({ item }: { item: Item }) {
           <Chip>{item.subtopic || 'unsorted'}</Chip>
           <Chip>{eraOf(item.year)}</Chip>
         </div>
-      </figcaption>
+      </div>
+    </>
+  );
+
+  if (onClick) {
+    return (
+      <button
+        onClick={onClick}
+        className="w-full overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] text-left cursor-pointer transition-colors hover:border-[var(--color-accent)]"
+      >
+        {body}
+      </button>
+    );
+  }
+
+  return (
+    <figure className="overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-card)]">
+      {body}
     </figure>
   );
 }

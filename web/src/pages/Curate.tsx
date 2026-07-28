@@ -1,14 +1,18 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import type { ProposedItem, Subtopic } from '../../../shared/types';
+import { useNavigate, Navigate } from 'react-router-dom';
+import type { Domain, ProposedItem, Subtopic } from '../../../shared/types';
 import { api } from '../lib/api';
+import { useDomain } from '../lib/domain';
+import { SOFTWARE_FIELD_SUGGESTIONS } from '../lib/softwareFields';
 import { ImagePicker } from '../components/ImagePicker';
 import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
 
 // Curate flow (3-curation.md / 6-ui.md): topic -> AI subtopics -> review grid -> save.
+// Scoped to the active domain (7-software-design.md) — chosen at the landing gate.
 export function Curate() {
   const navigate = useNavigate();
+  const { domain } = useDomain();
 
   const [topic, setTopic] = useState('');
   const [description, setDescription] = useState('');
@@ -21,6 +25,9 @@ export function Curate() {
   const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
   const [pickerIndex, setPickerIndex] = useState<number | null>(null);
+
+  if (!domain) return <Navigate to="/" replace />;
+  const dom: Domain = domain;
 
   async function run<T>(label: string, fn: () => Promise<T>): Promise<T | undefined> {
     setBusy(label);
@@ -39,7 +46,7 @@ export function Curate() {
   async function initialise() {
     if (!topic.trim()) return;
     await run('Mapping the field…', async () => {
-      const res = await api.proposeSubtopics(topic.trim(), description.trim(), setProgress);
+      const res = await api.proposeSubtopics(topic.trim(), description.trim(), dom, setProgress);
       setSubtopics(res.subtopics);
       // Claude sizes the collection to the field; the user can still override below.
       setCount(res.suggestedCount);
@@ -54,6 +61,7 @@ export function Curate() {
           description: description.trim(),
           subtopics,
           count,
+          domain: dom,
           existingItems: more ? (items as any) : [],
         },
         setProgress,
@@ -73,13 +81,14 @@ export function Curate() {
         description: description.trim(),
         subtopics,
         items,
+        domain: dom,
       });
       // Born with named era-periods so the Era filter timeline is sharp from the start
       // (6-ui.md). Best-effort — a failure still leaves a usable dataset (the timeline
       // falls back to century buckets, and "Generate periods" can fill them in later).
       try {
         const res = await api.generatePeriods(
-          { topic: created.topic, description: created.description, items: created.items },
+          { topic: created.topic, description: created.description, items: created.items, domain: dom },
           setProgress,
         );
         return await api.updateDataset(created.id, { eraGroups: res.eraGroups });
@@ -103,6 +112,31 @@ export function Curate() {
         </p>
       </header>
 
+      {/* Software fields aren't as obvious to name as hardware ones (7-software-design.md,
+          problem #3) — an info box of starter categories with real, well-archived
+          examples, shown until a field has been mapped. */}
+      {domain === 'software' && subtopics.length === 0 && (
+        <section className="space-y-3 rounded-xl border border-[var(--color-line)] bg-[var(--color-wall-soft)] p-5">
+          <h2 className="text-sm font-medium text-[var(--color-muted)]">
+            Not sure what to study? Core software fields to start with:
+          </h2>
+          <div className="flex flex-wrap gap-2">
+            {SOFTWARE_FIELD_SUGGESTIONS.map((s) => (
+              <button
+                key={s.topic}
+                onClick={() => {
+                  setTopic(s.topic);
+                  setDescription(s.description);
+                }}
+                className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-3 py-1.5 text-sm hover:border-[var(--color-accent)] hover:bg-[var(--color-wall)]"
+              >
+                {s.topic}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Step 1: the field. (No item count here — Claude sizes the collection after
           mapping the field, so the count lives in step 2 to avoid implying the user
           sets the field's structure.) */}
@@ -113,7 +147,7 @@ export function Curate() {
             className="mt-1 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-2"
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
-            placeholder="e.g. Watches"
+            placeholder={domain === 'software' ? 'e.g. Booking systems' : 'e.g. Watches'}
           />
         </label>
         <label className="block">
@@ -230,6 +264,7 @@ export function Curate() {
                 key={i}
                 item={it}
                 subtopics={subtopics}
+                domain={dom}
                 onChange={(c) => patch(i, c)}
                 onSwapImage={() => setPickerIndex(i)}
                 onRemove={() => setItems((prev) => prev.filter((_, j) => j !== i))}
@@ -241,7 +276,11 @@ export function Curate() {
 
       {pickerIndex !== null && (
         <ImagePicker
-          initialQuery={`${items[pickerIndex].name} ${items[pickerIndex].brand}`.trim()}
+          target={
+            dom === 'software'
+              ? { kind: 'screenshot', url: items[pickerIndex].url ?? '', year: items[pickerIndex].year }
+              : { kind: 'search', query: `${items[pickerIndex].name} ${items[pickerIndex].brand}`.trim() }
+          }
           onPick={(url) => {
             patch(pickerIndex, { image: url });
             setPickerIndex(null);
@@ -258,12 +297,14 @@ export function Curate() {
 export function ReviewCard({
   item,
   subtopics,
+  domain,
   onChange,
   onSwapImage,
   onRemove,
 }: {
   item: ProposedItem;
   subtopics: Subtopic[];
+  domain?: Domain;
   onChange: (change: Partial<ProposedItem>) => void;
   onSwapImage: () => void;
   onRemove: () => void;
@@ -280,7 +321,7 @@ export function ReviewCard({
         </button>
       </div>
 
-      <ItemFields item={item} subtopics={subtopics} onChange={onChange} />
+      <ItemFields item={item} subtopics={subtopics} domain={domain} onChange={onChange} />
 
       <button onClick={onRemove} className="text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)]">
         Remove

@@ -6,7 +6,16 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLAUDE_MODEL, HF_BASE_URL, HF_APP_SECRET } from '../config.ts';
-import type { CoverageGap, EraGroup, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
+import type { CoverageGap, Domain, EraGroup, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
+
+/** One line of domain context folded into every curation prompt (7-software-design.md) —
+ *  the rules file's software-aware section (curation-rules.md §f) only applies correctly
+ *  once the model knows which world it's mapping. */
+function domainLine(domain: Domain): string {
+  return domain === 'software'
+    ? 'Domain: SOFTWARE / digital design — this field is websites, apps, or product UI. There is no physical object; think in platforms, interaction patterns, and design eras.'
+    : 'Domain: HARDWARE / physical design — this field is tangible objects.';
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RULES_PATH = path.join(__dirname, '..', 'prompts', 'curation-rules.md');
@@ -144,11 +153,12 @@ const JSON_ONLY = 'Respond with valid JSON only — no markdown, no code fences,
 export async function proposeSubtopics(
   topic: string,
   description: string,
+  domain: Domain,
   onProgress?: ProgressFn,
 ): Promise<{ subtopics: Subtopic[]; suggestedCount: number }> {
   const rules = await loadRules();
   const system = `You are the curation engine for TasteTrainer.\n\n${rules}\n\n${JSON_ONLY}`;
-  const prompt = `Macro topic: "${topic}"\nField description: "${description}"\n\nPropose the canonical SUBTOPICS for this field — its core themes/areas, the MINIMUM set of distinct categories that together cover the WHOLE field (see the subtopic-count rule). Use as few or as many as the field genuinely needs — do NOT aim for a fixed number; merge near-duplicates and split conflated themes.\n\nAlso suggest how many DEFINING ITEMS best represent this field as a whole — a single integer "suggestedCount" sized to the field's real breadth (typically 12–30; fewer for a narrow field, more for a sprawling one), enough for representative coverage without padding.\n\nReturn JSON of shape: { "subtopics": [ { "name": string, "description": string } ], "suggestedCount": number }`;
+  const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\n\nPropose the canonical SUBTOPICS for this field — its core themes/areas, the MINIMUM set of distinct categories that together cover the WHOLE field (see the subtopic-count rule). Use as few or as many as the field genuinely needs — do NOT aim for a fixed number; merge near-duplicates and split conflated themes.\n\nAlso suggest how many DEFINING ITEMS best represent this field as a whole — a single integer "suggestedCount" sized to the field's real breadth (typically 12–30; fewer for a narrow field, more for a sprawling one), enough for representative coverage without padding.\n\nReturn JSON of shape: { "subtopics": [ { "name": string, "description": string } ], "suggestedCount": number }`;
   const json = await runJson(system, prompt, { onProgress, count: { key: 'name', noun: 'themes' } });
   const subtopics = (json.subtopics ?? []) as Subtopic[];
   const raw = Number(json.suggestedCount);
@@ -160,8 +170,9 @@ export async function proposePeriods(args: {
   topic: string;
   description: string;
   items: Item[];
+  domain: Domain;
 }, onProgress?: ProgressFn): Promise<EraGroup[]> {
-  const { topic, description, items } = args;
+  const { topic, description, items, domain } = args;
   const rules = await loadRules();
   const system = `You are the curation engine for TasteTrainer.\n\n${rules}\n\n${JSON_ONLY}`;
 
@@ -169,7 +180,7 @@ export async function proposePeriods(args: {
   const minYear = years.length ? Math.min(...years) : 1900;
   const maxYear = years.length ? Math.max(...years) : new Date().getFullYear();
 
-  const prompt = `Macro topic: "${topic}"\nField description: "${description}"\n\nThe work in this field spans roughly ${minYear}–${maxYear}.\n\nPropose the canonical ERA-PERIODS for this field — the named time divisions a knowledgeable person uses to structure its history (e.g. art movements for paintings, design eras for product fields). Use as few or as many as the field genuinely needs; do NOT aim for a fixed number.\n\nRules:\n- Periods must be CONTIGUOUS and NON-OVERLAPPING (each period's "start" equals the previous period's "end").\n- Together they must cover the whole span ${minYear}–${maxYear} (first period's start <= ${minYear}, last period's end > ${maxYear}).\n- "start" is inclusive, "end" is exclusive, both whole years.\n- Order from earliest to latest.\n\nReturn JSON of shape: { "eraGroups": [ { "label": string, "start": number, "end": number } ] }`;
+  const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\n\nThe work in this field spans roughly ${minYear}–${maxYear}.\n\nPropose the canonical ERA-PERIODS for this field — the named time divisions a knowledgeable person uses to structure its history (e.g. art movements for paintings, design eras for product fields). Use as few or as many as the field genuinely needs; do NOT aim for a fixed number.\n\nRules:\n- Periods must be CONTIGUOUS and NON-OVERLAPPING (each period's "start" equals the previous period's "end").\n- Together they must cover the whole span ${minYear}–${maxYear} (first period's start <= ${minYear}, last period's end > ${maxYear}).\n- "start" is inclusive, "end" is exclusive, both whole years.\n- Order from earliest to latest.\n\nReturn JSON of shape: { "eraGroups": [ { "label": string, "start": number, "end": number } ] }`;
 
   const json = await runJson(system, prompt, {
     onProgress,
@@ -189,14 +200,34 @@ export async function proposePeriods(args: {
     .sort((a, b) => a.start - b.start);
 }
 
+/** The one field that differs by domain in every returned item: a Wikipedia title
+ *  to resolve a photo (hardware) vs a canonical site/product url to screenshot
+ *  (software) — see attachImages() in routes/curation.ts. */
+function itemShapeLine(domain: Domain): string {
+  return domain === 'software'
+    ? '"subtopic": string, "url": string (the canonical site/product address, e.g. "https://stripe.com" — used to capture a screenshot; "year" should be the year THIS SPECIFIC design/snapshot represents, which may be a past redesign, not necessarily today\'s look)'
+    : '"subtopic": string, "wikipediaTitle": string';
+}
+
+/** A request-specific reinforcement of curation-rules.md §f's era-spread rule, sized to
+ *  the actual count being asked for — a generic rules-file mention is easy to default
+ *  away from under a concrete "give me N items" instruction, so this spells out the
+ *  per-subtopic era math explicitly for THIS call. */
+function eraSpreadLine(count: number, subtopicCount: number): string {
+  const perSubtopic = Math.max(1, Math.round(count / Math.max(1, subtopicCount)));
+  const eras = Math.max(2, Math.min(5, perSubtopic));
+  return `\n\nCRITICAL: spread these ${count} items across TIME, not just across subtopics. Within each subtopic, aim for roughly ${perSubtopic} items spanning ~${eras} distinct design eras of that category's history (its earliest plausible archived era through today) — do NOT let most items land in the present day. Reusing the same iconic, well-archived product at multiple different years is the ideal way to do this (see curation-rules.md §f) — it is not a duplicate.`;
+}
+
 export async function generateItems(args: {
   topic: string;
   description: string;
   subtopics: Subtopic[];
   count: number;
+  domain: Domain;
   existingItems?: Item[];
 }, onProgress?: ProgressFn): Promise<ProposedItem[]> {
-  const { topic, description, subtopics, count, existingItems = [] } = args;
+  const { topic, description, subtopics, count, domain, existingItems = [] } = args;
   const rules = await loadRules();
   const system = `You are the curation engine for TasteTrainer.\n\n${rules}\n\n${JSON_ONLY}`;
 
@@ -207,7 +238,7 @@ export async function generateItems(args: {
         .join('\n')}`
     : '';
 
-  const prompt = `Macro topic: "${topic}"\nField description: "${description}"\n\nCanonical subtopics (each item's "subtopic" MUST be exactly one of these names):\n${subtopicList}\n\nPropose ${count} defining items for this field. Spread them across the field's brands/makers, movements, eras and regions (breadth first), countering popularity bias.${existingBlock}\n\nFill EVERY field. Return JSON of shape:\n{ "items": [ { "name": string, "description": string, "year": number|null, "brand": string, "creator": string, "definingFact": string, "subtopic": string, "wikipediaTitle": string } ] }`;
+  const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\n\nCanonical subtopics (each item's "subtopic" MUST be exactly one of these names):\n${subtopicList}\n\nPropose ${count} defining items for this field. Spread them across the field's brands/makers, movements, eras and regions (breadth first), countering popularity bias.${domain === 'software' ? eraSpreadLine(count, subtopics.length) : ''}${existingBlock}\n\nFill EVERY field. Return JSON of shape:\n{ "items": [ { "name": string, "description": string, "year": number|null, "brand": string, "creator": string, "definingFact": string, ${itemShapeLine(domain)} } ] }`;
 
   const json = await runJson(system, prompt, {
     onProgress,
@@ -223,8 +254,9 @@ export async function findGaps(args: {
   description: string;
   subtopics: Subtopic[];
   items: Item[];
+  domain: Domain;
 }, onProgress?: ProgressFn): Promise<{ gaps: CoverageGap[]; suggestedCount: number }> {
-  const { topic, description, subtopics, items } = args;
+  const { topic, description, subtopics, items, domain } = args;
   const rules = await loadRules();
   const system = `You are the curation engine for TasteTrainer.\n\n${rules}\n\n${JSON_ONLY}`;
 
@@ -232,7 +264,7 @@ export async function findGaps(args: {
     .map((i) => `- ${i.name}${i.brand ? ` (${i.brand})` : ''} [${i.subtopic}, ${i.year ?? '?'}]`)
     .join('\n');
 
-  const prompt = `Macro topic: "${topic}"\nField description: "${description}"\nSubtopics: ${subtopics
+  const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\nSubtopics: ${subtopics
     .map((s) => s.name)
     .join(', ')}\n\nCurrent items (${items.length}):\n${inventory || '(none yet)'}\n\nDo a breadth-first sweep of the WHOLE field and report what is thin or missing — brands/makers, movements, eras, regions, or subtopics that a representative set of this field should include but this set under-covers. Be concrete.\n\nAlso suggest how many NEW items it would take to meaningfully close these gaps — a single integer "suggestedCount" sized to the breadth of what's missing (enough for representative coverage of the gaps without padding; 0 if coverage is already good).\n\nReturn JSON of shape: { "gaps": [ { "axis": string, "detail": string } ], "suggestedCount": number }`;
 
@@ -257,8 +289,9 @@ export async function fillGaps(args: {
   gaps: CoverageGap[];
   count: number;
   feedback: string;
+  domain: Domain;
 }, onProgress?: ProgressFn): Promise<{ items: ProposedItem[]; note: string }> {
-  const { topic, description, subtopics, existingItems, gaps, count, feedback } = args;
+  const { topic, description, subtopics, existingItems, gaps, count, feedback, domain } = args;
   const rules = await loadRules();
   const system = `You are the curation engine for TasteTrainer.\n\n${rules}\n\n${JSON_ONLY}`;
 
@@ -275,7 +308,7 @@ export async function fillGaps(args: {
     ? `\n\nThe user gave this feedback on what to add:\n"""\n${feedback.trim()}\n"""\nTreat it as a HYPOTHESIS to evaluate against the curation rules and the field's objective reality, NOT an order. Where it names work that genuinely belongs (objectively defining/representative of the field), include it. Where a request would NOT improve objective coverage — popularity bias, already covered, out of scope, or not actually defining — do NOT include it. Either way, account for every distinct request in your "note".`
     : '';
 
-  const prompt = `Macro topic: "${topic}"\nField description: "${description}"\n\nCanonical subtopics (each item's "subtopic" MUST be exactly one of these names):\n${subtopicList}\n\nItems already in the set — do NOT repeat these:\n${existingBlock}\n\nReported coverage gaps to close (breadth first):\n${gapBlock}${feedbackBlock}\n\nPropose ${count} NEW defining items that best close these gaps and widen the field's coverage, countering popularity bias. Fill EVERY field.\n\nReturn JSON of shape:\n{ "items": [ { "name": string, "description": string, "year": number|null, "brand": string, "creator": string, "definingFact": string, "subtopic": string, "wikipediaTitle": string } ], "note": string }\n\nThe "note" is a short, plain-language explanation (2–5 sentences) of how you handled the gaps and the user's feedback: what you added and why, and for any user request you did NOT include, a clear reason why.`;
+  const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\n\nCanonical subtopics (each item's "subtopic" MUST be exactly one of these names):\n${subtopicList}\n\nItems already in the set — do NOT repeat these:\n${existingBlock}\n\nReported coverage gaps to close (breadth first):\n${gapBlock}${feedbackBlock}\n\nPropose ${count} NEW defining items that best close these gaps and widen the field's coverage, countering popularity bias.${domain === 'software' ? eraSpreadLine(count, subtopics.length) : ''} Fill EVERY field.\n\nReturn JSON of shape:\n{ "items": [ { "name": string, "description": string, "year": number|null, "brand": string, "creator": string, "definingFact": string, ${itemShapeLine(domain)} } ], "note": string }\n\nThe "note" is a short, plain-language explanation (2–5 sentences) of how you handled the gaps and the user's feedback: what you added and why, and for any user request you did NOT include, a clear reason why.`;
 
   const json = await runJson(system, prompt, {
     onProgress,
