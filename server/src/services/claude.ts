@@ -1,4 +1,4 @@
-// Calls Claude via the HF Space proxy (https://roanjtaylor-iphone-claude.hf.space),
+// Calls Claude via the HF Space proxy (https://roanjtaylor-claudesubscription.hf.space),
 // which uses the owner's Claude subscription — no API credits consumed.
 // The HF Space streams SSE delta events; this file accumulates them, tracks live
 // progress (counting completed JSON objects in the stream), and extracts the final JSON.

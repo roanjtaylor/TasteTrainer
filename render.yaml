@@ -9,10 +9,10 @@ services:
       - key: PORT
         value: 10000
       - key: HF_BASE_URL
-        value: https://roanjtaylor-iphone-claude.hf.space
+        value: https://roanjtaylor-claudesubscription.hf.space
       - key: HF_APP_SECRET
         sync: false
       - key: SUPABASE_URL
-        value: https://xriemooiqnikncakrcoy.supabase.co
+        value: https://hionhaaihfjgopkhmlbk.supabase.co
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false

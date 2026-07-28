@@ -1,5 +1,7 @@
 -- TasteTrainer tables.
--- Run this once in the Supabase SQL editor (squadova project).
+-- Run this once in the Supabase SQL editor (Curiosity project).
+-- If run via the management API, also grant privileges:
+--   GRANT SELECT, INSERT, UPDATE, DELETE ON taste_datasets, taste_comparison_results TO service_role;
 
 CREATE TABLE IF NOT EXISTS taste_datasets (
   id text PRIMARY KEY,
