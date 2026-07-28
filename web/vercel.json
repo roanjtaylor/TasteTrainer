@@ -2,12 +2,10 @@
   "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
   "headers": [
     {
-      "comment": "Vite fingerprints every file in /assets with a content hash, so a given URL's bytes can never change — cache them permanently and a repeat visit downloads no JS or CSS at all.",
       "source": "/assets/(.*)",
       "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
     },
     {
-      "comment": "The shell is NOT fingerprinted: it must be re-checked every load, or a deploy would never reach anyone still holding the old one.",
       "source": "/index.html",
       "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }]
     }
