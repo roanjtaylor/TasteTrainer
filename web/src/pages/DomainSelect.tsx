@@ -1,21 +1,20 @@
 import { useNavigate } from 'react-router-dom';
-import { useDomain } from '../lib/domain';
 import { DOMAIN_LABELS, type Domain } from '../../../shared/types';
 
-// The domain gate (7-software-design.md): the very first screen, every session —
-// choose which world of taste you're training before seeing its fields. Plain
-// in-memory state (lib/domain.tsx) means a refresh naturally re-asks.
+// The domain gate (7-software-design.md): the way in — choose which world of taste
+// you're training before seeing its fields. Each choice is a URL (/physical,
+// /digital), so a bookmark or a shared link can also skip straight past this.
 //
 // Physical vs digital, not hardware vs software: a painting isn't hardware and a
 // title sequence isn't software, but every one of them sits cleanly on one side of
 // "does this exist in the room with you, or on a screen?"
 export function DomainSelect() {
   const navigate = useNavigate();
-  const { setDomain } = useDomain();
 
+  // Choosing a world *is* navigating to it — /physical and /digital are the shelves
+  // (lib/domain.tsx), so there's no separate state to set.
   function choose(domain: Domain) {
-    setDomain(domain);
-    navigate('/datasets');
+    navigate(`/${domain}`);
   }
 
   return (

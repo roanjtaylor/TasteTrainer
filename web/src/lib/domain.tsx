@@ -1,24 +1,23 @@
-import { createContext, useContext, useState, type ReactNode } from 'react';
+import { useLocation } from 'react-router-dom';
 import type { Domain } from '../../../shared/types';
 
-// The active domain (7-software-design.md): plain in-memory React state, not
-// persisted to localStorage. That's deliberate — the resolved decision was a
-// dedicated landing screen on every session, not a remembered toggle, and a
-// hard refresh naturally clearing this state is what makes that true for free.
-interface DomainContextValue {
-  domain: Domain | null;
-  setDomain: (d: Domain) => void;
+// The active domain (7-software-design.md) is the first segment of the URL:
+// /physical, /physical/ships, /digital/new. Previously it was in-memory React state
+// chosen at a landing gate; the URL now carries it instead, which is what makes
+// /physical/ships a real address — shareable, bookmarkable, and correct after a
+// refresh or a back button. The gate at "/" is still the way in, just no longer the
+// only thing that knows which world you're in.
+
+const DOMAINS: readonly string[] = ['physical', 'digital'];
+
+/** The world a path is in, or null for the landing gate / anything unrecognised. */
+export function domainOf(pathname: string): Domain | null {
+  const first = pathname.split('/')[1] ?? '';
+  return DOMAINS.includes(first) ? (first as Domain) : null;
 }
 
-const DomainContext = createContext<DomainContextValue | null>(null);
-
-export function DomainProvider({ children }: { children: ReactNode }) {
-  const [domain, setDomain] = useState<Domain | null>(null);
-  return <DomainContext.Provider value={{ domain, setDomain }}>{children}</DomainContext.Provider>;
-}
-
-export function useDomain(): DomainContextValue {
-  const ctx = useContext(DomainContext);
-  if (!ctx) throw new Error('useDomain must be used within a DomainProvider');
-  return ctx;
+/** The world the current route is in. null means "not in a world" — pages redirect
+ *  to the gate on that, so a typo'd URL lands somewhere sensible. */
+export function useDomain(): Domain | null {
+  return domainOf(useLocation().pathname);
 }

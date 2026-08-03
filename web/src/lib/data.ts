@@ -1,3 +1,4 @@
+import { slugifyTopic } from '../../../shared/types';
 import type { Dataset, DatasetSummary, Domain, Ranker } from '../../../shared/types';
 import { api } from './api';
 import type { ScopeQuery } from './api';
@@ -19,18 +20,31 @@ export function useDatasetList(domain: Domain | null): CachedResource<DatasetSum
   );
 }
 
-/** One dataset in full. Shared by the dataset view and the filters subpage — the
- *  cache is what stops moving between them refetching the same thing. */
-export function useDataset(id: string | null): CachedResource<Dataset> {
-  return useCached(id ? cacheKeys.dataset(id) : null, () => api.getDataset(id as string), {
-    maxAgeMs: 60_000,
-  });
+/**
+ * One dataset in full, addressed by slug (the URL: /physical/ships) or by id — the
+ * server resolves either. Shared by the dataset view and the filters subpage; the
+ * cache is what stops moving between them refetching the same thing.
+ */
+export function useDataset(idOrSlug: string | null): CachedResource<Dataset> {
+  return useCached(
+    idOrSlug ? cacheKeys.dataset(idOrSlug) : null,
+    () => api.getDataset(idOrSlug as string),
+    { maxAgeMs: 60_000 },
+  );
 }
 
 /** Warm a dataset before it's needed — called on shelf-card hover, so the click
  *  usually lands on an already-loaded screen. */
-export function prefetchDataset(id: string): void {
-  prefetch(cacheKeys.dataset(id), () => api.getDataset(id));
+export function prefetchDataset(idOrSlug: string): void {
+  prefetch(cacheKeys.dataset(idOrSlug), () => api.getDataset(idOrSlug));
+}
+
+/** Cache a dataset under both addresses it answers to. A screen reached by slug and
+ *  a save made by id are the same dataset; writing one key would leave the other
+ *  serving the pre-save copy. */
+function publish(ds: Dataset): void {
+  write(cacheKeys.dataset(ds.id), ds);
+  write(cacheKeys.dataset(slugifyTopic(ds.topic)), ds);
 }
 
 /** Everyone who has ranked a dataset. */
@@ -60,25 +74,31 @@ export function useLeaderboard(datasetId: string | null, ranker: string, scope: 
 
 /** Save a dataset and publish the returned state, so every screen showing it updates
  *  without a refetch. */
-export async function saveDataset(id: string, body: Partial<Dataset>): Promise<Dataset> {
-  const updated = await api.updateDataset(id, body);
-  write(cacheKeys.dataset(id), updated);
+export async function saveDataset(idOrSlug: string, body: Partial<Dataset>): Promise<Dataset> {
+  const updated = await api.updateDataset(idOrSlug, body);
+  // Renaming a dataset changes its slug, so the address it was saved through can be
+  // an address it no longer answers to. Drop it before republishing the live ones.
+  drop(cacheKeys.dataset(idOrSlug));
+  publish(updated);
   drop(cacheKeys.datasetListPrefix, { prefix: true });
   // Item membership may have changed, which changes what any board can contain.
-  drop(cacheKeys.leaderboardPrefix(id), { prefix: true });
+  drop(cacheKeys.leaderboardPrefix(updated.id), { prefix: true });
   return updated;
 }
 
 export async function createDataset(body: Parameters<typeof api.createDataset>[0]): Promise<Dataset> {
   const created = await api.createDataset(body);
-  write(cacheKeys.dataset(created.id), created);
+  publish(created);
   drop(cacheKeys.datasetListPrefix, { prefix: true });
   return created;
 }
 
-export async function deleteDataset(id: string): Promise<void> {
+/** Takes the topic as well as the id because a dataset is cached under both of its
+ *  addresses, and both have to go. */
+export async function deleteDataset(id: string, topic: string): Promise<void> {
   await api.deleteDataset(id);
   drop(cacheKeys.dataset(id));
+  drop(cacheKeys.dataset(slugifyTopic(topic)));
   drop(cacheKeys.datasetListPrefix, { prefix: true });
   drop(cacheKeys.leaderboardPrefix(id), { prefix: true });
   drop(cacheKeys.rankers(id));

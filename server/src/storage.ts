@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } from './config.ts';
 import { now } from './util.ts';
 import { cached, invalidate, invalidatePrefix, keys, put } from './cache.ts';
-import { normalizeDomain, rankerKeyOf } from '../../shared/types.ts';
+import { normalizeDomain, rankerKeyOf, slugifyTopic } from '../../shared/types.ts';
 import type {
   Dataset,
   DatasetSummary,
@@ -11,10 +11,6 @@ import type {
   RankerSummary,
   ResultsFile,
 } from '../../shared/types.ts';
-
-function slugify(topic: string): string {
-  return topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-}
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -93,33 +89,54 @@ async function listDatasetsFallback(domain?: Domain): Promise<DatasetSummary[]> 
     }));
 }
 
-export async function getDataset(id: string): Promise<Dataset | null> {
-  return cached(keys.dataset(id), async () => {
-    const { data, error } = await supabase
-      .from('taste_datasets')
-      .select('data')
-      .eq('id', id)
-      .single();
-    if (error?.code === 'PGRST116') return null;
-    if (error) throw new Error(error.message);
-    return data?.data ? withDomain(data.data as Dataset) : null;
+/**
+ * One dataset, addressed by either its id or its slug — the web app's URLs are
+ * /physical/ships, so the slug is what arrives on a deep link or a refresh, while
+ * older links (and the app's own writes) still carry the id.
+ *
+ * Id first: it's the primary key, so the common case is one indexed lookup and the
+ * slug query only runs for a name-shaped address.
+ */
+export async function getDataset(idOrSlug: string): Promise<Dataset | null> {
+  return cached(keys.dataset(idOrSlug), async () => {
+    const byId = await readDatasetBy('id', idOrSlug);
+    return byId ?? (await readDatasetBy('slug', idOrSlug));
   });
 }
 
-export async function saveDataset(ds: Dataset): Promise<Dataset> {
+async function readDatasetBy(column: 'id' | 'slug', value: string): Promise<Dataset | null> {
+  const { data, error } = await supabase
+    .from('taste_datasets')
+    .select('data')
+    .eq(column, value)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data?.data ? withDomain(data.data as Dataset) : null;
+}
+
+/**
+ * Write a dataset back. `previousSlug` is the slug it was reachable at *before* this
+ * save — pass it on a rename so the old address stops serving the old name from cache
+ * (a renamed dataset's link changes, and the stale entry would outlive the rename).
+ */
+export async function saveDataset(ds: Dataset, previousSlug?: string): Promise<Dataset> {
   ds.updatedAt = now();
   ds.domain = normalizeDomain(ds.domain);
+  const slug = slugifyTopic(ds.topic);
   const { error } = await supabase
     .from('taste_datasets')
-    .upsert({ id: ds.id, slug: slugify(ds.topic), data: ds, updated_at: ds.updatedAt });
+    .upsert({ id: ds.id, slug, data: ds, updated_at: ds.updatedAt });
   if (error) throw new Error(error.message);
+  if (previousSlug && previousSlug !== slug) invalidate(keys.dataset(previousSlug));
   // Seed rather than clear: the client almost always re-reads what it just wrote.
+  // Both addresses, since either may be the one it reads back through.
   put(keys.dataset(ds.id), ds);
+  put(keys.dataset(slug), ds);
   invalidatePrefix(keys.datasetListPrefix);
   return ds;
 }
 
-export async function deleteDataset(id: string): Promise<void> {
+export async function deleteDataset(id: string, slug?: string): Promise<void> {
   // Rankings first, then the legacy single-blob results, then the dataset itself —
   // so a failure part-way never leaves scores pointing at a dataset that's gone.
   const { error: rankErr } = await supabase.from('taste_rankings').delete().eq('dataset_id', id);
@@ -135,6 +152,7 @@ export async function deleteDataset(id: string): Promise<void> {
   if (error) throw new Error(error.message);
 
   invalidate(keys.dataset(id));
+  if (slug) invalidate(keys.dataset(slug));
   invalidatePrefix(keys.datasetListPrefix);
   invalidatePrefix(keys.rankersPrefix(id));
 }

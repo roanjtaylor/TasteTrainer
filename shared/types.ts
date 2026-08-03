@@ -49,6 +49,18 @@ export const DOMAIN_LABELS: Record<Domain, { title: string; short: string; tagli
   },
 };
 
+/**
+ * A dataset's URL-safe name — its address in both the app (/physical/ships) and the
+ * database (taste_datasets.slug, UNIQUE). Derived from the topic rather than stored
+ * separately so the two can never drift: rename the topic and the address follows.
+ *
+ * Shared because the server writes this value and the web app builds links from it;
+ * two copies of the rule would eventually disagree and 404.
+ */
+export function slugifyTopic(topic: string): string {
+  return topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
 /** One canonical category within a macro topic (e.g. Watches -> "Mechanical Watches"). */
 export interface Subtopic {
   name: string;

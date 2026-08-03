@@ -3,14 +3,14 @@ import { useDataset } from '../lib/data';
 import { EraTimeline } from '../components/EraTimeline';
 
 export function FilterPicker() {
-  const { id = '' } = useParams();
+  const { domain = '', slug = '' } = useParams();
   const navigate = useNavigate();
   // Shares the dataset view's cache entry, so arriving here from the Filters button
   // renders straight away instead of re-fetching what was on screen a moment ago.
-  const { data: ds, error } = useDataset(id || null);
+  const { data: ds, error } = useDataset(slug || null);
 
   function choose(subtopic: string) {
-    navigate(`/dataset/${id}?sub=${encodeURIComponent(subtopic)}`);
+    navigate(`/${domain}/${slug}?sub=${encodeURIComponent(subtopic)}`);
   }
 
   if (error) return <p className="mt-8 text-[var(--color-accent)]">{error}</p>;
@@ -19,7 +19,7 @@ export function FilterPicker() {
   return (
     <div className="space-y-6">
       <header className="mt-4">
-        <Link to={`/dataset/${id}`} className="text-sm text-[var(--color-muted)]">
+        <Link to={`/${domain}/${slug}`} className="text-sm text-[var(--color-muted)]">
           ← {ds.topic}
         </Link>
         <h1 className="serif text-4xl">Filters</h1>

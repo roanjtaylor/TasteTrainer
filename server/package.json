@@ -11,6 +11,7 @@
     "@supabase/supabase-js": "^2.49.9",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
     "express": "^4.21.2",
     "playwright": "1.56.1",
     "tsx": "^4.19.2"

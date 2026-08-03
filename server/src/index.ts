@@ -15,6 +15,10 @@
 // `npm run dev` after editing server code (the Vite-served UI still hot-reloads).
 // (Belt-and-suspenders for any future watcher: CLAUDE_CWD in services/claude.ts
 // keeps the Claude CLI's scratch writes out of the project tree.)
+// ‼️ Must stay the first import: loads .env.local before config.ts/storage.ts
+// read process.env at module scope. See env.ts for why it can't be inlined here.
+import './env.ts';
+
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import compression from 'compression';
@@ -71,7 +75,8 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 const server = app.listen(PORT, () => {
-  console.log(`[server] listening on http://localhost:${PORT}`);
+  // No "[server]" prefix — concurrently already labels each line.
+  console.log(`listening on http://localhost:${PORT}`);
 });
 
 server.on('error', (err: NodeJS.ErrnoException) => {
@@ -79,7 +84,7 @@ server.on('error', (err: NodeJS.ErrnoException) => {
     // Exit rather than linger. A server that can't bind but stays alive becomes a
     // zombie; re-running `npm run dev` would stack several, each spawning Claude CLI
     // subprocesses that contend for resources — a slow path to a wedged backend.
-    console.error(`[server] port ${PORT} already in use — exiting. Stop the other server first.`);
+    console.error(`port ${PORT} already in use — exiting. Stop the other server first.`);
     process.exit(1);
   } else {
     console.error('[server] server error:', err);

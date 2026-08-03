@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
-import type { Domain, ProposedItem, Subtopic } from '../../../shared/types';
+import { slugifyTopic, type Domain, type ProposedItem, type Subtopic } from '../../../shared/types';
 import { api } from '../lib/api';
 import { createDataset, saveDataset } from '../lib/data';
 import { useDomain } from '../lib/domain';
@@ -10,10 +10,10 @@ import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
 
 // Curate flow (3-curation.md / 6-ui.md): topic -> AI subtopics -> review grid -> save.
-// Scoped to the active world (7-software-design.md) — chosen at the landing gate.
+// Scoped to the world in the URL (7-software-design.md) — this screen is /physical/new.
 export function Curate() {
   const navigate = useNavigate();
-  const { domain } = useDomain();
+  const domain = useDomain();
 
   const [topic, setTopic] = useState('');
   const [description, setDescription] = useState('');
@@ -97,7 +97,7 @@ export function Curate() {
         return created;
       }
     });
-    if (ds) navigate(`/dataset/${ds.id}`);
+    if (ds) navigate(`/${dom}/${slugifyTopic(ds.topic)}`);
   }
 
   function patch(index: number, change: Partial<ProposedItem>) {

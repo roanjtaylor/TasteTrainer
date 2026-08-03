@@ -14,7 +14,6 @@ import type {
 } from '../../../shared/types';
 import { api, type Progress, type ScopeQuery } from '../lib/api';
 import { saveDataset, useDataset, useLeaderboard, useRankers, vote as castVote } from '../lib/data';
-import { useDomain } from '../lib/domain';
 import { useRanker } from '../lib/ranker';
 import { eraOf, eraGroupsOf, decadesInRange, itemsInGroup } from '../lib/format';
 import { ItemCard, Chip } from '../components/ItemCard';
@@ -24,7 +23,9 @@ import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
 import { ReviewCard } from './Curate';
 
-type Mode = 'browse' | 'rank' | 'leaderboard';
+// 'edit' shows the same grid as 'browse' plus the destructive affordances (remove).
+// It is reached from the mode switcher in the header.
+type Mode = 'browse' | 'edit' | 'rank' | 'leaderboard';
 
 // The single active filter — one axis at a time (a subtopic OR an era-group), or none.
 // Derived from the URL so it's shareable and back-button friendly.
@@ -36,11 +37,11 @@ type ActiveFilter =
 // The Dataset view (6-ui.md): browse the items, pick a scope, run the 1v1
 // forced choice, and see the leaderboard — all one screen.
 export function DatasetView() {
-  const { id = '' } = useParams();
-  const { setDomain } = useDomain();
+  // /physical/ships — the world and the field, both readable in the address bar.
+  const { domain = '', slug = '' } = useParams();
   // Cached read: a dataset seen before paints immediately and corrects itself in the
   // background, so returning to it costs nothing (lib/store.ts).
-  const { data: ds, error: loadError, set: setDs } = useDataset(id || null);
+  const { data: ds, error: loadError, set: setDs } = useDataset(slug || null);
   const [mode, setMode] = useState<Mode>('browse');
 
   const [gaps, setGaps] = useState<CoverageGap[] | null>(null);
@@ -53,14 +54,6 @@ export function DatasetView() {
   // shareable and the back button steps through filter states. The Filters subpage
   // sets it; the pill's × clears it. One axis at a time (decision 3).
   const [searchParams, setSearchParams] = useSearchParams();
-
-  useEffect(() => {
-    // Landing on a dataset directly (a bookmark, the back button) still needs the
-    // domain context set — the dataset itself knows which world it belongs to
-    // (7-software-design.md), so this keeps Nav's "Datasets"/"+ New" links correct.
-    if (ds) setDomain(ds.domain);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ds?.domain]);
 
   const groups = useMemo(() => (ds ? eraGroupsOf(ds) : []), [ds]);
 
@@ -138,14 +131,14 @@ export function DatasetView() {
     <div className="space-y-6">
       <header className="mt-4 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <Link to="/datasets" className="text-sm text-[var(--color-muted)]">
+          <Link to={`/${domain}`} className="text-sm text-[var(--color-muted)]">
             ← all fields
           </Link>
           <h1 className="serif text-4xl">{ds.topic}</h1>
           <p className="mt-1 max-w-2xl text-[var(--color-muted)]">{ds.description}</p>
         </div>
         <div className="flex items-center gap-2">
-          {/* Filters live behind this button — opens the /dataset/:id/filters subpage. */}
+          {/* Filters live behind this button — opens the /:domain/:slug/filters subpage. */}
           <Link
             to="filters"
             className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
@@ -196,13 +189,14 @@ export function DatasetView() {
         </span>
       </div>
 
-      {mode === 'browse' && (
+      {(mode === 'browse' || mode === 'edit') && (
         <Browse
           ds={ds}
           pool={pool}
           gaps={gaps}
           gapSuggestedCount={gapSuggestedCount}
           gapError={gapError}
+          editMode={mode === 'edit'}
           onChanged={setDs}
         />
       )}
@@ -219,6 +213,7 @@ function Browse({
   gaps,
   gapSuggestedCount,
   gapError,
+  editMode,
   onChanged,
 }: {
   ds: Dataset;
@@ -226,6 +221,7 @@ function Browse({
   gaps: CoverageGap[] | null;
   gapSuggestedCount: number;
   gapError: string;
+  editMode: boolean;
   onChanged: (ds: Dataset) => void;
 }) {
   // Inline editing: `editing` holds a working copy of the item being edited; `picker`
@@ -281,15 +277,19 @@ function Browse({
               <div key={item.id} className="relative">
                 {/* The card itself opens the editor — works on touch, not just hover. */}
                 <ItemCard item={item} onClick={() => setEditing({ ...item })} />
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeItem(item.id);
-                  }}
-                  className="absolute right-2 top-2 rounded-full bg-[var(--color-ink)]/80 px-2 py-1 text-xs text-[var(--color-wall)]"
-                >
-                  Remove
-                </button>
+                {/* Removal is destructive, so it only appears in edit mode — browsing
+                    stays a clean wall of images. */}
+                {editMode && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeItem(item.id);
+                    }}
+                    className="absolute right-2 top-2 rounded-full bg-[var(--color-ink)]/80 px-2 py-1 text-xs text-[var(--color-wall)]"
+                  >
+                    Remove
+                  </button>
+                )}
               </div>
             ),
           )}

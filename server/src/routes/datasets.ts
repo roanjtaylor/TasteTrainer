@@ -1,7 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { deleteDataset, getDataset, listDatasets, saveDataset } from '../storage.ts';
 import { newId, now } from '../util.ts';
-import { normalizeDomain, optionalDomain } from '../../../shared/types.ts';
+import { normalizeDomain, optionalDomain, slugifyTopic } from '../../../shared/types.ts';
 import type { Dataset, Domain, EraGroup, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
 
 export const datasetsRouter = Router();
@@ -97,13 +97,19 @@ datasetsRouter.put('/:id', async (req: Request, res: Response, next: NextFunctio
       eraGroups: body.eraGroups ?? existing.eraGroups,
       items: (body.items ?? existing.items).map(toItem),
     };
-    res.json(await saveDataset(ds));
+    // A topic edit is also a rename of the dataset's URL, so hand the old slug over
+    // for invalidation (storage.saveDataset).
+    res.json(await saveDataset(ds, slugifyTopic(existing.topic)));
   } catch (err) { next(err); }
 });
 
 datasetsRouter.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    await deleteDataset(req.params.id);
+    // Resolve first: the param may be a slug, and everything downstream of a delete
+    // (rankings, results) is keyed by the dataset's id.
+    const existing = await getDataset(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Dataset not found' });
+    await deleteDataset(existing.id, slugifyTopic(existing.topic));
     res.status(204).end();
   } catch (err) { next(err); }
 });
