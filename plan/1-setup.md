@@ -22,3 +22,27 @@ How the app is built and run. TasteTrainer is a webapp you open in your browser 
 1. **Stack confirmed: TypeScript everywhere** — React + Vite frontend, Node + Express backend, shared types. (Python backend considered and declined — one language is simpler.)
 2. **Styling tooling decided in `6-ui.md`: Tailwind CSS + shadcn/ui** (no longer deferred).
 3. **Local server each run is fine** — wrapped in one command to start frontend + backend together.
+
+---
+
+## Superseded (2026-08-04): local-first became deployed
+
+Two decisions above no longer describe the built app. Both changed for the same reason —
+the tool got shared with other people, which localhost and on-disk files can't support.
+
+- **Storage is Supabase Postgres, not a `data/` folder of JSON.** A dataset is one `jsonb`
+  row in `taste_datasets` (plus `taste_rankings` for scores). `data/` still exists on the
+  original machine as the pre-migration copy; nothing reads it. The *shape* decided in
+  `2-data.md` is unchanged — it's the same JSON, now in a row instead of a file — so this
+  is a hosting change, not a data-model one.
+- **It runs in the cloud, not only on localhost.** Web on Vercel, API on Render as a
+  Docker service (Docker because the digital world's screenshot renderer needs Chromium —
+  `7-software-design.md`). `npm run dev` still runs both locally, unchanged.
+
+The knock-on: the backend can no longer borrow a Claude login from the machine it runs on,
+which is what the Claude Agent SDK integration relied on. Claude is now reached through a
+self-hosted Hugging Face Space proxy — see the same-dated note in `3-curation.md`.
+
+**What this costs:** writes are unauthenticated, so anyone who can reach the API can edit
+or delete a dataset. Accepted for now, in the same spirit as the arcade-name rankings
+(`5-comparison.md`), but it's a real consequence of leaving localhost, not a non-issue.

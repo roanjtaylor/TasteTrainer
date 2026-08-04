@@ -2,6 +2,7 @@
 // plus an unofficial DuckDuckGo image search that powers the 3x3 swap picker.
 // URLs only — nothing is downloaded (2-data.md).
 import { renderAndStore } from './screenshotRender.ts';
+import type { Capture } from '../../../shared/types.ts';
 
 const UA =
   'TasteTrainer/0.1 (personal local tool; https://example.local) Node fetch';
@@ -245,13 +246,23 @@ async function bestScreenshot(pageUrl: string, isHistorical: boolean): Promise<s
   }
 }
 
-/** The single best screenshot for a curated item: the closest Wayback snapshot to
- *  `year` that actually renders, walking outward candidate-by-candidate; falls back
- *  to the live site; falls back to "" (needs image, same as a physical-world item
- *  Wikimedia couldn't resolve) rather than ever returning a broken/wrong image. */
-export async function screenshotForYear(rawUrl: string, year: number | null): Promise<string> {
+/**
+ * The single best screenshot for a curated item: the closest Wayback snapshot to
+ * `year` that actually renders, walking outward candidate-by-candidate; falls back
+ * to the live site; falls back to "" (needs image, same as a physical-world item
+ * Wikimedia couldn't resolve) rather than ever returning a broken/wrong image.
+ *
+ * Returns HOW it got there alongside the url. The fallback to the live site is the
+ * whole reason: it succeeds silently and produces a present-day screenshot for a
+ * historical item, which is indistinguishable from success once saved. Reporting the
+ * outcome is what lets the curate flow say so instead of hiding it.
+ */
+export async function screenshotForYear(
+  rawUrl: string,
+  year: number | null,
+): Promise<{ image: string; capture?: Capture }> {
   const url = normalizeUrl(rawUrl);
-  if (!url) return '';
+  if (!url) return { image: '' };
   const currentYear = new Date().getFullYear();
 
   if (year != null && year < currentYear - 1) {
@@ -259,11 +270,12 @@ export async function screenshotForYear(rawUrl: string, year: number | null): Pr
     const sorted = [...hits].sort((a, b) => Math.abs(a.year - year) - Math.abs(b.year - year));
     for (const h of sorted) {
       const shot = await bestScreenshot(waybackPageUrl(url, h.timestamp), true);
-      if (shot) return shot;
+      if (shot) return { image: shot, capture: { kind: 'archived', year: h.year } };
     }
   }
 
-  return (await bestScreenshot(url, false)) ?? '';
+  const live = await bestScreenshot(url, false);
+  return live ? { image: live, capture: { kind: 'live', year: currentYear } } : { image: '' };
 }
 
 /** Candidate screenshots for the picker grid: a spread of nearby Wayback snapshots

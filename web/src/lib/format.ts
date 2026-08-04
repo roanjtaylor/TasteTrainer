@@ -6,16 +6,6 @@ export function eraOf(year: number | null): string {
   return `${Math.floor(year / 10) * 10}s`;
 }
 
-/** Unique, sorted eras spanned by a set of items. */
-export function erasOf(items: Item[]): string[] {
-  const set = new Set(items.map((i) => eraOf(i.year)));
-  return [...set].sort((a, b) => {
-    if (a === 'Unknown') return 1;
-    if (b === 'Unknown') return -1;
-    return parseInt(a) - parseInt(b);
-  });
-}
-
 // ---- Era-groups (the named time periods for the Era filter timeline) ----
 
 /** The dated year-span of a set of items, or null when nothing is dated. */

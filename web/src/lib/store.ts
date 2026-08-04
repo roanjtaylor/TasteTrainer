@@ -272,6 +272,7 @@ export const cacheKeys = {
   datasetList: (domain: string) => `datasets:${domain}`,
   datasetListPrefix: 'datasets:',
   dataset: (id: string) => `dataset:${id}`,
+  worldMap: (domain: string) => `worldmap:${domain}`,
   rankers: (id: string) => `rankers:${id}`,
   leaderboard: (id: string, ranker: string, scope: string) => `board:${id}:${ranker}:${scope}`,
   leaderboardPrefix: (id: string) => `board:${id}:`,

@@ -14,3 +14,11 @@ export function LegacyDatasetRedirect() {
   if (!ds) return <p className="mt-8 text-[var(--color-muted)]">Loading…</p>;
   return <Navigate to={`/${ds.domain}/${slugifyTopic(ds.topic)}`} replace />;
 }
+
+/** `/:domain/map` was the review screen before the world had an actual map. The map
+ *  now lives on the shelf, so the name would point at the wrong thing — send it to
+ *  the review, which is what that address always meant. */
+export function LegacyMapRedirect() {
+  const { domain = '' } = useParams();
+  return <Navigate to={`/${domain}/review`} replace />;
+}

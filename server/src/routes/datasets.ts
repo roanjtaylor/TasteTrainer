@@ -1,5 +1,13 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
-import { deleteDataset, getDataset, listDatasets, saveDataset } from '../storage.ts';
+import {
+  deleteDataset,
+  getDataset,
+  getWorldMap,
+  listDatasets,
+  saveDataset,
+  saveWorldMap,
+} from '../storage.ts';
+import { absorbGhost } from '../services/worldMap.ts';
 import { newId, now } from '../util.ts';
 import { normalizeDomain, optionalDomain, slugifyTopic } from '../../../shared/types.ts';
 import type { Dataset, Domain, EraGroup, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
@@ -31,6 +39,9 @@ function toItem(raw: Partial<Item> & Partial<ProposedItem>): Item {
     definingFact: raw.definingFact ?? '',
     subtopic: raw.subtopic ?? '',
     url: raw.url ?? '',
+    // Kept so a screenshot that isn't period-accurate stays flagged after saving —
+    // dropping it here would hide exactly the failure it exists to surface.
+    capture: raw.capture,
     createdAt: (raw as Item).createdAt || now(),
   };
 }
@@ -80,7 +91,18 @@ datasetsRouter.post('/', async (req: Request, res: Response, next: NextFunction)
       createdAt: now(),
       updatedAt: now(),
     };
-    res.status(201).json(await saveDataset(ds));
+    const saved = await saveDataset(ds);
+
+    // If this field was one of the map's proposed gaps, it inherits the ghost's spot —
+    // so a field you built *because* you saw the hole appears exactly where the hole
+    // was. Best-effort: never fail a save because the map couldn't be updated.
+    try {
+      const map = await getWorldMap(saved.domain);
+      const absorbed = map && absorbGhost(map, saved.id, saved.topic);
+      if (absorbed) await saveWorldMap(absorbed);
+    } catch { /* the next review will place it */ }
+
+    res.status(201).json(saved);
   } catch (err) { next(err); }
 });
 

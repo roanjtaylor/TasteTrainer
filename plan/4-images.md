@@ -27,3 +27,25 @@ This is the genuinely hard part. Claude can reliably tell you *what* the best 50
 **Deferred for later (post-MVP)**
 - Website/digital-design domains → screenshot capture + Wayback Machine — now planned in [7-software-design.md](7-software-design.md).
 - Stale/dead-link detection & repair (beyond manual re-pick).
+
+---
+
+## Amended (2026-08-04)
+
+- **The picker has a second source, and it's the one that keeps it working.** Decision 1
+  accepted the unofficial-endpoint risk without a fallback; in practice the DuckDuckGo
+  scrape breaks often enough that the picker falls through to the **official Wikimedia
+  Commons search API** (`services/images.ts`) whenever it returns nothing. Same 3×3 grid,
+  same interaction — the user never sees which source answered. The accepted risk is
+  therefore "occasionally worse results", not "the picker stops working".
+- **"Link, don't download" now has one honest exception.** Digital-world screenshots don't
+  exist anywhere to link to, so we render them ourselves and upload the PNG to Supabase
+  Storage (`7-software-design.md`). The *item* still holds only a URL — the philosophy
+  above survives from the data model's point of view — but the bytes are ours, and that is
+  a real departure worth naming rather than glossing.
+- **A missing image is no longer the only failure worth flagging.** Decision 3's "a dead
+  link is handled by re-running the picker" assumed failures are visible. The digital
+  pipeline's characteristic failure isn't a broken image — it's a *plausible wrong* one (a
+  present-day screenshot standing in for a historical design). Items now carry how their
+  image was captured, and a non-period-accurate one is badged in the review grid and the
+  gallery. See the same-dated note in `7-software-design.md`.

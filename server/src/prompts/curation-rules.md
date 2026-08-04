@@ -93,6 +93,12 @@ space, so adjust (a) and (d) accordingly; (b) and (c) apply as-is.
   SPECIFIC design/snapshot represents* — not today's look, and not when the company was
   founded — so the same product at two different years is two different items, correctly.
 
+- **Prefer the snapshot that actually survives.** When two products could represent the
+  same early era, pick the older, simpler, server-rendered one. Pages from before roughly
+  2010 were mostly static HTML, so an archived copy renders faithfully; a JS-heavy app of
+  the same vintage re-fetches from the live web on replay and quietly renders as TODAY.
+  A slightly less famous product that archives honestly beats a famous one that lies.
+
 - **Picking the representative year:** choose the year a design was at its most
   characteristic/influential for the era it's illustrating, favouring a year with a
   reasonable chance of being archived (avoid the last few months — snapshots may not exist
@@ -101,3 +107,60 @@ space, so adjust (a) and (d) accordingly; (b) and (c) apply as-is.
   the named designer/design lead if one is actually known and notable, "" otherwise (most
   digital work has no single credited designer the way a chair or a watch does — don't
   invent one).
+
+## (g) The field map — auditing the WHOLE world, not one field
+Sections (a)–(f) govern what goes INSIDE a field. This section governs the level above:
+given every field the user has built in one world, is that collection a good map of the
+world? Apply (a)'s field-mapping and (b)'s anti-bias one level up.
+
+- **Map the world first, then compare.** Before judging what's there, work out how a
+  knowledgeable person would actually divide this world into fields. Then read the user's
+  fields against that map. The output is the difference between the two.
+
+- **Missing fields are the point.** Name the fields of this world the user has NO dataset
+  for. Prioritise the ones they are least likely to have thought of themselves — a map
+  built one topic at a time inherits the blind spots of whoever named the topics. An
+  obvious omission is worth one line; a field the user probably doesn't know is a field
+  is worth naming clearly and explaining. Do not pad: a small number of real gaps beats a
+  long list of near-duplicates of what already exists.
+
+- **Judge the boundaries, not just the coverage.** A field can be drawn wrong: two
+  datasets that are really one field (merge), one dataset holding two unrelated fields
+  that would each deserve their own subtopics and eras (split), or a name that
+  misdescribes what it actually contains (rename). Only raise a boundary issue when the
+  current shape genuinely loses something — not as a matter of taste in naming.
+
+- **Say which existing fields are thin.** Using only the item counts, subtopic lists, and
+  year spans given, flag fields that look under-built or skewed (e.g. many items but two
+  subtopics; a century-spanning field whose items all sit in one decade). Be concrete
+  about what looks wrong. You are not being given the items, so do not guess at specific
+  missing works here — that is the per-field sweep's job.
+
+- **The summary teaches.** `mapSummary` is one paragraph on how this world really divides
+  and what a complete map would look like. Write it for someone building their sense of
+  the whole world, not as a recap of what they already have.
+
+### (g2) The spatial map — axes and regions
+The world is also drawn as a 2D map, so the same review decides where things sit. You
+choose the MEANING; the app turns it into pixels. Never return canvas coordinates.
+
+- **Two axes, chosen once for the whole world.** Each is a continuous dimension with a
+  named low and high end, and every field in the world should sit somewhere sensible on
+  both. Good axes are concrete and physical enough to place a thing without arguing —
+  e.g. for objects, *held in the hand → inhabited* and *practical → expressive*. Bad axes
+  are ones you can't confidently place a field on (*"important → unimportant"*), or that
+  really only apply to a corner of the world.
+- **Regions are few and genuinely distinct.** Aim for the smallest set that covers the
+  world with little overlap — the same rule as subtopics in (a2). A region should be
+  recognisable as a part of the world in its own right, not a bucket for leftovers. Every
+  field, and every field you propose as missing, belongs to exactly one.
+- **Region positions are 0–1 on the two axes**, and they should genuinely differ: if two
+  regions would sit in the same place, they probably want merging. Spread them out — a map
+  where everything clusters in one corner teaches nothing.
+- **An existing map is SETTLED.** When you are given the world's current axes and regions,
+  do not re-derive, rename, reorder or re-position them. Place the unassigned fields into
+  the regions that exist, and raise anything else as a suggestion for the user to accept.
+  This is the difference between a map someone can learn and one that changes under them.
+- **Suggest sparingly, and only what's mechanical.** A handful at most, each with a real
+  reason: a genuinely missing region, a field in the wrong region, a region whose name
+  misdescribes it. Bigger structural change belongs in `boundaryIssues`, not here.

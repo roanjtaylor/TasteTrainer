@@ -1,5 +1,5 @@
 import { slugifyTopic } from '../../../shared/types';
-import type { Dataset, DatasetSummary, Domain, Ranker } from '../../../shared/types';
+import type { Dataset, DatasetSummary, Domain, Ranker, WorldMap } from '../../../shared/types';
 import { api } from './api';
 import type { ScopeQuery } from './api';
 import { cacheKeys, drop, prefetch, useCached, write, type CachedResource } from './store';
@@ -45,6 +45,34 @@ export function prefetchDataset(idOrSlug: string): void {
 function publish(ds: Dataset): void {
   write(cacheKeys.dataset(ds.id), ds);
   write(cacheKeys.dataset(slugifyTopic(ds.topic)), ds);
+}
+
+/**
+ * One world's map. Cached hard: it changes only when you drag something or run a
+ * review, both of which write through `saveWorldMap` below — so there is nothing to
+ * poll for, and the shelf should paint the map instantly on every return visit.
+ */
+export function useWorldMap(domain: Domain | null): CachedResource<WorldMap | null> {
+  return useCached(
+    domain ? cacheKeys.worldMap(domain) : null,
+    () => api.getWorldMap(domain as Domain).then((r) => r.map),
+    { maxAgeMs: 5 * 60_000 },
+  );
+}
+
+/** Write a map edit through and republish it, so the canvas reflects a drop at once. */
+export async function saveWorldMap(
+  domain: Domain,
+  body: Parameters<typeof api.updateWorldMap>[1],
+): Promise<WorldMap> {
+  const { map } = await api.updateWorldMap(domain, body);
+  write(cacheKeys.worldMap(domain), map);
+  return map;
+}
+
+/** Publish a map the review just produced, without a refetch. */
+export function publishWorldMap(domain: Domain, map: WorldMap | null): void {
+  write(cacheKeys.worldMap(domain), map);
 }
 
 /** Everyone who has ranked a dataset. */

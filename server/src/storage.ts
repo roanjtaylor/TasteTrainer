@@ -10,15 +10,26 @@ import type {
   Ranker,
   RankerSummary,
   ResultsFile,
+  WorldMap,
 } from '../../shared/types.ts';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-/** Postgres "relation does not exist" — i.e. a migration hasn't been applied yet. */
-const MISSING_RELATION = '42P01';
+/**
+ * "That table isn't there" — i.e. a migration hasn't been applied yet.
+ *
+ * Two codes, because the answer depends on how far the request got. Postgres raises
+ * `42P01` when a statement reaches it naming an unknown relation; PostgREST returns
+ * `PGRST205` earlier than that, when the table is absent from its own schema cache
+ * and it never builds a statement at all. Matching only the Postgres code meant the
+ * common case — a table that has genuinely never been created — fell through as a raw
+ * "not found in the schema cache" error instead of the message naming the migration
+ * file to run.
+ */
+const MISSING_RELATION = new Set(['42P01', 'PGRST205']);
 
 function missingRelation(error: { code?: string } | null): boolean {
-  return error?.code === MISSING_RELATION;
+  return !!error?.code && MISSING_RELATION.has(error.code);
 }
 
 // Domains were renamed hardware/software -> physical/digital (shared/types.ts), and
@@ -36,8 +47,8 @@ function withDomain(ds: Dataset): Dataset {
  * projects out just the handful of fields a shelf card shows and filters by domain in
  * Postgres — instead of downloading every dataset's full item list to count it in JS.
  *
- * Falls back to that original whole-blob query if the view isn't there yet, so the app
- * keeps working on a database where 002 hasn't been applied; it's just slower.
+ * The pre-002 whole-blob fallback was removed once 002 was applied everywhere: a
+ * missing view now surfaces as a real error instead of silently degrading.
  */
 export async function listDatasets(domain?: Domain): Promise<DatasetSummary[]> {
   return cached(keys.datasetList(domain), async () => {
@@ -48,7 +59,6 @@ export async function listDatasets(domain?: Domain): Promise<DatasetSummary[]> {
     if (domain) query = query.eq('domain', domain);
 
     const { data, error } = await query;
-    if (missingRelation(error)) return listDatasetsFallback(domain);
     if (error) throw new Error(error.message);
 
     return (data ?? []).map((row: any) => ({
@@ -61,32 +71,6 @@ export async function listDatasets(domain?: Domain): Promise<DatasetSummary[]> {
       updatedAt: row.updated_at ?? '',
     }));
   });
-}
-
-/** Pre-002 path: pull every dataset whole and summarise in JS. Correct, but heavy —
- *  logged once per cache miss so it's obvious the migration is still outstanding. */
-async function listDatasetsFallback(domain?: Domain): Promise<DatasetSummary[]> {
-  console.warn(
-    '[storage] taste_dataset_summaries view not found — falling back to full-row reads. ' +
-      'Apply supabase/migrations/002_physical_digital_and_rankings.sql to cut this payload.',
-  );
-  const { data, error } = await supabase
-    .from('taste_datasets')
-    .select('id, data')
-    .order('updated_at', { ascending: false });
-  if (error) throw new Error(error.message);
-  return (data ?? [])
-    .map(({ id, data: raw }: { id: string; data: Dataset }) => ({ id, ds: withDomain(raw) }))
-    .filter(({ ds }) => !domain || ds.domain === domain)
-    .map(({ id, ds }) => ({
-      id,
-      domain: ds.domain,
-      topic: ds.topic,
-      description: ds.description,
-      itemCount: (ds.items ?? []).length,
-      subtopicCount: (ds.subtopics ?? []).length,
-      updatedAt: ds.updatedAt,
-    }));
 }
 
 /**
@@ -155,6 +139,44 @@ export async function deleteDataset(id: string, slug?: string): Promise<void> {
   if (slug) invalidate(keys.dataset(slug));
   invalidatePrefix(keys.datasetListPrefix);
   invalidatePrefix(keys.rankersPrefix(id));
+}
+
+// ---- World maps (one row per domain) ----
+
+const MAP_MIGRATION_HINT =
+  'The taste_world_maps table is missing. Run supabase/migrations/003_world_maps.sql in the Supabase SQL editor.';
+
+/**
+ * One world's stored map, or null if it has never been reviewed.
+ *
+ * Null is a normal state, not an error: a world with no map yet renders as the plain
+ * grid with a prompt to run the review. A *missing table*, by contrast, is a real
+ * configuration problem — so it throws with the migration named rather than
+ * pretending the map simply doesn't exist yet.
+ */
+export async function getWorldMap(domain: Domain): Promise<WorldMap | null> {
+  return cached(keys.worldMap(domain), async () => {
+    const { data, error } = await supabase
+      .from('taste_world_maps')
+      .select('data')
+      .eq('domain', domain)
+      .maybeSingle();
+    if (missingRelation(error)) throw new Error(MAP_MIGRATION_HINT);
+    if (error) throw new Error(error.message);
+    return (data?.data as WorldMap) ?? null;
+  });
+}
+
+export async function saveWorldMap(map: WorldMap): Promise<WorldMap> {
+  map.updatedAt = now();
+  const { error } = await supabase
+    .from('taste_world_maps')
+    .upsert({ domain: map.domain, data: map, updated_at: map.updatedAt });
+  if (missingRelation(error)) throw new Error(MAP_MIGRATION_HINT);
+  if (error) throw new Error(error.message);
+  // Seed rather than clear: dragging a card writes and then immediately re-reads.
+  put(keys.worldMap(map.domain), map);
+  return map;
 }
 
 // ---- Rankings (one row per person, per dataset) ----

@@ -12,13 +12,3 @@ export function eraOf(year: number | null | undefined): string {
   const decade = Math.floor(year / 10) * 10;
   return `${decade}s`;
 }
-
-/** Unique, sorted list of decade-eras spanned by a set of years. */
-export function erasOf(years: Array<number | null>): string[] {
-  const set = new Set(years.map(eraOf));
-  return [...set].sort((a, b) => {
-    if (a === 'Unknown') return 1;
-    if (b === 'Unknown') return -1;
-    return parseInt(a) - parseInt(b);
-  });
-}

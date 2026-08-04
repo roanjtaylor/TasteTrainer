@@ -77,6 +77,7 @@ export const keys = {
   datasetList: (domain?: string) => `datasets:list:${domain ?? 'all'}`,
   datasetListPrefix: 'datasets:list:',
   dataset: (id: string) => `datasets:one:${id}`,
+  worldMap: (domain: string) => `worldmap:${domain}`,
   rankersPrefix: (datasetId: string) => `rankings:${datasetId}:`,
   rankerList: (datasetId: string) => `rankings:${datasetId}:list`,
   ranking: (datasetId: string, rankerKey: string) => `rankings:${datasetId}:one:${rankerKey}`,

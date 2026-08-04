@@ -1,72 +1,100 @@
 import { useMemo } from 'react';
-import type { Dataset } from '../../../shared/types';
+import type { Dataset, EraGroup } from '../../../shared/types';
+import { decadeCounts, eraGroupsOf, itemsInGroup, keyWorkOf } from '../lib/format';
+import { Photo } from './Photo';
 
+// The ERA view of the Filters subpage (6-ui.md decision 5): a works-per-decade line
+// over a band of named era-periods, each period pinning one key work.
+//
+// This file used to render *subtopics* despite its name, which left the era axis
+// unreachable from the UI even though `eraGroups` was generated on every save and
+// the backend could already scope by era. That mattered most for the digital world,
+// where time — not maker — is the axis the field is actually organised by.
+//
+// The x-scale is BANDED: every period gets an equal slot regardless of how many
+// years it spans, so a period's slice of the graph and its pinned work sit directly
+// above its button. Recent design history packs many short periods; proportional
+// widths would crush their labels to nothing. Year ranges are printed per band, so
+// the real span is never lost — only the width stops encoding it.
 export function EraTimeline({
   ds,
   onSelect,
 }: {
   ds: Dataset;
-  onSelect: (subtopicName: string) => void;
+  onSelect: (group: EraGroup) => void;
 }) {
-  const cards = useMemo(() => {
-    const countByGroup = new Map<string, number>(ds.subtopics.map((s) => [s.name, 0]));
-    const minYear = new Map<string, number>();
-    const maxYear = new Map<string, number>();
+  const groups = useMemo(() => eraGroupsOf(ds), [ds]);
 
-    for (const item of ds.items) {
-      countByGroup.set(item.subtopic, (countByGroup.get(item.subtopic) ?? 0) + 1);
-      if (item.year != null) {
-        const prev = minYear.get(item.subtopic);
-        if (prev == null || item.year < prev) minYear.set(item.subtopic, item.year);
-        const prevMax = maxYear.get(item.subtopic);
-        if (prevMax == null || item.year > prevMax) maxYear.set(item.subtopic, item.year);
-      }
-    }
+  const bands = useMemo(
+    () =>
+      groups.map((g) => {
+        const inGroup = itemsInGroup(ds.items, g);
+        // Counts per decade WITHIN this band, so the line has shape inside a period
+        // rather than one flat step per era.
+        const decades = decadeCounts(inGroup);
+        return { group: g, count: inGroup.length, decades, keyWork: keyWorkOf(ds.items, g) };
+      }),
+    [groups, ds.items],
+  );
 
-    return ds.subtopics.map((s) => ({
-      name: s.name,
-      description: s.description,
-      count: countByGroup.get(s.name) ?? 0,
-      earliest: minYear.get(s.name) ?? null,
-      latest: maxYear.get(s.name) ?? null,
-    }));
-  }, [ds.subtopics, ds.items]);
-
-  if (cards.length === 0) {
+  if (!bands.length) {
     return (
       <p className="text-[var(--color-muted)]">
-        No subtopics yet — curate some to explore by theme.
+        No dated items yet — add some with a year and the timeline will appear.
       </p>
     );
   }
 
-  return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {cards.map((c) => {
-        const yearRange =
-          c.earliest != null && c.latest != null
-            ? c.earliest === c.latest
-              ? `${c.earliest}`
-              : `${c.earliest} – ${c.latest}`
-            : null;
+  const peak = Math.max(1, ...bands.flatMap((b) => b.decades.map((d) => d.count)), 1);
 
-        return (
+  return (
+    <div className="overflow-x-auto">
+      <div className="flex min-w-full gap-1" style={{ minWidth: `${bands.length * 150}px` }}>
+        {bands.map((b) => (
           <button
-            key={c.name}
-            onClick={() => onSelect(c.name)}
-            className="flex flex-col items-start gap-2 rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-5 text-left shadow-sm transition-colors hover:bg-[var(--color-wall-soft)]"
+            key={`${b.group.label}-${b.group.start}`}
+            onClick={() => onSelect(b.group)}
+            className="group flex flex-1 flex-col rounded-xl border border-transparent p-2 text-left transition-colors hover:border-[var(--color-line)] hover:bg-[var(--color-wall-soft)]"
           >
-            <span className="serif text-xl leading-tight text-[var(--color-ink)]">{c.name}</span>
-            <div className="flex items-center gap-3 text-sm text-[var(--color-muted)]">
-              {yearRange && <span>{yearRange}</span>}
-              <span>
-                {c.count} {c.count === 1 ? 'item' : 'items'}
-              </span>
+            {/* Pinned key work — what this period actually looks like. */}
+            <div className="h-28 w-full overflow-hidden rounded-lg bg-[var(--color-wall-soft)]">
+              {b.keyWork ? (
+                <Photo src={b.keyWork.image} alt={b.keyWork.name} />
+              ) : (
+                <div className="flex h-full items-center justify-center text-xs text-[var(--color-muted)]">
+                  no work yet
+                </div>
+              )}
             </div>
-            <p className="text-sm leading-relaxed text-[var(--color-muted)]">{c.description}</p>
+
+            {/* Works-per-decade within the period. Bars, not a polyline: a band can
+                hold a single decade, and a one-point line draws nothing. */}
+            <div className="mt-2 flex h-10 items-end gap-0.5">
+              {b.decades.length ? (
+                b.decades.map((d) => (
+                  <div
+                    key={d.decade}
+                    title={`${d.decade}s — ${d.count} ${d.count === 1 ? 'work' : 'works'}`}
+                    className="flex-1 rounded-sm bg-[var(--color-accent)]/70 group-hover:bg-[var(--color-accent)]"
+                    style={{ height: `${Math.max(6, (d.count / peak) * 100)}%` }}
+                  />
+                ))
+              ) : (
+                <div className="h-px w-full bg-[var(--color-line)]" />
+              )}
+            </div>
+
+            <div className="mt-2 border-t border-[var(--color-line)] pt-2">
+              <div className="serif text-sm leading-tight group-hover:text-[var(--color-accent)]">
+                {b.group.label}
+              </div>
+              <div className="mt-0.5 text-xs text-[var(--color-muted)]">
+                {b.group.start}–{b.group.end - 1} · {b.count} {b.count === 1 ? 'work' : 'works'}
+              </div>
+            </div>
           </button>
-        );
-      })}
+        ))}
+      </div>
     </div>
   );
 }

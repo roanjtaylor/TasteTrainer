@@ -83,6 +83,33 @@ export interface EraGroup {
   end: number;
 }
 
+/**
+ * How a digital item's screenshot was actually obtained (7-software-design.md).
+ *
+ * Recorded because the two outcomes look identical once saved: a true archived
+ * render of the 2004 design and a screenshot of today's live site are both just a
+ * PNG url in `image`. Without this, an item labelled 2004 wearing a 2026 screenshot
+ * saves clean and stays wrong forever — the silent failure the plan doc flagged and
+ * nothing in the app could see. `year` is the year actually captured, which is the
+ * closest snapshot found, not necessarily the item's `year`.
+ */
+export interface Capture {
+  kind: 'archived' | 'live';
+  year?: number;
+}
+
+/**
+ * True when a capture can't be showing the design of `year` — a live screenshot
+ * standing in for a past year, or an archived snapshot that landed more than a
+ * couple of years off. Shared so the review grid and the browse view agree.
+ */
+export function isPeriodAccurate(capture: Capture | undefined, year: number | null): boolean {
+  if (!capture || year == null) return true;
+  const currentYear = new Date().getFullYear();
+  if (capture.kind === 'live') return year >= currentYear - 1;
+  return capture.year == null || Math.abs(capture.year - year) <= 2;
+}
+
 /** A single piece of work in a dataset. */
 export interface Item {
   id: string;
@@ -108,6 +135,12 @@ export interface Item {
    * "" / absent for physical items.
    */
   url?: string;
+  /**
+   * How `image` was captured (digital domain only). Absent on physical items and on
+   * anything curated before capture reporting existed — treated as "not known", not
+   * as "inaccurate".
+   */
+  capture?: Capture;
   createdAt: string;
 }
 
@@ -226,6 +259,8 @@ export interface ProposedItem {
   url?: string;
   /** Resolved image URL (filled by the server's image step). "" => needs image. */
   image: string;
+  /** How that image was captured — surfaced in the review grid before you save. */
+  capture?: Capture;
 }
 
 /** A reported coverage gap from the "what's missing?" sweep. */
@@ -234,4 +269,144 @@ export interface CoverageGap {
   axis: string;
   /** Human-readable description of what's under-represented. */
   detail: string;
+}
+
+// ---- The field map: one level ABOVE a dataset (8-field-map.md) ----
+//
+// "What's missing?" audits the inside of one field. This audits the SHELF: given
+// every field you've built in a world, what does the world's real map look like,
+// which fields are you blind to, and which boundaries are drawn wrong? It exists
+// because a map assembled one dataset at a time inherits the blind spots you had
+// when you named them — and nothing else in the app ever questions the naming.
+
+/** The compact inventory of one dataset handed to the field-map review. Item lists
+ *  are deliberately NOT sent: this call reasons about the shape of the map, not the
+ *  contents of any one field, and a whole shelf of items would swamp the prompt. */
+export interface FieldSummary {
+  topic: string;
+  description: string;
+  subtopics: string[];
+  itemCount: number;
+  /** Earliest–latest year across the field's dated items; null when nothing is dated. */
+  yearRange: { min: number; max: number } | null;
+}
+
+/** A field of this world you have no dataset for — the unknown-unknowns surface. */
+export interface MissingField {
+  /** Ready to hand straight to the Curate flow. */
+  topic: string;
+  description: string;
+  /** Why this field matters to someone mapping this world — the teaching part. */
+  why: string;
+}
+
+/** The kinds of structural fix the review can propose for existing fields. */
+export type BoundaryKind = 'merge' | 'split' | 'rename';
+
+/** A proposed structural fix to the fields you already have. */
+export interface BoundaryIssue {
+  kind: BoundaryKind;
+  /** The existing dataset topic(s) this concerns. */
+  fields: string[];
+  /** The concrete change, e.g. "Split into Road Bicycles and Track Bicycles". */
+  proposal: string;
+  why: string;
+}
+
+/** An existing field that is thin or skewed — a pointer to run its own gap sweep. */
+export interface ThinField {
+  topic: string;
+  detail: string;
+}
+
+/** The whole world-level review. */
+export interface FieldMapReview {
+  /** One paragraph on how this world actually divides — the shape to build toward. */
+  mapSummary: string;
+  missingFields: MissingField[];
+  boundaryIssues: BoundaryIssue[];
+  thinFields: ThinField[];
+}
+
+// ---- The world map: the review, made spatial (8-field-map.md) ----
+//
+// The review above is prose. This turns it into a picture: fields sit inside named
+// regions positioned on two meaningful axes, so WHERE a card sits means something,
+// and a field you don't have yet is a visible hole rather than a bullet point.
+//
+// The design turns on one constraint: a model asked to lay out a world twice gives
+// two different answers, and a map that rearranges itself can never be learned. So
+// the split is deliberate — **Claude decides meaning, code decides pixels**. Claude
+// is reliable at "is a watch held or inhabited"; it is not reliable at "x=340".
+// Everything below is the semantic half; `web/src/lib/mapLayout.ts` is the pixels.
+
+/**
+ * One end-to-end dimension of a world, proposed once and then left alone.
+ * e.g. { label: 'Scale', low: 'held in the hand', high: 'inhabited' }.
+ */
+export interface MapAxis {
+  label: string;
+  low: string;
+  high: string;
+}
+
+/** A named area of a world — the thing datasets belong to on the map. */
+export interface MapRegion {
+  /** Stable slug. Survives a rename of `name`, which placements reference. */
+  id: string;
+  name: string;
+  description: string;
+  /** Where this region sits on the world's axes, each 0–1. Semantic, not pixels. */
+  x: number;
+  y: number;
+}
+
+/**
+ * Which region a card belongs to. That is the whole of it.
+ *
+ * It used to also carry a position and a `pinned` flag, from when cards could be
+ * dragged. Without dragging the layout is wholly derived — the same map always draws
+ * the same way — so storing coordinates would only be a second source of truth for
+ * something already computed. Older rows still have those keys; they're ignored.
+ */
+export interface Placement {
+  regionId: string;
+}
+
+/** A proposed field, placed on the map as a hole in its region. */
+export interface GhostField extends MissingField {
+  /** Stable key (the topic slug) — also its key in `placements`. */
+  key: string;
+  regionId: string;
+}
+
+/**
+ * A change to the map the review proposes and you accept or dismiss.
+ *
+ * Only the three kinds that can be applied mechanically and safely live here.
+ * Anything bigger — merge two fields, split a dataset's items — stays advice in
+ * `boundaryIssues`, because applying it would mean moving items around, and a
+ * suggestion is not consent for that.
+ */
+export type MapSuggestion =
+  | { id: string; kind: 'add-region'; why: string; region: MapRegion }
+  | { id: string; kind: 'move-field'; why: string; datasetId: string; toRegionId: string }
+  | { id: string; kind: 'rename-region'; why: string; regionId: string; name: string };
+
+/** One world's stored map. Durable: generated once, then amended, never redrawn. */
+export interface WorldMap {
+  domain: Domain;
+  axes: { x: MapAxis; y: MapAxis };
+  regions: MapRegion[];
+  /** Keyed by dataset id, or by a ghost's `key`. */
+  placements: Record<string, Placement>;
+  ghosts: GhostField[];
+  /** Proposed changes awaiting accept/dismiss. */
+  suggestions: MapSuggestion[];
+  updatedAt: string;
+}
+
+/** URL-safe, stable id for a region or ghost. Shared so the server and the map agree. */
+export function mapSlug(name: string): string {
+  return slugifyTopic(name) || 'unnamed';
 }

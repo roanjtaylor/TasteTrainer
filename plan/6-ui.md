@@ -66,6 +66,54 @@ Replaced the always-visible subtopic/era **chip rows** with an on-demand, visual
 8. **Active filter = pill + count** next to the Filters button; state encoded in the URL (`?sub=` / `?era=start-end`).
 9. **Interactive zoom-to-year on the timeline = deferred post-MVP** (the static timeline + period band is the MVP).
 
+## Resolved (2026-08-04) — the Filters subpage finally has both axes
+
+The 2026-06-19 spec above described a **SUBTOPIC | ERA** switch. Only half shipped: the
+subtopic fan-cards component was written and then never imported, and the component the
+screen *did* render was named `EraTimeline` but iterated subtopics — so the era axis was
+unreachable from the UI even though `eraGroups` was generated on every save and the
+backend could already scope a pool by era end to end. Now built as specified:
+
+1. **Axis switch added** — SUBTOPIC shows the fan cards (`SubtopicFans`), ERA shows a real
+   banded timeline (`EraTimeline`, rewritten). Still one filter at a time.
+2. **Each era band pins a key work and draws works-per-decade** within the period, so
+   "which eras hold more work" reads at a glance — decision 5's line graph, as bars
+   (a band can hold one decade, and a one-point line draws nothing).
+3. **Screen map gains one screen: the world review** (`/:domain/review`, `8-field-map.md`),
+   reached from a button on the shelf. It sits *before* Curate in the loop: check the
+   world → see a field you don't have → curate it.
+4. **The shelf itself became the world map** (same doc). `/:domain` now defaults to a 2D
+   canvas — fields in named regions on two named axes, gaps drawn as dashed holes, cards
+   dragged freeform and pinned where you drop them — with `?view=grid` for the plain card
+   grid. The grid stays because it's better at "just take me to Cars"; the map is better
+   at everything else, and is the first screen in the app that shows you the *shape* of
+   what you've built rather than a list of it.
+5. **The nav bar became a path**, the way a file system reads: *TasteTrainer / Physical /
+   Paintings*, each segment a link back to that level and the last one where you are.
+   It replaced a page title, a "switch world" button and a header row that were all
+   saying the same thing less usefully — a path states where you are *and* how to leave,
+   in the space the title alone took.
+6. **View controls sit on their own centred line beneath it** rather than in the bar,
+   which keeps the bar a path and nothing else. Both screens share the shape: the shelf
+   has Map/Grid and Review centred with **+** pinned right; a field has Filters, What's
+   missing? and the mode switch centred with a **pen** pinned right, in the same spot.
+   Actions sit next to the thing they act on. Deliberate space above and below so the
+   content isn't crowded against the nav.
+6b. **The bar's left carries what the path can't.** On a field it shows that field's name
+   and description — the path can only carry a name, and the description is what the whole
+   dataset is scoped by (`2-data.md`). Nothing there on the shelf, where the path already
+   says everything, and no "back" link anywhere: the path *is* the way out.
+7. **The map is sized to the window**: `min(80vh, 100vh − 13rem)`, so the whole world is
+   visible without scrolling. That subtraction is everything stacked around it, so adding
+   any row to that column means growing the number with it. Card text is sized in
+   container-query units against the canvas, so it scales with the map rather than
+   sitting at fixed pixels.
+
+*Why this mattered more than it looks:* time is the primary axis of the digital world
+(`curation-rules.md` §f). Shipping digital datasets whose time axis couldn't be browsed or
+ranked meant the half of the product built for the user's actual design work was the half
+that didn't work.
+
 **Small residual to confirm (non-blocking)**
 - A concrete look-and-feel reference (e.g. Are.na, a museum site) would sharpen the beige-gallery language fast when we get to building — optional, can name it later.
 - **Timeline zoom-to-year** — the deferred interaction (pinch/scroll to drill the timeline from decade to year); revisit once the field is used heavily.

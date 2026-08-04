@@ -40,12 +40,19 @@ Within a dataset, every item sits on two **independent, filterable** axes:
 Items hold a **URL only**; we do **not** download images. Storage stays tiny, and a dead link is fixed by pasting a new address. The old `image` + `source` fields are now a **single `image` URL** — the address is both the picture and where it lives. No separate source/attribution field.
 > Propagated into `4-images.md` so the docs agree.
 
-### 4. On disk
+### 4. Where it lives
 ```
 data/
   datasets/<id>.json          # one macro topic per file
   results/<datasetId>.json     # comparison outcomes / rankings (see 5-comparison.md)
 ```
+> **Superseded (2026-08-04).** Storage moved to Supabase Postgres when the app was
+> deployed (`1-setup.md`, *Superseded*). A dataset is now one `jsonb` row in
+> `taste_datasets`, and rankings are one row per (dataset, person) in `taste_rankings`.
+> **The record shape below is unchanged** — it's the same JSON document, addressed by a
+> primary key instead of a filename — so everything in this doc still holds. The `data/`
+> folder survives on the original machine as the pre-migration copy; nothing reads it.
+
 A **dataset** record holds: `id`, `topic` (the macro name), **`description` (required)**, `subtopics[]` (each `{ name, description }`, the canonical AI-initialised list), **`eraGroups[]` (optional**, each `{ label, start, end }`, the canonical AI-initialised time periods — a named grouping of the era axis), `items[]`, `createdAt`, `updatedAt`. Eras are **derived** from item `year`s, not stored. Subtopics are a browsing/grouping structure *within* the one file — not separate folders on disk — so the catalogue stays a single, inspectable JSON per macro topic.
 
 The dataset `description` is **required** — a concise capture of the field's core idea (e.g. *Cars — machines for transport across land on tyres*). Forcing this one sentence keeps each catalogue's scope clear and well understood.
@@ -69,6 +76,18 @@ A field is naturally a **network of connected nodes** (subtopic → era → bran
 - **Era-periods (`eraGroups`) added (2026-06-19)** — an optional, AI-initialised `{ label, start, end }[]` naming the field's time divisions; a *grouping* of the derived era axis (not a per-item field), with a UI century-bucket fallback when absent. Powers the Era filter timeline (`6-ui.md`). ✅
 - **Source dropped** — the `image` URL is the only address we keep. ✅
 - **Structure = graph derived from facets**, not a stored tree; explicit `edges[]` deferred until a relationship can't be derived from facets. ✅ (mirrors `3-curation.md`)
+
+## Added (2026-08-04)
+- **`Item.capture` (optional)** — `{ kind: 'archived' | 'live', year? }`, digital items only:
+  how the screenshot in `image` was actually obtained. Recorded because the two outcomes
+  are indistinguishable once saved — a true archived render of a 2004 design and a
+  screenshot of today's live site are both just a URL — so without it a wrong image saves
+  clean and stays wrong. Absent means "not known" (physical items, and anything curated
+  before this existed), never "inaccurate". See `7-software-design.md`.
+- **`eraGroups` is now load-bearing, not decorative.** It was optional metadata generated
+  after saving; it is now decided *before* items are researched and turned into an explicit
+  per-era quota on the research call (`3-curation.md`). The field is still optional — older
+  datasets have none — but for anything curated now it's what gives the set its shape.
 
 ## Small residual to confirm (non-blocking)
 - **Era bucket size** — decade (*1990s*) as the default grouping; OK, or do some fields want finer (5-year) / coarser (mid-century) buckets? Can stay decade and revisit.

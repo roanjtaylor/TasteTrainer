@@ -4,12 +4,14 @@ import type {
   DatasetSummary,
   Domain,
   EraGroup,
+  FieldMapReview,
   Item,
   LeaderboardRow,
   Ranker,
   RankerSummary,
   Subtopic,
   ProposedItem,
+  WorldMap,
 } from '../../../shared/types';
 
 // In dev the Vite proxy forwards /api to localhost:5174 (vite.config.ts).
@@ -126,14 +128,30 @@ export const api = {
       subtopics: Subtopic[];
       count: number;
       domain: Domain;
+      /** The field's named periods, turned into an explicit per-era quota server-side. */
+      eraGroups?: EraGroup[];
       existingItems?: Item[];
     },
     onProgress?: OnProgress,
   ) => streamSSE<{ items: ProposedItem[] }>('/api/curation/items', body, onProgress),
+  // `items` is optional — the curate flow asks for periods before any items exist.
   generatePeriods: (
-    body: { topic: string; description: string; items: Item[]; domain: Domain },
+    body: { topic: string; description: string; items?: Item[]; domain: Domain },
     onProgress?: OnProgress,
   ) => streamSSE<{ eraGroups: EraGroup[] }>('/api/curation/periods', body, onProgress),
+  // "Check this world" — the world-level map review. The server assembles the shelf
+  // inventory itself, so the only input is which world to audit.
+  // Returns the review AND the map it merged into: one press both audits the world
+  // and updates its map. `map` is null if the map couldn't be saved (e.g. migration
+  // 003 not applied) — the review half still works.
+  // `redraw` discards the stored map and starts over — the escape hatch from a first
+  // draw whose axes or regions turned out badly, since nothing else can change them.
+  reviewFieldMap: (domain: Domain, onProgress?: OnProgress, redraw = false) =>
+    streamSSE<FieldMapReview & { map: WorldMap | null }>(
+      '/api/curation/field-map',
+      { domain, redraw },
+      onProgress,
+    ),
   findGaps: (
     body: {
       topic: string;
@@ -158,10 +176,25 @@ export const api = {
       count: number;
       feedback: string;
       domain: Domain;
+      eraGroups?: EraGroup[];
     },
     onProgress?: OnProgress,
   ) =>
     streamSSE<{ items: ProposedItem[]; note: string }>('/api/curation/gap-fill', body, onProgress),
+
+  // The world map (8-field-map.md). Generating it belongs to the review above; these
+  // are the map as an object you own — where you dragged things, and which of the
+  // review's suggestions you took.
+  getWorldMap: (domain: Domain) => http<{ map: WorldMap | null }>(`/api/map/${domain}`),
+  updateWorldMap: (
+    domain: Domain,
+    body: {
+      regionNames?: Record<string, string>;
+      axes?: WorldMap['axes'];
+      accept?: string;
+      dismiss?: string;
+    },
+  ) => http<{ map: WorldMap }>(`/api/map/${domain}`, { method: 'PUT', body: JSON.stringify(body) }),
 
   // Images
   searchImages: (q: string) =>

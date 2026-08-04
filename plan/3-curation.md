@@ -32,7 +32,7 @@ But "the best work" isn't enough on its own. The deeper job of curation here is 
 
 **After saving (full CRUD):** list all datasets, open one to rename/edit/add/delete items or re-fetch images, and delete whole datasets. "Add items" can be manual or "ask Claude for N more" — the expansion path is where coverage/dedup rules matter most (below).
 
-**How it talks to Claude:** the **Claude Agent SDK using your Pro/Max subscription** (the same login Claude Code uses) — no separate pay-per-use API key, no extra cost. **(Confirmed: you're logged in on this machine.)**
+**How it talks to Claude:** on your **Pro/Max subscription**, not a pay-per-use API key. Originally that meant the Claude Agent SDK borrowing this machine's Claude Code login; since deployment it means a self-hosted proxy that holds the subscription — see *How it works at runtime* below for the current mechanism.
 
 **Web search:** **on by default for newer/cutting-edge topics**, where the model's training may be stale or thin. For the majority of "best of" topics that are well-settled (e.g. 90s watches, classic cars), the model's own knowledge + Wikipedia titles will usually suffice, so search can be skipped to stay fast. Rule of thumb baked into the curation prompt: *search when recency or completeness is in doubt; otherwise answer from knowledge.*
 
@@ -75,90 +75,85 @@ The curation behaviour above lives in a **single editable rules file** (see impl
 
 ## How it works at runtime — the AI connection
 
-> Everything above is *design decisions* (the what & why, settled before building). This section is *how the built code actually reaches Claude* — a learning/reference record of the implemented architecture (added 2026-06-19, after getting the flow working end-to-end).
+> Everything above is *design decisions* (the what & why, settled before building). This section is *how the built code actually reaches Claude* — a learning/reference record of the implemented architecture. **Rewritten 2026-08-04**: the original described the Claude Agent SDK spawning a Claude Code CLI subprocess against `~/.claude/.credentials.json`. That worked while the app only ran on the machine you were logged into, and stopped being possible when the API moved to Render (`1-setup.md`, *Superseded*). The decision it implemented — **use the subscription, not metered API credits** — is unchanged; only the mechanism is different.
 
-**The one-paragraph theory:** the server never calls a Claude HTTP API directly. It uses the **Claude Agent SDK**, which **launches a Claude Code CLI program as a background subprocess**. That subprocess logs in with **your Claude subscription** (the same `~/.claude` login Claude Code uses), talks to the model, and streams the answer back as JSON. Every curation feature funnels through **one function** — `runJson()` in `server/src/services/claude.ts` — the single place the model is reached.
+**The one-paragraph theory:** the server never calls a Claude HTTP API directly, and no API key exists anywhere in it. It POSTs to a **self-hosted Hugging Face Space** that holds the owner's Claude subscription and proxies the call, streaming the answer back as Server-Sent Events. Every curation feature funnels through **one function** — `runJson()` in `server/src/services/claude.ts` — the single place the model is reached.
 
 ```
  ┌─────────────────────────────────────────────────────────────────────────┐
  │ BROWSER  (web/, React)                                                    │
- │   "Map the field"  ──▶ api.proposeSubtopics(topic, description)           │
- │   "Research best 12" ─▶ api.generateItems({topic, subtopics, count,...})  │
+ │   "Check this world" ─▶ api.reviewFieldMap(domain)                        │
+ │   "Map the field"  ──▶ api.proposeSubtopics(...) then api.generatePeriods()│
+ │   "Research best 12" ─▶ api.generateItems({..., eraGroups})               │
  │   "What's missing"  ──▶ api.findGaps(...)              [web/src/lib/api.ts]│
  └───────────────────────────────┬───────────────────────────────────────────┘
-                                  │  fetch  POST /api/curation/...
+                                  │  fetch POST /api/curation/…  (reads the
+                                  │  SSE stream back — EventSource can't POST)
                                   ▼
  ┌─────────────────────────────────────────────────────────────────────────┐
- │ VITE DEV PROXY   localhost:5173  ──▶  127.0.0.1:5174   [web/vite.config.ts]│
+ │ Vite proxy (dev) / VITE_API_BASE_URL → Render (prod)  [web/vite.config.ts]│
  └───────────────────────────────┬───────────────────────────────────────────┘
                                   ▼
  ┌─────────────────────────────────────────────────────────────────────────┐
- │ EXPRESS SERVER  :5174        [server/src/routes/curation.ts]              │
- │   /subtopics ─▶ proposeSubtopics()                                        │
- │   /items     ─▶ generateItems()  ─┐                                       │
- │   /gaps      ─▶ findGaps()        │                                       │
- └───────────────────────────────────┼───────────────────────────────────────┘
-                                      ▼
+ │ EXPRESS SERVER               [server/src/routes/curation.ts]              │
+ │   every endpoint streams: event:progress … then one event:done|error      │
+ └───────────────────────────────┬───────────────────────────────────────────┘
+                                  ▼
  ┌─────────────────────────────────────────────────────────────────────────┐
  │ CLAUDE SERVICE   runJson(system, prompt)   [server/src/services/claude.ts]│
- │   1. build prompt = curation-rules.md  +  your topic/subtopics            │
- │   2. getQuery()  → lazy-load Agent SDK (cached after first call)          │
- │   3. query({ prompt, model: claude-opus-4-8, cwd: scratch, abort })       │
+ │   1. system = curation-rules.md (re-read from disk EVERY call) + JSON-only│
+ │   2. prompt = domain line + this call's specifics                        │
+ │   3. POST ${HF_BASE_URL}/api/chat   header x-app-secret: HF_APP_SECRET   │
  └───────────────────────────────┬───────────────────────────────────────────┘
                                   ▼                       ★ THE AI CONNECTION ★
  ┌─────────────────────────────────────────────────────────────────────────┐
- │ CLAUDE AGENT SDK  ─▶ spawns a CLAUDE CODE CLI subprocess                  │
- │                                                                           │
- │      auth ──▶ ~/.claude/.credentials.json  (claudeAiOauth)               │
- │              └─ YOUR SUBSCRIPTION  (no API key = no credit billing)       │
- │                                                                           │
- │      CLI ──────────────── network ───────────────▶  CLAUDE MODEL         │
- │                                                      (Opus 4.8)           │
- │      streams back:  system ▶ assistant ▶ result(JSON text)               │
+ │ HUGGING FACE SPACE  (self-hosted proxy, owner's Claude subscription)      │
+ │      streams back SSE:  event:delta ×N  ▶  event:done                    │
+ │      runJson accumulates deltas, and counts completed JSON objects in     │
+ │      the partial text to emit "Researching… 7 of 12 items" live           │
  └───────────────────────────────┬───────────────────────────────────────────┘
                                   ▼
  ┌─────────────────────────────────────────────────────────────────────────┐
- │ runJson: extractJson(result)  ─▶ parsed JSON  ─▶ back up to the route     │
+ │ runJson: extractJson(accumulated)  ─▶ parsed JSON  ─▶ back to the route   │
  └───────────────────────────────┬───────────────────────────────────────────┘
                                   ▼
         ┌─────────────────────────────────────────────────────────┐
-        │ /items ONLY: for each item, fetch a lead image           │
-        │   wikimediaImage(wikipediaTitle)  ──▶  Wikimedia REST API │
-        │                       [server/src/services/images.ts]    │
-        │   (this hop is NOT Claude — just an image lookup)         │
+        │ /items and /gap-fill ONLY: resolve each item's image      │
+        │   physical ─▶ wikimediaImage(wikipediaTitle)              │
+        │   digital  ─▶ screenshotForYear(url, year)                │
+        │              (Wayback + our own Chromium — 7-software…)   │
+        │   reports the OUTCOME per item on the same SSE stream     │
         └───────────────────────────┬─────────────────────────────┘
                                      ▼
-                         JSON response ──▶ Vite proxy ──▶ Browser renders
+                     final event:done ──▶ Browser renders
 ```
 
 **The AI calls, by step:**
 
 | UI action | Endpoint | Claude function | What Claude returns |
 |---|---|---|---|
-| Map / Re-map field | `POST /api/curation/subtopics` | `proposeSubtopics` | the canonical subtopic list |
-| Research the best N | `POST /api/curation/items` | `generateItems` | N items (`name`, `year`, `brand`, `creator`, `definingFact`, `subtopic`, `wikipediaTitle`) — **then** each item's image is fetched from Wikimedia, not Claude |
-| Generate periods (at save, or the Era filter's button) | `POST /api/curation/periods` | `proposePeriods` | named, contiguous, non-overlapping era-periods (`label`, `start`, `end`) spanning the items' years — the time-axis grouping for the Era filter timeline; a century-bucket fallback renders when absent |
+| Check this world | `POST /api/curation/field-map` | `reviewFieldMap` | the world's real division, fields you have no dataset for, boundaries drawn wrong, and which existing fields look thin — the level **above** a dataset (`8-field-map.md`) |
+| Map / Re-map field | `POST /api/curation/subtopics` | `proposeSubtopics` | the canonical subtopic list, plus a `suggestedCount` sizing the collection |
+| Map / Re-map field (same step) | `POST /api/curation/periods` | `proposePeriods` | named, contiguous, non-overlapping era-periods. **Called before any items exist** — the periods steer the research rather than describing it afterwards |
+| Research the best N | `POST /api/curation/items` | `generateItems` | N items (`name`, `year`, `brand`, `creator`, `definingFact`, `subtopic`, and `wikipediaTitle` or `url`), distributed against an **explicit per-era quota** built from those periods — **then** each item's image is resolved, which is not a Claude call |
 | What's missing | `POST /api/curation/gaps` | `findGaps` | thin / under-covered axes to expand next, **plus** a `suggestedCount` sizing the next add |
-| Add what's missing | `POST /api/curation/gap-fill` | `fillGaps` | N new items that close the reported gaps (images fetched after, as for `/items`), **plus** a `note` explaining how the user's own feedback was weighed against the rules — folded in, or answered with a reason |
+| Add what's missing | `POST /api/curation/gap-fill` | `fillGaps` | N new items that close the reported gaps (images resolved after, as for `/items`), **plus** a `note` explaining how the user's own feedback was weighed against the rules — folded in, or answered with a reason |
 
-All of them build their prompt from the editable rules file `server/src/prompts/curation-rules.md` (loaded fresh each call — see *Curation rules visibility* above), then hand it to the same `runJson()`.
+All of them build their system prompt from the editable rules file `server/src/prompts/curation-rules.md` (loaded fresh each call — see *Curation rules visibility* above), then hand it to the same `runJson()`.
 
-### Billing & auth — uses your subscription, not API credits
+### Billing & auth — still the subscription, reached differently
 
-- **No `ANTHROPIC_API_KEY` is set**, and the server never injects one.
-- `~/.claude/.credentials.json` holds `claudeAiOauth` (with `subscriptionType` / `rateLimitTier`) — the **Claude Code subscription login**.
-- So curation runs draw on your **subscription usage** (counts against your plan's rate limits), **not** pay-per-use API credits (matches the *How it talks to Claude* decision above).
-
-**The cost number is an estimate, not a charge.** The SDK reports `total_cost_usd` (~$0.50 for an item-research call). That's the *equivalent API price* — a rough gauge of how much subscription headroom a run eats — **not** money off a card.
-
-> ⚠️ **Auth precedence caveat:** `ANTHROPIC_API_KEY` **wins if it's ever set** in the environment. If you (or a tool) export that variable, the same code silently switches to billing API credits. Today it's unset, so you're on the subscription.
+- **No `ANTHROPIC_API_KEY` is set**, and the server never injects one. The only secret it holds is `HF_APP_SECRET`, which authenticates *this app* to *our own proxy* — not to Anthropic.
+- The subscription lives on the Space, not on the machine running the server. That is the whole reason for the indirection: a deployed server has no Claude login to borrow.
+- **Cost is no longer reported per call.** The old SDK returned a `total_cost_usd` estimate; the proxy doesn't, so there's no per-run number to read. Usage still draws on the subscription's rate limits.
 
 ### The mental model (key takeaways)
 
-1. **One chokepoint.** Every AI step goes through `runJson()` in `server/src/services/claude.ts`. Model choice (`claude-opus-4-8`), auth, timeout, and the subprocess all live there — one place to read or change AI behaviour.
-2. **The connection is indirect.** The server doesn't hit an API endpoint; it **spawns the Claude Code CLI**, which uses your subscription login to reach the model. That indirection is why the cost shows as an *estimate*, and why a launch/tooling problem (not app logic) once made it hang — see the dev-runner note in `server/src/index.ts`.
-3. **Only item research touches a second service** — Wikimedia, for images (`server/src/services/images.ts`; see `4-images.md`). That hop has nothing to do with Claude.
-4. **Debugging hook:** run `DEBUG_CLAUDE_SDK=1 npm run dev` for an unbuffered, step-by-step log of the Claude calls in your OS temp folder (`tastetrainer-claude-debug.log`), reliable even when console output is hidden. If curation stalls, that file shows which step stalled.
+1. **One chokepoint.** Every AI step goes through `runJson()`. Model (`CLAUDE_MODEL`, default `claude-opus-5`), transport, timeout, and JSON extraction all live there — one place to read or change AI behaviour.
+2. **The connection is indirect, and deliberately so.** The server reaches a proxy we control, which reaches Claude. That's what makes "subscription, not API credits" survive deployment.
+3. **Progress is inferred, not reported.** There's no structured progress channel — `runJson` counts occurrences of a key (`"name":`, `"topic":`) in the partial stream to say "7 of 12". It's an estimate of position, not a promise.
+4. **Two prompts are structural, not advisory.** The era quota (`generateItems`) and the field-map review (`reviewFieldMap`) both work by giving the model a *checklist* rather than an instruction to be thorough. That distinction is the lesson worth keeping: "cover the eras" drifts; "here are 5 eras, fill each with 3" doesn't.
+5. **Only image resolution touches a second service** — Wikimedia for physical items, Wayback + our own Chromium for digital ones (`server/src/services/images.ts`; see `4-images.md`, `7-software-design.md`). Neither hop is Claude.
 
 ---
 

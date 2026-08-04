@@ -27,6 +27,7 @@ import { datasetsRouter } from './routes/datasets.ts';
 import { curationRouter } from './routes/curation.ts';
 import { imagesRouter } from './routes/images.ts';
 import { comparisonRouter } from './routes/comparison.ts';
+import { mapRouter } from './routes/map.ts';
 
 const app = express();
 
@@ -63,6 +64,7 @@ app.use('/api/datasets', datasetsRouter);
 app.use('/api/curation', curationRouter);
 app.use('/api/images', imagesRouter);
 app.use('/api/comparison', comparisonRouter);
+app.use('/api/map', mapRouter);
 
 // Turn anything a route throws into JSON the client can display, not a bare 500.
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

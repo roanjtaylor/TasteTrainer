@@ -1,10 +1,16 @@
 import { useState } from 'react';
-import { useNavigate, Navigate } from 'react-router-dom';
-import { slugifyTopic, type Domain, type ProposedItem, type Subtopic } from '../../../shared/types';
+import { useNavigate, Navigate, Link, useSearchParams } from 'react-router-dom';
+import {
+  slugifyTopic,
+  type Domain,
+  type EraGroup,
+  type ProposedItem,
+  type Subtopic,
+} from '../../../shared/types';
 import { api } from '../lib/api';
 import { createDataset, saveDataset } from '../lib/data';
 import { useDomain } from '../lib/domain';
-import { DIGITAL_FIELD_SUGGESTIONS } from '../lib/digitalFields';
+import { CaptureBadge } from '../components/CaptureBadge';
 import { ImagePicker } from '../components/ImagePicker';
 import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
@@ -15,11 +21,18 @@ export function Curate() {
   const navigate = useNavigate();
   const domain = useDomain();
 
-  const [topic, setTopic] = useState('');
-  const [description, setDescription] = useState('');
+  // Arriving from the field map's "Curate this →" carries the proposed field in the
+  // URL, so a gap you just read about becomes a dataset without retyping it.
+  const [params] = useSearchParams();
+  const [topic, setTopic] = useState(params.get('topic') ?? '');
+  const [description, setDescription] = useState(params.get('description') ?? '');
   const [count, setCount] = useState(12);
 
   const [subtopics, setSubtopics] = useState<Subtopic[]>([]);
+  // Era-periods are decided BEFORE the items, not after saving. They become an explicit
+  // per-era quota on the research call, which is what actually stops a set from
+  // clustering in the era the model knows best (7-software-design.md).
+  const [eraGroups, setEraGroups] = useState<EraGroup[]>([]);
   const [items, setItems] = useState<ProposedItem[]>([]);
 
   const [busy, setBusy] = useState<null | string>(null);
@@ -44,6 +57,9 @@ export function Curate() {
     }
   }
 
+  // Mapping a field means both of its axes: the subtopics it divides into, and the
+  // periods its history divides into. Both are settled before any item is researched,
+  // so the research call is filling a known frame rather than inventing one.
   async function initialise() {
     if (!topic.trim()) return;
     await run('Mapping the field…', async () => {
@@ -51,6 +67,18 @@ export function Curate() {
       setSubtopics(res.subtopics);
       // Claude sizes the collection to the field; the user can still override below.
       setCount(res.suggestedCount);
+
+      // Best-effort: without periods the research call falls back to its old
+      // spread-across-eras behaviour rather than failing the whole flow.
+      try {
+        const periods = await api.generatePeriods(
+          { topic: topic.trim(), description: description.trim(), domain: dom },
+          setProgress,
+        );
+        setEraGroups(periods.eraGroups);
+      } catch {
+        setEraGroups([]);
+      }
     });
   }
 
@@ -63,6 +91,7 @@ export function Curate() {
           subtopics,
           count,
           domain: dom,
+          eraGroups,
           existingItems: more ? (items as any) : [],
         },
         setProgress,
@@ -84,15 +113,12 @@ export function Curate() {
         items,
         domain: dom,
       });
-      // Born with named era-periods so the Era filter timeline is sharp from the start
-      // (6-ui.md). Best-effort — a failure still leaves a usable dataset (the timeline
-      // falls back to century buckets, and "Generate periods" can fill them in later).
+      // The periods that steered the research are the ones the dataset is born with —
+      // so the Era filter reads the same divisions the items were selected to fill.
+      // No AI call here any more; they were settled back at "Map the field".
+      if (!eraGroups.length) return created;
       try {
-        const res = await api.generatePeriods(
-          { topic: created.topic, description: created.description, items: created.items, domain: dom },
-          setProgress,
-        );
-        return await saveDataset(created.id, { eraGroups: res.eraGroups });
+        return await saveDataset(created.id, { eraGroups });
       } catch {
         return created;
       }
@@ -113,28 +139,20 @@ export function Curate() {
         </p>
       </header>
 
-      {/* Digital fields aren't as obvious to name as physical ones (7-software-design.md,
-          problem #3) — an info box of starter categories with real, well-archived
-          examples, shown until a field has been mapped. */}
-      {domain === 'digital' && subtopics.length === 0 && (
-        <section className="space-y-3 rounded-xl border border-[var(--color-line)] bg-[var(--color-wall-soft)] p-5">
-          <h2 className="text-sm font-medium text-[var(--color-muted)]">
-            Not sure what to study? Core digital fields to start with:
-          </h2>
-          <div className="flex flex-wrap gap-2">
-            {DIGITAL_FIELD_SUGGESTIONS.map((s) => (
-              <button
-                key={s.topic}
-                onClick={() => {
-                  setTopic(s.topic);
-                  setDescription(s.description);
-                }}
-                className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-3 py-1.5 text-sm hover:border-[var(--color-accent)] hover:bg-[var(--color-wall)]"
-              >
-                {s.topic}
-              </button>
-            ))}
-          </div>
+      {/* "What are the fields to study?" isn't obvious — least of all in the digital
+          world. This used to be a hardcoded list of 14 digital topics in TypeScript;
+          the field map answers the same question for both worlds, from the model and
+          from what you've already built, so it improves as the models do. */}
+      {!topic.trim() && subtopics.length === 0 && (
+        <section className="rounded-xl border border-[var(--color-line)] bg-[var(--color-wall-soft)] p-5">
+          <p className="text-sm text-[var(--color-muted)]">
+            Not sure what to study?{' '}
+            <Link to={`/${dom}/review`} className="text-[var(--color-accent)] underline">
+              Check this world
+            </Link>{' '}
+            — it maps the whole {dom} world and names the fields you don't have yet, each
+            ready to start from here.
+          </p>
         </section>
       )}
 
@@ -202,6 +220,31 @@ export function Curate() {
               </div>
             ))}
           </div>
+          {/* The field's other axis. Shown because it is now load-bearing: these
+              periods become a per-era quota on the research call below, so what you
+              see here is the shape the collection will actually have. */}
+          {eraGroups.length > 0 && (
+            <div className="pt-2">
+              <h3 className="text-sm font-medium">Periods</h3>
+              <p className="mt-0.5 text-sm text-[var(--color-muted)]">
+                The items will be spread evenly across these — roughly{' '}
+                {Math.max(1, Math.floor(count / eraGroups.length))} per period.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {eraGroups.map((g) => (
+                  <span
+                    key={`${g.label}-${g.start}`}
+                    className="rounded-full border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-1 text-sm"
+                  >
+                    {g.label}{' '}
+                    <span className="text-[var(--color-muted)]">
+                      {g.start}–{g.end - 1}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex flex-wrap items-end gap-3 pt-1">
             <label className="block">
               <span className="text-sm text-[var(--color-muted)]">How many items</span>
@@ -283,7 +326,10 @@ export function Curate() {
               : { kind: 'search', query: `${items[pickerIndex].name} ${items[pickerIndex].brand}`.trim() }
           }
           onPick={(url) => {
-            patch(pickerIndex, { image: url });
+            // A hand-picked image is a deliberate choice, so the recorded capture no
+            // longer describes it — clearing it retires the badge rather than leaving
+            // a warning about an image that's no longer there.
+            patch(pickerIndex, { image: url, capture: undefined });
             setPickerIndex(null);
           }}
           onClose={() => setPickerIndex(null)}
@@ -314,6 +360,9 @@ export function ReviewCard({
     <div className="space-y-2 rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-3">
       <div className="relative aspect-[4/3] overflow-hidden rounded-lg bg-[var(--color-wall-soft)]">
         <Photo src={item.image} alt={item.name} />
+        {/* Review is the moment to catch a screenshot that isn't of the era —
+            "Swap image" opens the nearby-snapshot picker. */}
+        <CaptureBadge capture={item.capture} year={item.year} />
         <button
           onClick={onSwapImage}
           className="absolute bottom-2 right-2 rounded-full bg-[var(--color-ink)]/80 px-3 py-1 text-xs text-[var(--color-wall)]"

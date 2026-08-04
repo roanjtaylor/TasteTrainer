@@ -22,6 +22,7 @@ Numbered **1 → 6 by increasing concreteness** — from the abstract skeleton, 
 | [5-comparison.md](5-comparison.md) | How taste gets *trained* — 1v1 forced choice → a ranking |
 | [6-ui.md](6-ui.md) | How you *use* it — the screen map, design language, and styling tooling that tie it all together |
 | [7-software-design.md](7-software-design.md) | The deferred second domain — training taste in the *digital world* (websites, apps, product UI) alongside the *physical world* |
+| [8-field-map.md](8-field-map.md) | The level *above* a dataset — auditing whether your set of fields is a good map of the world, finding the fields you don't know you're missing, and drawing the world as an actual 2D map |
 
 **UI lives in two places by design:** the *coherent whole* (screen map, visual language, styling) is owned by `6-ui.md`; *feature-specific interactions* stay in their feature doc (`3`–`5`), each flagged with a **UI →** pointer at the top. `2-data.md` has no UI of its own (it's the model the screens render).
 
@@ -35,4 +36,25 @@ Read a doc, accept or change the **Recommended default**, answer the **Open ques
 
 **Update (2026-07-28):** two changes to the built app, both driven by use rather than by a new core decision, so they amend the docs above rather than adding an eighth.
 - **Domains renamed** `hardware`/`software` → **`physical`/`digital`** (rationale and scope: the note at the top of `7-software-design.md`).
+**Update (2026-08-04):** an alignment review of the whole project against `ethos.md`. Three
+changes, plus a docs realignment.
+- **New doc: [8-field-map.md](8-field-map.md)** — the structural hole the review found. Every
+  AI capability audited the inside of a field; nothing audited the *set* of fields, so a map
+  built one topic at a time quietly inherited the blind spots that named the topics. That is
+  the failure mode this whole tool exists to prevent.
+- **Era-first curation.** Periods are decided before items and become a per-era quota, so a
+  set can't cluster in the era the model knows best; the Era filter finally has a UI, so
+  `eraGroups` stops being generated-then-ignored. Amends `2-data.md`, `3-curation.md`, `6-ui.md`.
+- **Honest capture.** Digital items record how their screenshot was obtained and are badged
+  when it can't be showing the design of their year. Amends `4-images.md`, `7-software-design.md`.
+- **The world drawn as a map** (same doc, later the same day). The shelf became a 2D canvas:
+  fields in named regions on two named axes, gaps as dashed holes, cards dragged freeform.
+  Its governing constraint is worth remembering — *Claude decides meaning, code decides
+  pixels*, and a settled map is protected structurally rather than by asking the model
+  nicely. Amends `6-ui.md`; needs migration `003_world_maps.sql`.
+- **Docs realigned to the built app.** `1-setup.md` (deployed, Supabase — not localhost + JSON),
+  `2-data.md` (same shape, different home), `3-curation.md` (HF Space proxy — not the Agent
+  SDK), `4-images.md` (Commons fallback; the one exception to link-don't-store). These docs are
+  meant to be regenerable into the software, so a stale one is worse than a missing one.
+
 - **Rankings are per-person.** `5-comparison.md`'s one-ranking-per-dataset model became one ranking per *(dataset, name)*: you type a name arcade-style before ranking — no account — and the leaderboard gains a tab per person plus a pooled "Everyone" view. Storage moved from a single `taste_comparison_results` blob to a `taste_rankings` row per person, so a vote's cost doesn't grow with the number of people ranking.

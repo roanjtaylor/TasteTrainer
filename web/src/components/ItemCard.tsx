@@ -1,5 +1,6 @@
 import type { Item } from '../../../shared/types';
 import { eraOf } from '../lib/format';
+import { CaptureBadge } from './CaptureBadge';
 import { Photo } from './Photo';
 
 // Gallery-style display card: the work is the hero, chrome stays quiet.
@@ -8,8 +9,9 @@ import { Photo } from './Photo';
 export function ItemCard({ item, onClick }: { item: Item; onClick?: () => void }) {
   const body = (
     <>
-      <div className="aspect-[4/3] w-full bg-[var(--color-wall-soft)]">
+      <div className="relative aspect-[4/3] w-full bg-[var(--color-wall-soft)]">
         <Photo src={item.image} alt={item.name} />
+        <CaptureBadge capture={item.capture} year={item.year} />
       </div>
       <div className="space-y-1.5 p-4">
         <div className="flex items-baseline justify-between gap-2">

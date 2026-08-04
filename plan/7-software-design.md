@@ -129,6 +129,29 @@ This is a real infrastructure change, not a prompt tweak: it needs Chromium avai
 
 **Faster, lower-effort alternative if standing up Playwright-on-Render is unwelcome right now:** some paid screenshot APIs (e.g. urlbox.io) support blocking third-party requests/resources as a request parameter, which would fix the same problem without self-hosting a browser — at the cost of a paid key, same "upgrade path" tradeoff flagged in §3 originally, now with a concrete reason to actually take it rather than a hypothetical one.
 
+### Resolved (2026-08-04) — all three follow-ups below are now built
+
+- **§3's mshots recommendation is superseded.** The self-hosted request-blocking Chromium
+  described under *The fix* is the primary path (`services/screenshotRender.ts`); mshots
+  survives only as a fallback when that renderer or Supabase Storage fails. Read §3's
+  "recommended default" as the historical first attempt.
+- **Era spread is now structural, not a prompt.** `proposePeriods` runs *before*
+  `generateItems`, and its periods become an explicit per-era quota on the research call
+  ("here are 5 eras, 3 items each") — the fix this doc asked for. The per-request
+  `eraSpreadLine()` nag it replaced is deleted.
+- **Capture outcome is reported and stored.** `screenshotForYear` returns *how* it
+  resolved the image, the curate stream names it per item (*"Stripe, 2015 → archived
+  2014"* vs *"→ no snapshot, used live site"*), and the outcome is saved as `Item.capture`
+  so a live screenshot standing in for a past year is badged **not period-accurate** in
+  the review grid and the gallery. The silent-success failure this doc identified is now
+  visible at the moment it happens and afterwards.
+- **Prefer-static guidance landed in the rulebook** (`curation-rules.md` §f): between two
+  products for an early era, pick the older server-rendered one, because it archives
+  honestly.
+- **The seed-set decision (§Resolved item 3) was superseded in practice** by a broader
+  fourteen-topic starter list, which has itself now been retired in favour of the
+  generated field map (`8-field-map.md`).
+
 ### Also worth doing regardless of which renderer path is chosen
 - **Make the era-spread curation fix (Cause 1) structural, not just a stronger prompt.** Right now era coverage is requested but not guaranteed by construction. A more reliable design: propose the field's named **design eras** (reusing/adapting the existing `eraGroups`/`proposePeriods` mechanism, `2-data.md`) *before* generating items rather than after saving (its current timing), then hand `generateItems` those concrete era buckets and ask it to fill each one explicitly — turning "please spread across eras" into "here are 4 eras, give me items for each," which a model follows far more reliably than an abstract instruction.
 - **Surface pipeline outcome as it happens**, reusing the SSE progress channel curation already streams: a line like *"Stripe Dashboard, 2015 → found archived snapshot"* vs *"→ no archived snapshot, used live"* per item, so a real problem is visible in the product itself next time, not diagnosed from symptoms after the fact.
