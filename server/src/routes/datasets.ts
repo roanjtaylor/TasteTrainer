@@ -8,6 +8,7 @@ import {
   saveWorldMap,
 } from '../storage.ts';
 import { absorbGhost } from '../services/worldMap.ts';
+import { canonicalSubtopic } from '../services/itemHygiene.ts';
 import { newId, now } from '../util.ts';
 import { normalizeDomain, optionalDomain, slugifyTopic } from '../../../shared/types.ts';
 import type { Dataset, Domain, EraGroup, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
@@ -27,7 +28,11 @@ function cacheable(res: Response, seconds: number): void {
   res.set('Cache-Control', `private, max-age=${seconds}, stale-while-revalidate=300`);
 }
 
-function toItem(raw: Partial<Item> & Partial<ProposedItem>): Item {
+// `subtopics` is the field's canonical list: an item's subtopic is corrected to that
+// spelling on the way in, so a "Portraits"/"portraits" drift can't produce an item the
+// subtopic filter will never match. Values that aren't on the list at all are kept as
+// they are — see canonicalSubtopic.
+function toItem(raw: Partial<Item> & Partial<ProposedItem>, subtopics: Subtopic[]): Item {
   return {
     id: (raw as Item).id || newId(),
     name: raw.name ?? '',
@@ -37,7 +42,7 @@ function toItem(raw: Partial<Item> & Partial<ProposedItem>): Item {
     brand: raw.brand ?? '',
     creator: raw.creator ?? '',
     definingFact: raw.definingFact ?? '',
-    subtopic: raw.subtopic ?? '',
+    subtopic: canonicalSubtopic(raw.subtopic ?? '', subtopics),
     url: raw.url ?? '',
     // Kept so a screenshot that isn't period-accurate stays flagged after saving —
     // dropping it here would hide exactly the failure it exists to surface.
@@ -80,14 +85,15 @@ datasetsRouter.post('/', async (req: Request, res: Response, next: NextFunction)
     if (!topic?.trim() || !description?.trim()) {
       return res.status(400).json({ error: 'topic and description are required' });
     }
+    const canonicalSubtopics = subtopics ?? [];
     const ds: Dataset = {
       id: newId(),
       domain: normalizeDomain(domain),
       topic: topic.trim(),
       description: description.trim(),
-      subtopics: subtopics ?? [],
+      subtopics: canonicalSubtopics,
       eraGroups: eraGroups ?? [],
-      items: (items ?? []).map(toItem),
+      items: (items ?? []).map((it) => toItem(it, canonicalSubtopics)),
       createdAt: now(),
       updatedAt: now(),
     };
@@ -111,13 +117,17 @@ datasetsRouter.put('/:id', async (req: Request, res: Response, next: NextFunctio
     const existing = await getDataset(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Dataset not found' });
     const body = req.body as Partial<Dataset>;
+    // Items are canonicalised against the subtopic list they are being saved WITH, so
+    // a PUT that renames the subtopics and rewrites the items in one go agrees with
+    // itself.
+    const subtopics = body.subtopics ?? existing.subtopics;
     const ds: Dataset = {
       ...existing,
       topic: body.topic?.trim() || existing.topic,
       description: body.description?.trim() || existing.description,
-      subtopics: body.subtopics ?? existing.subtopics,
+      subtopics,
       eraGroups: body.eraGroups ?? existing.eraGroups,
-      items: (body.items ?? existing.items).map(toItem),
+      items: (body.items ?? existing.items).map((it) => toItem(it, subtopics)),
     };
     // A topic edit is also a rename of the dataset's URL, so hand the old slug over
     // for invalidation (storage.saveDataset).

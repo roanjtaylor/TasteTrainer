@@ -159,6 +159,9 @@ export const api = {
       subtopics: Subtopic[];
       items: Item[];
       domain: Domain;
+      // The field's named periods, so a reported gap can be phrased as "the Post-War
+      // period is thin" rather than a bare year range.
+      eraGroups?: EraGroup[];
     },
     onProgress?: OnProgress,
   ) => streamSSE<{ gaps: CoverageGap[]; suggestedCount: number }>(
@@ -180,7 +183,14 @@ export const api = {
     },
     onProgress?: OnProgress,
   ) =>
-    streamSSE<{ items: ProposedItem[]; note: string }>('/api/curation/gap-fill', body, onProgress),
+    streamSSE<{
+      items: ProposedItem[];
+      note: string;
+      // What the server's hygiene pass had to correct: proposals dropped as repeats,
+      // and proposals whose subtopic was off-list and now needs one picked.
+      duplicates: number;
+      unsetSubtopics: number;
+    }>('/api/curation/gap-fill', body, onProgress),
 
   // The world map (8-field-map.md). Generating it belongs to the review above; these
   // are the map as an object you own — where you dragged things, and which of the

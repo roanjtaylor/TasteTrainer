@@ -371,18 +371,34 @@ export async function findGaps(args: {
   subtopics: Subtopic[];
   items: Item[];
   domain: Domain;
+  eraGroups?: EraGroup[];
 }, onProgress?: ProgressFn): Promise<{ gaps: CoverageGap[]; suggestedCount: number }> {
-  const { topic, description, subtopics, items, domain } = args;
+  const { topic, description, subtopics, items, domain, eraGroups = [] } = args;
   const rules = await loadRules();
   const system = `You are the curation engine for TasteTrainer.\n\n${rules}\n\n${JSON_ONLY}`;
 
+  // Each item's defining fact goes in, not just its name. A sweep that sees only names
+  // can tell you which famous works are absent — the thing the model's prior already
+  // knows — but not that two entries are covering the same ground under different
+  // titles, or that a period is present by date and empty of what made it matter.
+  // That reading is what turns this from a recall check into a coverage check.
   const inventory = items
-    .map((i) => `- ${i.name}${i.brand ? ` (${i.brand})` : ''} [${i.subtopic}, ${i.year ?? '?'}]`)
+    .map((i) => {
+      const head = `- ${i.name}${i.brand ? ` (${i.brand})` : ''} [${i.subtopic || 'unfiled'}, ${i.year ?? '?'}]`;
+      return i.definingFact ? `${head} — ${i.definingFact}` : head;
+    })
     .join('\n');
+
+  // The field's own named periods, so a gap can be reported in the vocabulary the
+  // field already uses ("the Post-War period is thin") rather than in bare years the
+  // user then has to map back onto their own timeline themselves.
+  const periodLine = eraGroups.length
+    ? `\nNamed periods: ${eraGroups.map((g) => `${g.label} (${g.start}–${g.end - 1})`).join('; ')}`
+    : '';
 
   const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\nSubtopics: ${subtopics
     .map((s) => s.name)
-    .join(', ')}\n\nCurrent items (${items.length}):\n${inventory || '(none yet)'}\n\nDo a breadth-first sweep of the WHOLE field and report what is thin or missing — brands/makers, movements, eras, regions, or subtopics that a representative set of this field should include but this set under-covers. Be concrete.\n\nAlso suggest how many NEW items it would take to meaningfully close these gaps — a single integer "suggestedCount" sized to the breadth of what's missing (enough for representative coverage of the gaps without padding; 0 if coverage is already good).\n\nReturn JSON of shape: { "gaps": [ { "axis": string, "detail": string } ], "suggestedCount": number }`;
+    .join(', ')}${periodLine}\n\nCurrent items (${items.length}), each with its defining fact where one is recorded:\n${inventory || '(none yet)'}\n\nDo a breadth-first sweep of the WHOLE field and report what is thin or missing — brands/makers, movements, eras, regions, or subtopics that a representative set of this field should include but this set under-covers. Be concrete.\n\nJudge coverage by what each item CONTRIBUTES, not by the count: entries whose defining facts say the same thing cover one position between them, however different their names, and a period with items in it can still be thin if nothing in it represents what that period is known for.${eraGroups.length ? ' Where a gap is a period, name it by the period label above.' : ''}\n\nAlso suggest how many NEW items it would take to meaningfully close these gaps — a single integer "suggestedCount" sized to the breadth of what's missing (enough for representative coverage of the gaps without padding; 0 if coverage is already good).\n\nReturn JSON of shape: { "gaps": [ { "axis": string, "detail": string } ], "suggestedCount": number }`;
 
   const json = await runJson(system, prompt, {
     onProgress,

@@ -80,6 +80,9 @@ export function DatasetView() {
           subtopics: ds.subtopics,
           items: ds.items,
           domain: ds.domain,
+          // Named periods go in so an era-shaped gap comes back named, matching what
+          // the Filters screen and the gap-fill call already speak in.
+          eraGroups: ds.eraGroups ?? [],
         },
         setGapProgress,
       );
@@ -137,10 +140,24 @@ export function DatasetView() {
 
   return (
     <div className="space-y-6">
-      {/* No title and no way back here: the nav bar carries this field's name and
-          description on its left, and the path itself is the way out. The controls sit
-          on a centred line under it, the same shape as the shelf's — with the pen where
-          the shelf keeps its "+". */}
+      {/* This field's name, description and in-scope count, pinned to the top-left for
+          the whole scroll: on a long wall of images it's the one thing worth never
+          losing. It's left-aligned in the margin beside the centred content column, so
+          it sits alongside the grid rather than over it. Below md there's no margin to
+          sit in, so it scrolls with the page like an ordinary heading. */}
+      <div className="md:fixed md:left-4 md:top-3 md:z-30 md:w-48 lg:w-60 xl:w-72">
+        <h1 className="serif truncate text-xl leading-tight">{ds.topic}</h1>
+        {ds.description && (
+          <p className="truncate text-xs text-[var(--color-muted)]">{ds.description}</p>
+        )}
+        <p className="truncate text-xs text-[var(--color-muted)]">
+          {pool.length} of {ds.items.length} items{filterLabel ? ' in scope' : ''}
+        </p>
+      </div>
+
+      {/* No way back here: the path in the nav bar is the way out. The controls sit on a
+          centred line, the same shape as the shelf's — with the pen where the shelf
+          keeps its "+". */}
       <header className="relative flex flex-wrap items-center justify-center gap-2 py-4">
         {/* Filters live behind this button — opens the /:domain/:slug/filters subpage. */}
         <Link
@@ -201,9 +218,10 @@ export function DatasetView() {
         />
       )}
 
-      {/* Active-filter read: a pill (with × to clear) + the in-scope count. */}
-      <div className="flex flex-wrap items-center gap-3 text-sm text-[var(--color-muted)]">
-        {filterLabel && (
+      {/* Active-filter read: a pill with × to clear. The count it used to sit beside now
+          lives in the pinned title block, where it stays readable down the page. */}
+      {filterLabel && (
+        <div className="flex flex-wrap items-center gap-3">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-accent)] px-3 py-1 text-xs text-white">
             {filterLabel}
             <button
@@ -214,11 +232,8 @@ export function DatasetView() {
               ✕
             </button>
           </span>
-        )}
-        <span>
-          {pool.length} of {ds.items.length} items{filterLabel ? ' in scope' : ''}
-        </span>
-      </div>
+        </div>
+      )}
 
       {(mode === 'browse' || mode === 'edit') && (
         <Browse
@@ -546,6 +561,10 @@ function GapPanel({
   const [addProgress, setAddProgress] = useState('');
   const [note, setNote] = useState('');
   const [pending, setPending] = useState<ProposedItem[] | null>(null);
+  // What the server had to correct in the batch. Shown rather than swallowed: a
+  // proposal dropped as a repeat explains why you asked for 8 and got 6, and an item
+  // with no subtopic is one you have to fix before it goes in.
+  const [corrections, setCorrections] = useState({ duplicates: 0, unsetSubtopics: 0 });
   const [pickerIndex, setPickerIndex] = useState<number | null>(null);
   const [savingAdd, setSavingAdd] = useState(false);
   const [error, setError] = useState('');
@@ -578,6 +597,10 @@ function GapPanel({
       );
       setPending(res.items);
       setNote(res.note);
+      setCorrections({
+        duplicates: res.duplicates ?? 0,
+        unsetSubtopics: res.unsetSubtopics ?? 0,
+      });
     } catch (e: any) {
       setError(e?.message ?? 'Could not research additions');
     } finally {
@@ -601,6 +624,7 @@ function GapPanel({
       setPending(null);
       setNote('');
       setFeedback('');
+      setCorrections({ duplicates: 0, unsetSubtopics: 0 });
     } catch (e: any) {
       setError(e?.message ?? 'Could not add items');
     } finally {
@@ -691,9 +715,17 @@ function GapPanel({
       {pending && (
         <section className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="serif text-xl">
-              {pending.length} researched — review before adding
-            </h3>
+            <div>
+              <h3 className="serif text-xl">
+                {pending.length} researched — review before adding
+              </h3>
+              {/* The unfiled count is recounted from the items themselves, not taken
+                  from the server's tally, so it goes down as you fix them. */}
+              <CorrectionLine
+                duplicates={corrections.duplicates}
+                unfiled={pending.filter((p) => !p.subtopic).length}
+              />
+            </div>
             <div className="flex gap-2">
               <button
                 onClick={addToDataset}
@@ -706,6 +738,7 @@ function GapPanel({
                 onClick={() => {
                   setPending(null);
                   setNote('');
+                  setCorrections({ duplicates: 0, unsetSubtopics: 0 });
                 }}
                 disabled={savingAdd}
                 className="rounded-full border border-[var(--color-line)] px-4 py-2 text-sm disabled:opacity-40"
@@ -762,6 +795,27 @@ function GapPanel({
       )}
     </div>
   );
+}
+
+/**
+ * What the server corrected in a researched batch, said plainly.
+ *
+ * Both numbers are things the curation prompt asks for and can't enforce — no repeats,
+ * and a subtopic from the field's own list. The server fixes them either way; this is
+ * so the fix isn't silent. A batch that comes back short is otherwise just a number
+ * that doesn't match what you asked for, and an unfiled item is one that would save
+ * happily and then never appear under any filter.
+ */
+function CorrectionLine({ duplicates, unfiled }: { duplicates: number; unfiled: number }) {
+  if (!duplicates && !unfiled) return null;
+  const parts: string[] = [];
+  if (duplicates) {
+    parts.push(`${duplicates} dropped as already in the set`);
+  }
+  if (unfiled) {
+    parts.push(`${unfiled} need${unfiled === 1 ? 's' : ''} a subtopic before adding`);
+  }
+  return <p className="mt-0.5 text-sm text-[var(--color-muted)]">{parts.join(' · ')}</p>;
 }
 
 // ---- Rank (1v1 forced choice) ----

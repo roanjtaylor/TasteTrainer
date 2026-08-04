@@ -9,6 +9,7 @@ import {
   reviewFieldMap,
 } from '../services/claude.ts';
 import { screenshotForYear, wikimediaImage } from '../services/images.ts';
+import { cleanProposals } from '../services/itemHygiene.ts';
 import { mergeProposal, type MapField } from '../services/worldMap.ts';
 import { getDataset, getWorldMap, listDatasets, saveWorldMap } from '../storage.ts';
 import { normalizeDomain } from '../../../shared/types.ts';
@@ -241,12 +242,13 @@ curationRouter.post('/field-map', async (req, res) => {
 
 // "What's missing?" — breadth-first coverage sweep.
 curationRouter.post('/gaps', async (req, res) => {
-  const { topic, description, subtopics, items, domain } = req.body as {
+  const { topic, description, subtopics, items, domain, eraGroups } = req.body as {
     topic: string;
     description: string;
     subtopics: Subtopic[];
     items: Item[];
     domain: Domain;
+    eraGroups?: EraGroup[];
   };
   if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
 
@@ -259,6 +261,7 @@ curationRouter.post('/gaps', async (req, res) => {
         subtopics: subtopics ?? [],
         items: items ?? [],
         domain: normalizeDomain(domain),
+        eraGroups: eraGroups ?? [],
       },
       (line) => send('progress', { line }),
     );
@@ -305,8 +308,18 @@ curationRouter.post('/gap-fill', async (req, res) => {
       (line) => send('progress', { line }),
     );
 
-    const withImages = await attachImages(proposed, dom, send);
-    send('done', { items: withImages, note });
+    // Enforced before the images are fetched, not after: a repeat that gets dropped
+    // here would otherwise cost a Wikimedia lookup or a Wayback capture on its way to
+    // being thrown away.
+    const { items: clean, duplicates, unsetSubtopics } = cleanProposals(
+      proposed,
+      items ?? [],
+      subtopics ?? [],
+    );
+    if (duplicates) send('progress', { line: `Dropped ${duplicates} already in the set…` });
+
+    const withImages = await attachImages(clean, dom, send);
+    send('done', { items: withImages, note, duplicates, unsetSubtopics });
   } catch (err: any) {
     send('error', { error: err?.message ?? 'Gap fill failed' });
   }
