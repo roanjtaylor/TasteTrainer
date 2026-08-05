@@ -8,11 +8,12 @@ import {
   proposeSubtopics,
   reviewFieldMap,
 } from '../services/claude.ts';
-import { screenshotForYear, wikimediaImage } from '../services/images.ts';
+import { wikimediaImage } from '../services/images.ts';
+import { mapWithLimit, resolveDigitalImage } from '../services/imageResolvers.ts';
 import { cleanProposals } from '../services/itemHygiene.ts';
 import { mergeProposal, type MapField } from '../services/worldMap.ts';
 import { getDataset, getWorldMap, listDatasets, saveWorldMap } from '../storage.ts';
-import { normalizeDomain } from '../../../shared/types.ts';
+import { isPeriodAccurate, normalizeDomain } from '../../../shared/types.ts';
 import type {
   CoverageGap,
   Domain,
@@ -25,14 +26,19 @@ import type {
 
 /**
  * Resolve each proposed item's image — Wikimedia by wikipediaTitle in the physical
- * world, a Wayback/live screenshot by url+year in the digital one
- * (7-software-design.md).
+ * world, the scored multi-source cascade in the digital one (services/imageResolvers.ts).
  *
- * In the digital world the progress line names the OUTCOME per item, not just a
- * counter: "Stripe, 2015 → archived 2014" vs "→ no snapshot, used live site". The
- * live-site fallback is the failure that used to be invisible — it returns a valid
- * image, so nothing downstream could tell it apart from a real period capture. Now
- * you watch it happen, and the outcome is stored on the item.
+ * The digital branch used to be a single strategy: screenshot this url at this year.
+ * That is right for websites and structurally wrong for the rest of the world it was
+ * applied to — pre-web software, OS shells, icons and typefaces have no url to capture,
+ * so the model invented Wikipedia article urls and the pipeline screenshotted the
+ * encyclopaedia page. Now `imageKind` picks the resolvers, several sources compete, and
+ * every candidate is scored before one is chosen.
+ *
+ * The progress line names the OUTCOME per item, not just a counter, and now includes
+ * WHICH source won and how much it is trusted — because the characteristic failure here
+ * is a plausible wrong image, not a missing one, and a fallback that reports nothing is
+ * how 99 of 99 items ended up with third-party screenshots nobody noticed.
  */
 async function attachImages(
   proposed: ProposedItem[],
@@ -40,29 +46,48 @@ async function attachImages(
   send: (event: 'progress' | 'done' | 'error', data: unknown) => void,
 ): Promise<ProposedItem[]> {
   let done = 0;
-  return Promise.all(
-    proposed.map(async (it) => {
-      if (domain !== 'digital') {
-        const image = await wikimediaImage(it.wikipediaTitle ?? '');
-        done += 1;
-        send('progress', { line: `Fetching images… ${done} of ${proposed.length}` });
-        return { ...it, image };
-      }
 
-      const { image, capture } = await screenshotForYear(it.url ?? '', it.year);
+  if (domain !== 'digital') {
+    return mapWithLimit(proposed, IMAGE_CONCURRENCY, async (it) => {
+      const image = await wikimediaImage(it.wikipediaTitle ?? '');
       done += 1;
-      const outcome = !image
-        ? 'no screenshot'
-        : capture?.kind === 'archived'
-          ? `archived ${capture.year}`
-          : 'no snapshot, used live site';
-      send('progress', {
-        line: `${done}/${proposed.length} · ${it.name}${it.year ? `, ${it.year}` : ''} → ${outcome}`,
-      });
-      return { ...it, image, capture };
-    }),
-  );
+      send('progress', { line: `Fetching images… ${done} of ${proposed.length}` });
+      return { ...it, image };
+    });
+  }
+
+  return mapWithLimit(proposed, IMAGE_CONCURRENCY, async (it) => {
+    const { image, capture, candidates } = await resolveDigitalImage({
+      name: it.name,
+      year: it.year,
+      imageKind: it.imageKind,
+      url: it.url,
+      wikipediaTitle: it.wikipediaTitle,
+      imageQuery: it.imageQuery,
+    });
+
+    done += 1;
+    const outcome = !image
+      ? 'no image found'
+      : `${capture?.source ?? '?'}${capture?.year ? ` ${capture.year}` : ''}` +
+        `${capture?.confidence && capture.confidence !== 'high' ? ` (${capture.confidence}: ${capture.note ?? 'check this one'})` : ''}`;
+    send('progress', {
+      line: `${done}/${proposed.length} · ${it.name}${it.year ? `, ${it.year}` : ''} → ${outcome}`,
+    });
+
+    // Alternatives ride along only when the pick isn't trustworthy, so the review grid
+    // can offer a one-click swap without bloating every payload.
+    const alternatives = capture?.confidence === 'high' ? undefined : candidates;
+    return { ...it, image, capture, candidates: alternatives };
+  });
 }
+
+/** How many items resolve at once. The old code fanned out over every item with an
+ *  unbounded Promise.all; with several resolvers per item that becomes hundreds of
+ *  simultaneous requests to Wikimedia and archive.org, which both throttle — and the
+ *  browser renders queue behind a single slot regardless, so a wider fan-out bought
+ *  nothing but 429s. */
+const IMAGE_CONCURRENCY = 3;
 
 export const curationRouter = Router();
 
@@ -236,6 +261,93 @@ curationRouter.post('/field-map', async (req, res) => {
     send('done', { ...review, map });
   } catch (err: any) {
     send('error', { error: err?.message ?? 'Field-map review failed' });
+  }
+  res.end();
+});
+
+// "Re-fetch images" — run the current pipeline over a dataset that is already saved.
+//
+// Images were only ever resolved at curation time, so every improvement to sourcing
+// applied to future items and left existing ones exactly as they were. That is how a
+// field ends up permanently holding a screenshot service's "generating…" placeholder,
+// or a live 2026 capture standing in for a 1979 design: the item was saved before the
+// pipeline could tell. This is the repair path.
+//
+// Returns the proposals rather than writing them — same review-before-save posture as
+// the rest of curation, since a re-resolve can also make an image worse.
+curationRouter.post('/re-resolve', async (req, res) => {
+  const { datasetId, onlyProblems } = req.body as { datasetId: string; onlyProblems?: boolean };
+  if (!datasetId?.trim()) return res.status(400).json({ error: 'datasetId is required' });
+
+  const send = sse(res);
+  try {
+    const ds = await getDataset(datasetId.trim());
+    if (!ds) {
+      send('error', { error: 'Dataset not found' });
+      return res.end();
+    }
+    if (normalizeDomain(ds.domain) !== 'digital') {
+      send('error', { error: 'Re-resolving images is a digital-world operation.' });
+      return res.end();
+    }
+
+    const all = ds.items ?? [];
+    // "Problems" is deliberately broad: a missing image, one whose capture can't be
+    // showing the stated year, anything never scored (everything saved before this
+    // existed), and anything scored below high.
+    const targets = onlyProblems
+      ? all.filter(
+          (it) =>
+            !it.image ||
+            !isPeriodAccurate(it.capture, it.year) ||
+            !it.capture?.confidence ||
+            it.capture.confidence !== 'high',
+        )
+      : all;
+
+    if (!targets.length) {
+      send('done', { items: [], checked: 0, changed: 0 });
+      return res.end();
+    }
+    send('progress', { line: `Re-fetching images for ${targets.length} of ${all.length} items…` });
+
+    let done = 0;
+    let changed = 0;
+    const updated = await mapWithLimit(targets, IMAGE_CONCURRENCY, async (it) => {
+      const result = await resolveDigitalImage({
+        name: it.name,
+        year: it.year,
+        imageKind: it.imageKind,
+        url: it.url,
+        wikipediaTitle: it.wikipediaTitle,
+        imageQuery: it.imageQuery,
+      });
+      done += 1;
+
+      // Never trade a picture for nothing: a source being down today shouldn't blank an
+      // item that already has something on screen.
+      const keep = !result.image && !!it.image;
+      const isNew = !keep && result.image !== it.image;
+      if (isNew) changed += 1;
+
+      send('progress', {
+        line:
+          `${done}/${targets.length} · ${it.name} → ` +
+          (keep
+            ? 'nothing better found, kept existing'
+            : isNew
+              ? `${result.capture?.source ?? '?'} (${result.capture?.confidence ?? '?'})`
+              : 'unchanged'),
+      });
+
+      return keep
+        ? it
+        : { ...it, image: result.image, capture: result.capture, candidates: result.candidates };
+    });
+
+    send('done', { items: updated, checked: targets.length, changed });
+  } catch (err: any) {
+    send('error', { error: err?.message ?? 'Re-resolve failed' });
   }
   res.end();
 });

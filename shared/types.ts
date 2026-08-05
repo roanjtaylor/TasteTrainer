@@ -94,9 +94,35 @@ export interface EraGroup {
  * closest snapshot found, not necessarily the item's `year`.
  */
 export interface Capture {
-  kind: 'archived' | 'live';
+  /**
+   * `archived`/`live` are screenshots of a url at a moment. `reference` is a found
+   * depiction of the work — Wikipedia's actual VisiCalc screenshot, a Commons capture
+   * of Netscape Navigator 2 — which is how anything that was never a website has to be
+   * illustrated. The digital world is not only websites, and the pipeline assumed it
+   * was: pre-web items ended up with a screenshot of their own Wikipedia ARTICLE.
+   */
+  kind: 'archived' | 'live' | 'reference';
   year?: number;
+  /** Which resolver produced this image, for provenance in the UI. */
+  source?: CandidateSource;
+  /** How much the scoring layer trusts it (imageQuality.ts). */
+  confidence?: 'high' | 'medium' | 'low';
+  /** Short human-readable reason, shown when confidence isn't high. */
+  note?: string;
 }
+
+/** Every place an item image can come from. Recorded on the item so a picture can
+ *  always be traced back to what produced it. */
+export type CandidateSource =
+  | 'wayback-render'   // our own request-blocking Chromium over a Wayback snapshot
+  | 'live-render'      // our own Chromium over the live site
+  | 'paid-screenshot'  // urlbox/screenshotone — a scored source, not a last resort
+  | 'mshots'           // free third-party screenshotter; unverifiable, hence demoted
+  | 'wikipedia'        // article lead image
+  | 'commons'          // Wikimedia Commons file
+  | 'ia-software'      // Internet Archive software library screenshot
+  | 'ddg'              // DuckDuckGo image search
+  | 'manual';          // a human pasted or picked it
 
 /**
  * True when a capture can't be showing the design of `year` — a live screenshot
@@ -106,6 +132,9 @@ export interface Capture {
 export function isPeriodAccurate(capture: Capture | undefined, year: number | null): boolean {
   if (!capture || year == null) return true;
   const currentYear = new Date().getFullYear();
+  // A reference image depicts the work itself, so it carries no capture date to be
+  // wrong about — a 2011 upload of a 1979 VisiCalc screen is still a 1979 screen.
+  if (capture.kind === 'reference') return true;
   if (capture.kind === 'live') return year >= currentYear - 1;
   return capture.year == null || Math.abs(capture.year - year) <= 2;
 }
@@ -141,6 +170,14 @@ export interface Item {
    * as "inaccurate".
    */
   capture?: Capture;
+  /**
+   * Image-sourcing hints, kept so the image can be re-resolved later without asking
+   * the model again what kind of thing this is. Digital domain; absent on anything
+   * saved before they existed (inferImageKind falls back).
+   */
+  imageKind?: ImageKind;
+  imageQuery?: string;
+  wikipediaTitle?: string;
   createdAt: string;
 }
 
@@ -244,6 +281,26 @@ export interface LeaderboardRow {
 
 // ---- Curation request/response payloads (server <-> web) ----
 
+/**
+ * What kind of thing this is, from an IMAGE-SOURCING point of view (digital world).
+ *
+ * The single most important field for picture quality, because "screenshot this url at
+ * this year" is the right strategy for only part of the digital world. An icon set, a
+ * typeface, a 1984 desktop, a motion piece and a 1972 terminal form are all digital
+ * design and none of them is a web page. Asking the model to say WHICH KIND of thing it
+ * proposed is what lets the server pick a resolver that can actually succeed, instead
+ * of screenshotting a Wikipedia article and recording it as a live capture.
+ */
+export type ImageKind =
+  /** A website whose past design we want — Wayback snapshot near `year`. */
+  | 'archived-site'
+  /** A website whose present design we want — capture it live. */
+  | 'live-site'
+  /** Software UI that isn't a website: OS shells, desktop apps, terminals, pre-web. */
+  | 'software-ui'
+  /** A graphic artefact: icon set, typeface specimen, poster, logo, motion still. */
+  | 'artifact';
+
 /** A proposed item from Claude, before the user reviews + saves it. */
 export interface ProposedItem {
   name: string;
@@ -253,14 +310,46 @@ export interface ProposedItem {
   creator: string;
   definingFact: string;
   subtopic: string;
-  /** Physical domain: likely Wikipedia title, used to fetch the lead image. */
+  /**
+   * Likely Wikipedia article title. Physical items always have one; digital items now
+   * do too, because for anything that was never a website it is the best lead an
+   * image resolver can be given.
+   */
   wikipediaTitle?: string;
   /** Digital domain: canonical site/product url, used by the screenshot pipeline. */
   url?: string;
+  /** Digital domain: which sourcing strategy this item needs. */
+  imageKind?: ImageKind;
+  /**
+   * Digital domain: a precise phrase to search image archives with, e.g.
+   * "Mac OS System 7 Finder desktop screenshot". Written for a search engine, not as
+   * a title — the item's own name is often too terse or too ambiguous to find a
+   * picture with ("Forms", "Search").
+   */
+  imageQuery?: string;
   /** Resolved image URL (filled by the server's image step). "" => needs image. */
   image: string;
   /** How that image was captured — surfaced in the review grid before you save. */
   capture?: Capture;
+  /**
+   * The other images the cascade found and scored, best first. Populated when the
+   * chosen one isn't high-confidence, so the review grid can offer a one-click swap
+   * rather than sending you back to the picker.
+   */
+  candidates?: ImageCandidate[];
+}
+
+/** One scored image the cascade found for an item. */
+export interface ImageCandidate {
+  url: string;
+  source: CandidateSource;
+  confidence: 'high' | 'medium' | 'low';
+  /** Year this image represents, when the source knows it. */
+  year?: number;
+  width?: number;
+  height?: number;
+  /** Why it scored as it did — shown under the thumbnail in the picker. */
+  note?: string;
 }
 
 /** A reported coverage gap from the "what's missing?" sweep. */

@@ -47,6 +47,13 @@ function toItem(raw: Partial<Item> & Partial<ProposedItem>, subtopics: Subtopic[
     // Kept so a screenshot that isn't period-accurate stays flagged after saving —
     // dropping it here would hide exactly the failure it exists to surface.
     capture: raw.capture,
+    // The sourcing hints are persisted, not just used once: re-resolving a saved item
+    // has to know that "IBM 3270" is a terminal and not a website, and re-deriving that
+    // would mean another curation call. Absent on everything saved before this existed,
+    // which inferImageKind() handles.
+    imageKind: raw.imageKind,
+    imageQuery: raw.imageQuery,
+    wikipediaTitle: raw.wikipediaTitle,
     createdAt: (raw as Item).createdAt || now(),
   };
 }

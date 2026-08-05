@@ -87,11 +87,36 @@ space, so adjust (a) and (d) accordingly; (b) and (c) apply as-is.
   actually be found and screenshotted successfully. When a single product can't span the
   whole history (it didn't exist yet), pick that era's most representative product instead.
 
-- **Field-filling in the digital world:** every item still fills every field, but `wikipediaTitle`
-  is replaced by `url` — the canonical site/product address (e.g. "https://stripe.com"),
-  used to capture a screenshot rather than fetch a photo. `year` means *the year THIS
-  SPECIFIC design/snapshot represents* — not today's look, and not when the company was
-  founded — so the same product at two different years is two different items, correctly.
+- **Field-filling in the digital world:** every item still fills every field, and adds four
+  image-sourcing fields: `imageKind`, `url`, `wikipediaTitle` and `imageQuery`. `year` means
+  *the year THIS SPECIFIC design/snapshot represents* — not today's look, and not when the
+  company was founded — so the same product at two different years is two different items,
+  correctly.
+
+- **Not everything in the digital world is a website — say which kind it is.** This is the
+  most important call you make for whether a real picture can be found at all. A website's
+  past design is recovered from the web archive; an operating system shell, a 1970s terminal
+  screen, an icon set or a typeface cannot be, and has to be found as an existing image
+  instead. Set `imageKind` honestly:
+  - `archived-site` — a website, showing a PAST design. Give `url`.
+  - `live-site` — a website, showing its PRESENT design. Give `url`.
+  - `software-ui` — software that is not a website: OS shells, desktop apps, terminals,
+    anything pre-web. Leave `url` empty.
+  - `artifact` — a graphic work: icons, typefaces, logos, posters, motion stills. Leave
+    `url` empty.
+
+- **`url` is for real websites only, and is NEVER a Wikipedia link.** If the thing was never
+  a website, leave `url` empty and pick `software-ui` or `artifact`. Putting an article url
+  here does not produce a picture of the work — it produces a picture of the *encyclopaedia
+  page about* the work, which is worse than no image, because it looks like a success.
+  If you are tempted to write a Wikipedia url, that is the signal the item is not a site.
+
+- **Always give `wikipediaTitle` and `imageQuery`, for every digital item.** They are what a
+  picture is found with when a capture fails or is impossible, so they matter most for
+  exactly the historic work that is hardest to illustrate. `imageQuery` should be a phrase
+  you would actually type into an image search to see this specific thing — "Mac OS System 7
+  Finder desktop screenshot", not "System 7". An item's own name is often too terse
+  ("Search", "Forms") to find anything with.
 
 - **Prefer the snapshot that actually survives.** When two products could represent the
   same early era, pick the older, simpler, server-rendered one. Pages from before roughly

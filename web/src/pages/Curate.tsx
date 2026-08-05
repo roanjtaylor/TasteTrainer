@@ -10,7 +10,8 @@ import {
 import { api } from '../lib/api';
 import { createDataset, saveDataset } from '../lib/data';
 import { useDomain } from '../lib/domain';
-import { CaptureBadge } from '../components/CaptureBadge';
+import { CaptureBadge, SourceTag } from '../components/CaptureBadge';
+import { CandidateStrip } from '../components/CandidateStrip';
 import { ImagePicker } from '../components/ImagePicker';
 import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
@@ -322,7 +323,15 @@ export function Curate() {
         <ImagePicker
           target={
             dom === 'digital'
-              ? { kind: 'screenshot', url: items[pickerIndex].url ?? '', year: items[pickerIndex].year }
+              ? {
+                  kind: 'screenshot',
+                  url: items[pickerIndex].url ?? '',
+                  year: items[pickerIndex].year,
+                  name: items[pickerIndex].name,
+                  imageKind: items[pickerIndex].imageKind,
+                  wikipediaTitle: items[pickerIndex].wikipediaTitle,
+                  imageQuery: items[pickerIndex].imageQuery,
+                }
               : { kind: 'search', query: `${items[pickerIndex].name} ${items[pickerIndex].brand}`.trim() }
           }
           onPick={(url) => {
@@ -370,6 +379,28 @@ export function ReviewCard({
           Swap image
         </button>
       </div>
+
+      {/* Where the image came from, and — when the cascade wasn't confident — the other
+          candidates it already found and scored, so correcting a poor pick is one click
+          rather than a fresh manual search. */}
+      <div className="flex items-center justify-between gap-2">
+        <SourceTag capture={item.capture} />
+      </div>
+      {item.candidates?.length ? (
+        <CandidateStrip
+          candidates={item.candidates}
+          chosen={item.image}
+          onPick={(url) =>
+            onChange({
+              image: url,
+              // Picking by hand replaces the pipeline's provenance with yours: the
+              // score no longer describes this image, and a stale warning about a
+              // picture you deliberately chose is worse than none.
+              capture: { kind: 'reference', source: 'manual', confidence: 'high' },
+            })
+          }
+        />
+      ) : null}
 
       <ItemFields item={item} subtopics={subtopics} domain={domain} onChange={onChange} />
 

@@ -51,7 +51,7 @@ export async function wikimediaImage(title: string): Promise<string> {
  * scrape's shape often, so a broken/empty result here is expected — falls through
  * to Wikimedia Commons search so the picker is never left with nothing to show.
  */
-async function duckDuckGoImages(queryText: string, limit: number): Promise<string[]> {
+export async function duckDuckGoImages(queryText: string, limit: number): Promise<string[]> {
   const q = encodeURIComponent(queryText);
   const headers = {
     'User-Agent':
@@ -97,7 +97,7 @@ async function duckDuckGoImages(queryText: string, limit: number): Promise<strin
 /** Fallback image source: Wikimedia Commons search. Official, stable JSON API
  *  (no scraping), so it's what keeps the picker working when the DuckDuckGo
  *  scrape above breaks. */
-async function commonsImages(queryText: string, limit: number): Promise<string[]> {
+export async function commonsImages(queryText: string, limit: number): Promise<string[]> {
   const q = encodeURIComponent(queryText);
   try {
     const res = await fetch(
@@ -141,18 +141,18 @@ export async function searchImages(queryText: string, limit = 9): Promise<string
 
 const MSHOTS_BASE = 'https://s.wordpress.com/mshots/v1/';
 
-function mshotsUrl(pageUrl: string, w = 1200, h = 900): string {
+export function mshotsUrl(pageUrl: string, w = 1200, h = 900): string {
   return `${MSHOTS_BASE}${encodeURIComponent(pageUrl)}?w=${w}&h=${h}`;
 }
 
-function waybackPageUrl(url: string, timestamp: string): string {
+export function waybackPageUrl(url: string, timestamp: string): string {
   // `if_` renders the archived page standalone, without the Wayback toolbar.
   return `https://web.archive.org/web/${timestamp}if_/${url}`;
 }
 
 /** Claude doesn't always return a bare url with a scheme despite the prompt's example —
  *  a protocol-less "stripe.com" breaks both the CDX lookup and mshots. Cheap, high-value fix. */
-function normalizeUrl(raw: string): string {
+export function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return '';
   return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
@@ -166,7 +166,7 @@ function hostOf(url: string): string {
   }
 }
 
-interface WaybackHit {
+export interface WaybackHit {
   timestamp: string;
   year: number;
 }
@@ -208,7 +208,7 @@ async function waybackHits(
 /** Exact-url match first (most specific — the actual page); if that's empty, fall back
  *  to any capture of the whole domain in the window (broader, but real sites are far
  *  better archived at the domain level than any one deep path). */
-async function findWaybackHits(url: string, fromYear: number, toYear: number, limit: number): Promise<WaybackHit[]> {
+export async function findWaybackHits(url: string, fromYear: number, toYear: number, limit: number): Promise<WaybackHit[]> {
   const exact = await waybackHits(url, fromYear, toYear, limit, 'exact');
   if (exact.length) return exact;
   return waybackHits(hostOf(url), fromYear, toYear, limit, 'domain');
@@ -232,6 +232,20 @@ async function verifyImage(url: string, timeoutMs = 6000): Promise<boolean> {
   }
 }
 
+/** Why the last renderer attempt fell back, or '' if it succeeded.
+ *
+ *  The bare `catch` this instruments is why a renderer that had NEVER once succeeded
+ *  looked healthy across four datasets: every failure still produced a valid mshots
+ *  image, so nothing upstream — logs, progress lines, or the saved item — could tell
+ *  a fallback from a success. Taking the error clears it, so each read belongs to one
+ *  attempt and a stale message can't be reported against a later item. */
+let lastRenderError = '';
+export function takeRenderError(): string {
+  const err = lastRenderError;
+  lastRenderError = '';
+  return err;
+}
+
 /** Render `pageUrl` with our own request-blocking Chromium (screenshotRender.ts) —
  *  the real fix, since only a renderer we control can stop a Wayback replay page
  *  hydrating from the live web. Falls back to a verified mshots screenshot of the
@@ -239,44 +253,23 @@ async function verifyImage(url: string, timeoutMs = 6000): Promise<boolean> {
  *  safety net if Chromium/Storage isn't working for some reason), then to null. */
 async function bestScreenshot(pageUrl: string, isHistorical: boolean): Promise<string | null> {
   try {
-    return await renderAndStore(pageUrl, isHistorical);
-  } catch {
+    const outcome = await renderAndStore(pageUrl, isHistorical);
+    return outcome.url;
+  } catch (err: any) {
+    lastRenderError = err?.message ?? String(err);
+    console.error(
+      `[screenshot] renderer failed, falling back to mshots: ${pageUrl}\n  ${lastRenderError}`,
+    );
     const fallback = mshotsUrl(pageUrl);
     return (await verifyImage(fallback)) ? fallback : null;
   }
 }
 
-/**
- * The single best screenshot for a curated item: the closest Wayback snapshot to
- * `year` that actually renders, walking outward candidate-by-candidate; falls back
- * to the live site; falls back to "" (needs image, same as a physical-world item
- * Wikimedia couldn't resolve) rather than ever returning a broken/wrong image.
- *
- * Returns HOW it got there alongside the url. The fallback to the live site is the
- * whole reason: it succeeds silently and produces a present-day screenshot for a
- * historical item, which is indistinguishable from success once saved. Reporting the
- * outcome is what lets the curate flow say so instead of hiding it.
- */
-export async function screenshotForYear(
-  rawUrl: string,
-  year: number | null,
-): Promise<{ image: string; capture?: Capture }> {
-  const url = normalizeUrl(rawUrl);
-  if (!url) return { image: '' };
-  const currentYear = new Date().getFullYear();
-
-  if (year != null && year < currentYear - 1) {
-    const hits = await findWaybackHits(url, year - 3, year + 3, 6);
-    const sorted = [...hits].sort((a, b) => Math.abs(a.year - year) - Math.abs(b.year - year));
-    for (const h of sorted) {
-      const shot = await bestScreenshot(waybackPageUrl(url, h.timestamp), true);
-      if (shot) return { image: shot, capture: { kind: 'archived', year: h.year } };
-    }
-  }
-
-  const live = await bestScreenshot(url, false);
-  return live ? { image: live, capture: { kind: 'live', year: currentYear } } : { image: '' };
-}
+// screenshotForYear() lived here: closest Wayback snapshot to `year`, else the live
+// site, else "". It is superseded by resolveDigitalImage() in imageResolvers.ts, which
+// keeps that walk for site-shaped items and adds the two things it structurally could
+// not do — score what came back, and source an image for the large part of the digital
+// world that was never a web page at all.
 
 /** Candidate screenshots for the picker grid: a spread of nearby Wayback snapshots
  *  (plus the live site) around an optional target year, closest first — each

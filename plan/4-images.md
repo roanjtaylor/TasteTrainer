@@ -49,3 +49,42 @@ This is the genuinely hard part. Claude can reliably tell you *what* the best 50
   present-day screenshot standing in for a historical design). Items now carry how their
   image was captured, and a non-period-accurate one is badged in the review grid and the
   gallery. See the same-dated note in `7-software-design.md`.
+
+---
+
+## Amended (2026-08-05) — one default source was never going to be enough
+
+The model above is "a default source that just works, plus an escape hatch when it
+doesn't". That holds for the physical world, where Wikimedia genuinely does carry the
+MVP. It does not hold for the digital one, and the reason is worth stating here rather
+than only in `7-software-design.md`, because it changes what "default source" means.
+
+**Every source available for digital work is high-variance, and none of them fails
+loudly.** Wikipedia has the real 1979 VisiCalc screenshot and nothing whatsoever for
+Windows 95, System 7, HyperCard or WordPerfect. A Commons search for "Mac OS System 7
+desktop" returns 14×16 widget icons — and Commons' own API reports those as 800×914,
+because it reports the size you asked for rather than the file you got. The free
+screenshot service answers a cold request with a "generating…" placeholder that is a
+valid `image/gif`, and ten items had that saved as their picture. So there is no source
+to pick and then trust.
+
+The replacement, therefore, is **not a better default — it is competition and scoring.**
+Several sources are asked at once, every candidate is measured (dimensions read from the
+file header, not from what an API claims), and the best-scoring one wins with its
+provenance recorded on the item. Three things this had to learn that a single-source
+model never has to:
+
+- **Small is not the same as bad.** The authentic artefact is usually the small one — a
+  1984 Macintosh screen was 512×342. Judging historical images by a modern screenshot's
+  resolution throws away exactly what we are trying to collect.
+- **Provenance outranks resolution.** Ranking on pixels alone gave VisiCalc to a 2025
+  blog post, because it was bigger than Wikipedia's genuine screenshot.
+- **The 3×3 picker had to learn the same lesson.** It offered digital items nothing but
+  Wayback screenshots of a url, so asking it to illustrate a 1979 spreadsheet produced an
+  empty grid. It now runs the same cascade curation runs, labelled by source, so manual
+  triage sees everything the pipeline saw.
+
+**Decision 3's deferral is partly retired.** "Stale-link handling is deliberately
+deferred" assumed a dead link is the failure mode. The real one is a *live* link to the
+wrong picture, so images can now be re-resolved for a field that is already saved —
+which is the only way work curated before any of this could benefit from it.

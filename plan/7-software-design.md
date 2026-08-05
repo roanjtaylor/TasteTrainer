@@ -152,6 +152,106 @@ This is a real infrastructure change, not a prompt tweak: it needs Chromium avai
   fourteen-topic starter list, which has itself now been retired in favour of the
   generated field map (`8-field-map.md`).
 
+---
+
+## Resolved (2026-08-05): the renderer had never run, and one strategy was never enough
+
+Two separate findings, both measured against the live database rather than inferred.
+
+### 1. The self-hosted renderer had never once succeeded in production
+
+Every digital item — 150 of 150, across seven fields — carried an `s.wordpress.com`
+(mshots) url. The `software-screenshots` bucket existed but held **zero objects**. So
+`ensureBucket()` was working and `renderScreenshot()` was throwing on every single call,
+from the day it shipped. Nothing said so, because `bestScreenshot()` caught the error
+with a bare `catch` and returned a perfectly valid mshots image instead. The entire
+Docker-on-Render architecture existed to run a renderer that had never run, and the
+2026-08-04 note above ("the self-hosted request-blocking Chromium is the primary path")
+was true of the code and false of production.
+
+Causes, in the order they bite:
+- **Chromium launch flags.** A Render container runs as root, and Chromium refuses to
+  start as root without `--no-sandbox`; `/dev/shm` defaults to 64 MB in Docker, which it
+  exhausts mid-navigation without `--disable-dev-shm-usage`. Neither is needed on a dev
+  machine — which is exactly why this looked fine locally and never worked deployed.
+- **Browser revision drift.** Playwright 1.56.1 wants Chromium build 1194; whatever is
+  installed must match, the failure the Dockerfile's own comment warns about.
+- **Two concurrent browsers** on a small instance is enough to get OOM-killed, so
+  `MAX_CONCURRENT_RENDERS` is now 1.
+
+The durable fix is not any of those three: it is that **the failure is no longer
+silent.** The renderer's error is logged and reported, and `GET /api/images/diagnose`
+renders one page and returns which step worked — launch, navigate, render, bucket,
+upload. "Is the renderer alive?" used to require a database query and a storage listing.
+
+Also caught by the same investigation: **10 items had stored the mshots "generating…"
+placeholder GIF permanently** (8737 bytes, `GIF89a`, 400×300 regardless of the size
+requested). The old `verifyImage()` passed it because `image/gif` starts with `image/`.
+
+### 2. "Screenshot a url at a year" is the wrong strategy for much of this world
+
+The deeper problem, and the one §3 never anticipated. An icon set, a typeface, a 1984
+desktop and a 1972 terminal form are all digital design and none of them is a web page,
+but every item went through the same url-and-year pipeline. Items that never had a site
+were given their own **Wikipedia article url**, and the pipeline screenshotted the
+encyclopaedia — recording it as a live capture, which is worse than no image because it
+looks like success.
+
+The replacement is a **scored cascade** (`services/imageResolvers.ts`):
+
+1. **The model says which kind of thing it is.** `imageKind` — `archived-site`,
+   `live-site`, `software-ui`, `artifact` — plus `url`, `wikipediaTitle` and a written-
+   for-search `imageQuery`. It supplies several hints instead of one key, and
+   `curation-rules.md` §f now forbids a Wikipedia url in `url` outright.
+2. **The kind picks the resolvers.** Sites try the request-blocking renderer over nearby
+   Wayback snapshots, then a paid API, then mshots. Everything else fans out across
+   Wikipedia, Commons, the Internet Archive software library and image search at once.
+3. **Every candidate is scored** (`services/imageQuality.ts`) and the best one wins.
+
+**Scoring is the part that buys accuracy, not the source list** — no source here is
+reliable enough to trust alone. Wikipedia has the real VisiCalc screenshot and nothing at
+all for Windows 95 or HyperCard; a Commons search for "Mac OS System 7 desktop" returns
+14×16 widget icons; Commons' own API reports 800×914 for a file that is actually 14×16,
+so dimensions are measured from the file header rather than believed. Three calibrations
+that only came out of testing against real data:
+
+- **Small is not bad.** A 1984 Macintosh screen was 512×342 and Wikipedia's genuine
+  VisiCalc screenshot is 560×384. A flat resolution floor rejects precisely the
+  historical images this exists to find, so the floor depends on whether we rendered the
+  image or found it.
+- **Provenance outranks pixels.** Ranking on size alone handed VisiCalc to a 2025 blog
+  post that outsized Wikipedia's authentic screenshot. Search results are capped at
+  medium confidence for the same reason mshots is: nothing attributes them.
+- **A PNG's compressed size measures how much is actually on screen.** A 1984 Macintosh
+  item resolved to an in-browser emulator captured before it booted — a black rectangle
+  in a beige bezel. Every DOM check passed: real title, nav text, an Apple logo among the
+  images. It weighed 8.7 KB, where the sparsest legitimate render found (Google's 2001
+  homepage) is 40 KB. That check runs against the stored file, not just the fresh render,
+  because captures are content-addressed and a reused one arrives with no signals at all.
+
+**Falling back is triggered by what survived, not by what was found.** Something
+returning bytes is not the same as something working: the black-screen render counted as
+a candidate, so the reference sources were never consulted. Testing that specific item
+end to end is what surfaced it, and fixing it is what turned that item into a real
+Macintosh Finder 1.0 screenshot.
+
+### What this does not do yet
+
+- **Claude cannot look at the image.** The HF Space proxy sends `content` as a plain
+  string and rejects Anthropic content blocks with `last.content.trim is not a function`,
+  so the one check that could catch a well-formed screenshot of the wrong thing is
+  unavailable. `scoreWithVision()` is the seam, abstaining until the Space accepts
+  blocks; wiring it needs no other change.
+- **A guessed kind is never trusted.** Items saved before `imageKind` existed have it
+  inferred from whether a url is present, and that guess fails in a confident-looking
+  way — "macOS Sequoia" carries apple.com, so it resolves to a flawless render of
+  Apple's marketing page rather than the desktop. Inferred kinds are therefore capped at
+  medium confidence, which also makes the review grid offer the alternatives.
+- **Some archives are closed to us.** Web Design Museum is Cloudflare-403, archive.today
+  rate-limits at 429, and Flashpoint Archive, Game UI Database, MobyGames and Macintosh
+  Garden all `Disallow: /` for ClaudeBot or every agent. Memento's TimeTravel aggregator
+  is dead. None are wired in.
+
 ### Also worth doing regardless of which renderer path is chosen
 - **Make the era-spread curation fix (Cause 1) structural, not just a stronger prompt.** Right now era coverage is requested but not guaranteed by construction. A more reliable design: propose the field's named **design eras** (reusing/adapting the existing `eraGroups`/`proposePeriods` mechanism, `2-data.md`) *before* generating items rather than after saving (its current timing), then hand `generateItems` those concrete era buckets and ask it to fill each one explicitly — turning "please spread across eras" into "here are 4 eras, give me items for each," which a model follows far more reliably than an abstract instruction.
 - **Surface pipeline outcome as it happens**, reusing the SSE progress channel curation already streams: a line like *"Stripe Dashboard, 2015 → found archived snapshot"* vs *"→ no archived snapshot, used live"* per item, so a real problem is visible in the product itself next time, not diagnosed from symptoms after the fact.

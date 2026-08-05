@@ -5,6 +5,8 @@ import type {
   Domain,
   EraGroup,
   FieldMapReview,
+  ImageCandidate,
+  ImageKind,
   Item,
   LeaderboardRow,
   Ranker,
@@ -139,6 +141,18 @@ export const api = {
     body: { topic: string; description: string; items?: Item[]; domain: Domain },
     onProgress?: OnProgress,
   ) => streamSSE<{ eraGroups: EraGroup[] }>('/api/curation/periods', body, onProgress),
+  // "Re-fetch images" — run the current image pipeline over a dataset that is already
+  // saved. Images used to be resolved only at curation time, so every sourcing
+  // improvement applied to future items and left existing ones untouched. Returns the
+  // updated items for review; nothing is written until you save.
+  reResolveImages: (
+    body: { datasetId: string; onlyProblems?: boolean },
+    onProgress?: OnProgress,
+  ) => streamSSE<{ items: Item[]; checked: number; changed: number }>(
+    '/api/curation/re-resolve',
+    body,
+    onProgress,
+  ),
   // "Check this world" — the world-level map review. The server assembles the shelf
   // inventory itself, so the only input is which world to audit.
   // Returns the review AND the map it merged into: one press both audits the world
@@ -215,6 +229,26 @@ export const api = {
     http<{ images: string[] }>(
       `/api/images/screenshot?url=${encodeURIComponent(url)}${year != null ? `&year=${year}` : ''}`,
     ),
+  // The digital picker's real source: every candidate the resolver cascade can find for
+  // one item — web archive, Wikipedia, Commons, Internet Archive, image search — each
+  // scored and labelled. Supersedes screenshotCandidates for the picker, because a
+  // url-only search offers nothing for the pre-web half of the digital world.
+  imageCandidates: (q: {
+    name: string;
+    year: number | null;
+    kind?: ImageKind;
+    url?: string;
+    wikipediaTitle?: string;
+    query?: string;
+  }) => {
+    const p = new URLSearchParams({ name: q.name });
+    if (q.year != null) p.set('year', String(q.year));
+    if (q.kind) p.set('kind', q.kind);
+    if (q.url) p.set('url', q.url);
+    if (q.wikipediaTitle) p.set('wikipediaTitle', q.wikipediaTitle);
+    if (q.query) p.set('query', q.query);
+    return http<{ candidates: ImageCandidate[] }>(`/api/images/candidates?${p}`);
+  },
 
   // Comparison — every call is scoped to a ranker (a typed name), so each person
   // builds their own ranking of the same dataset. `getLeaderboard` also accepts the

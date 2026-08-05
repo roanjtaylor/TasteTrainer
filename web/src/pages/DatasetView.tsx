@@ -58,6 +58,10 @@ export function DatasetView() {
   const [gapSuggestedCount, setGapSuggestedCount] = useState(8);
   const [gapError, setGapError] = useState('');
 
+  const [refetching, setRefetching] = useState(false);
+  const [refetchProgress, setRefetchProgress] = useState('');
+  const [refetchNote, setRefetchNote] = useState('');
+
   // The single active filter lives in the URL (?sub=… or ?era=start-end), so it's
   // shareable and the back button steps through filter states. The Filters subpage
   // sets it; the pill's × clears it. One axis at a time (decision 3).
@@ -93,6 +97,52 @@ export function DatasetView() {
     } finally {
       setLoadingGaps(false);
       setGapProgress('');
+    }
+  }
+
+  /**
+   * Re-run the image pipeline over this saved field.
+   *
+   * Images were only ever resolved while curating, so a field keeps whatever its items
+   * were given the day they were made — including a screenshot service's "generating…"
+   * placeholder, or a present-day capture standing in for a decades-old design. Every
+   * later improvement to sourcing skipped them entirely. This is how those get fixed
+   * without re-curating the field and losing the writing.
+   *
+   * Only items with a real problem are touched: a missing image, one that can't be
+   * showing its stated year, or one the scoring layer didn't trust. A confident,
+   * period-accurate picture is left exactly as it is.
+   */
+  async function refetchImages() {
+    if (!ds || refetching) return;
+    setMode('browse');
+    setRefetching(true);
+    setRefetchProgress('');
+    setRefetchNote('');
+    try {
+      const res = await api.reResolveImages(
+        { datasetId: ds.id, onlyProblems: true },
+        setRefetchProgress,
+      );
+      if (!res.items.length) {
+        setRefetchNote('Every image already looks right — nothing to re-fetch.');
+        return;
+      }
+      // Merge by id: only the checked items came back.
+      const byId = new Map(res.items.map((i) => [i.id, i]));
+      const merged = ds.items.map((i) => byId.get(i.id) ?? i);
+      const updated = await saveDataset(ds.id, { items: merged });
+      setDs(updated);
+      setRefetchNote(
+        res.changed
+          ? `Replaced ${res.changed} of ${res.checked} image${res.checked === 1 ? '' : 's'}.`
+          : `Checked ${res.checked} — nothing better found.`,
+      );
+    } catch (e: any) {
+      setRefetchNote(e?.message ?? 'Re-fetching images failed');
+    } finally {
+      setRefetching(false);
+      setRefetchProgress('');
     }
   }
 
@@ -173,6 +223,18 @@ export function DatasetView() {
         >
           {loadingGaps ? gapProgress || 'Sweeping…' : "What's missing?"}
         </button>
+        {/* Digital only: physical items resolve to a stable Wikimedia photo that doesn't
+            drift, so there is nothing to re-fetch. */}
+        {ds?.domain === 'digital' && (
+          <button
+            onClick={refetchImages}
+            disabled={refetching || !ds}
+            title="Re-run the image pipeline over items whose picture is missing, off-era, or low confidence"
+            className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)] disabled:opacity-40"
+          >
+            {refetching ? refetchProgress || 'Re-fetching…' : 'Re-fetch images'}
+          </button>
+        )}
         <div className="flex gap-0.5 rounded-full border border-[var(--color-line)] bg-[var(--color-card)] p-0.5">
           {(['browse', 'edit', 'rank', 'leaderboard'] as Mode[]).map((m) => (
             <button
@@ -216,6 +278,10 @@ export function DatasetView() {
           }}
           onClose={() => setEditingMeta(false)}
         />
+      )}
+
+      {refetchNote && (
+        <p className="text-center text-sm text-[var(--color-muted)]">{refetchNote}</p>
       )}
 
       {/* Active-filter read: a pill with × to clear. The count it used to sit beside now
@@ -471,7 +537,15 @@ function Browse({
         <ImagePicker
           target={
             ds.domain === 'digital'
-              ? { kind: 'screenshot', url: editing.url ?? '', year: editing.year }
+              ? {
+                  kind: 'screenshot',
+                  url: editing.url ?? '',
+                  year: editing.year,
+                  name: editing.name,
+                  imageKind: editing.imageKind,
+                  wikipediaTitle: editing.wikipediaTitle,
+                  imageQuery: editing.imageQuery,
+                }
               : { kind: 'search', query: `${editing.name} ${editing.brand}`.trim() }
           }
           onPick={(url) => {
@@ -776,7 +850,15 @@ function GapPanel({
         <ImagePicker
           target={
             ds.domain === 'digital'
-              ? { kind: 'screenshot', url: pending[pickerIndex].url ?? '', year: pending[pickerIndex].year }
+              ? {
+                  kind: 'screenshot',
+                  url: pending[pickerIndex].url ?? '',
+                  year: pending[pickerIndex].year,
+                  name: pending[pickerIndex].name,
+                  imageKind: pending[pickerIndex].imageKind,
+                  wikipediaTitle: pending[pickerIndex].wikipediaTitle,
+                  imageQuery: pending[pickerIndex].imageQuery,
+                }
               : {
                   kind: 'search',
                   query: `${pending[pickerIndex].name} ${pending[pickerIndex].brand}`.trim(),

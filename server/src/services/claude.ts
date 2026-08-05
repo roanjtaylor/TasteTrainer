@@ -281,13 +281,30 @@ export async function proposePeriods(args: {
     .sort((a, b) => a.start - b.start);
 }
 
-/** The one field that differs by domain in every returned item: a Wikipedia title
- *  to resolve a photo (physical world) vs a canonical site/product url to screenshot
- *  (digital world) — see attachImages() in routes/curation.ts. */
+/** The image-sourcing fields, which differ by domain — see attachImages() in
+ *  routes/curation.ts and the resolver registry in services/imageResolvers.ts.
+ *
+ *  The physical world resolves one way (a Wikipedia lead photo) and needs one key. The
+ *  digital world does not: only some of it is websites, so asking for a single `url`
+ *  forced the model to invent one for things that never had one — VisiCalc, an IBM 3270
+ *  terminal and a 1984 Macintosh all came back with Wikipedia ARTICLE urls, which the
+ *  pipeline then dutifully screenshotted. Asking instead for a KIND plus several hints
+ *  lets the server choose a resolver that can actually succeed, and lets it try more
+ *  than one. */
 function itemShapeLine(domain: Domain): string {
-  return domain === 'digital'
-    ? '"subtopic": string, "url": string (the canonical site/product address, e.g. "https://stripe.com" — used to capture a screenshot; "year" should be the year THIS SPECIFIC design/snapshot represents, which may be a past redesign, not necessarily today\'s look)'
-    : '"subtopic": string, "wikipediaTitle": string';
+  if (domain !== 'digital') return '"subtopic": string, "wikipediaTitle": string';
+  return [
+    '"subtopic": string',
+    '"imageKind": one of "archived-site" | "live-site" | "software-ui" | "artifact" — how a picture of this can actually be obtained:',
+    '    "archived-site" = a WEBSITE whose PAST design you are showing (captured from the web archive near "year")',
+    '    "live-site"     = a WEBSITE whose PRESENT design you are showing',
+    '    "software-ui"   = software that is NOT a website: an operating system shell, desktop app, terminal, or anything pre-web',
+    '    "artifact"      = a graphic work: an icon set, typeface, logo, poster, or a still from a motion piece',
+    '"url": string — the canonical site address (e.g. "https://stripe.com"), ONLY for "archived-site"/"live-site". Use "" for the other two. NEVER a Wikipedia url',
+    '"wikipediaTitle": string — the most likely English Wikipedia article title for this work, or "" if there plainly is none. Give this for EVERY item, including websites; it is the fallback when a capture fails',
+    '"imageQuery": string — a precise phrase to find a picture of this in an image archive, e.g. "Mac OS System 7 Finder desktop screenshot" or "Susan Kare original Macintosh icons". Write it for a search engine, not as a title',
+    '("year" is the year THIS SPECIFIC design/snapshot represents, which may be a past redesign, not necessarily today\'s look)',
+  ].join(', ');
 }
 
 /**
