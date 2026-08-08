@@ -1,33 +1,27 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, Navigate, useSearchParams } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import { slugifyTopic, type DatasetSummary } from '../../../shared/types';
 import { useDomain } from '../lib/domain';
 import { prefetchDataset, useDatasetList, useWorldMap } from '../lib/data';
 import { cardsFor } from '../lib/mapLayout';
 import { WorldMapCanvas, WorldMapSections } from '../components/WorldMapCanvas';
+import { NavActions } from '../lib/navActions';
 
 // Datasets home — one world's fields (6-ui.md, 7-software-design.md), addressed by
 // the world: /physical, /digital.
 //
 // The default view is the MAP (8-field-map.md): fields sit in named regions on two
-// meaningful axes, and fields you haven't built yet appear as dashed holes. A grid of
-// identical cards tells you what you have; the map tells you the shape of it, and
-// where the shape is missing pieces.
-//
-// The grid is still one click away, because "just take me to Cars" is a real need the
-// map serves worse. It lives in the URL (?view=grid), so it's shareable and the back
-// button steps through it.
+// meaningful axes, and fields you haven't built yet appear as dashed holes. A world
+// with no map yet falls back to a plain grid of cards instead.
 //
 // This screen no longer edits anything. Renaming and deleting a field happen inside
 // that field (pages/DatasetView.tsx), where you can see what you're changing — a shelf
 // full of rename inputs asked you to edit things you were only glancing at.
 export function Home() {
   const domain = useDomain();
-  const [params, setParams] = useSearchParams();
   const { data: datasets, loading, error } = useDatasetList(domain);
   const { data: map } = useWorldMap(domain);
 
-  const wantsGrid = params.get('view') === 'grid';
   const [narrow, setNarrow] = useState(
     () => typeof window !== 'undefined' && window.innerWidth < 700,
   );
@@ -60,45 +54,15 @@ export function Home() {
   if (!domain) return <Navigate to="/" replace />;
 
   const hasMap = !!map && map.regions.length > 0;
-  const showMap = hasMap && !wantsGrid;
-
-  function setView(view: 'map' | 'grid') {
-    const next = new URLSearchParams(params);
-    if (view === 'grid') next.set('view', 'grid');
-    else next.delete('view');
-    setParams(next);
-  }
+  const showMap = hasMap;
 
   return (
     // No page title: the nav bar reads as a path (TasteTrainer / Physical), which
     // already says where you are, and the map wants the height more than this screen
     // wanted a heading of its own.
     <div>
-      {/* The view controls, on their own centred line under the nav. Kept off the nav
-          bar so it stays a path and nothing else, and given room above and below so the
-          map isn't crowded up against it. */}
       {!loading && !error && (datasets?.length ?? 0) > 0 && (
-        // Centred controls, with "new dataset" pinned to the right of the same line so
-        // it sits above the top-right corner of the map — next to the thing it adds to,
-        // rather than in the nav bar, which is a path and not a toolbar.
-        <div className="relative flex flex-wrap items-center justify-center gap-2 py-4">
-          {hasMap && (
-            <div className="flex gap-0.5 rounded-full border border-[var(--color-line)] bg-[var(--color-card)] p-0.5 text-sm">
-              {(['map', 'grid'] as const).map((v) => (
-                <button
-                  key={v}
-                  onClick={() => setView(v)}
-                  className={`rounded-full px-4 py-1 capitalize ${
-                    (v === 'grid') === wantsGrid
-                      ? 'bg-[var(--color-ink)] text-[var(--color-wall)]'
-                      : 'text-[var(--color-muted)]'
-                  }`}
-                >
-                  {v}
-                </button>
-              ))}
-            </div>
-          )}
+        <NavActions>
           <Link
             to={`/${domain}/review`}
             className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
@@ -109,11 +73,11 @@ export function Home() {
             to={`/${domain}/new`}
             title="New dataset"
             aria-label="New dataset"
-            className="absolute right-0 flex h-9 w-9 items-center justify-center rounded-full bg-[var(--color-ink)] text-xl leading-none text-[var(--color-wall)] shadow-sm transition-transform hover:scale-105"
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--color-ink)] text-xl leading-none text-[var(--color-wall)] shadow-sm transition-transform hover:scale-105"
           >
             +
           </Link>
-        </div>
+        </NavActions>
       )}
 
       {error ? (

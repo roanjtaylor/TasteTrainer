@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import './index.css';
 import { Nav } from './components/Nav';
 import { RankerProvider } from './lib/ranker';
+import { NavActionsProvider } from './lib/navActions';
 import { DomainSelect } from './pages/DomainSelect';
 import { Home } from './pages/Home';
 import { Curate } from './pages/Curate';
@@ -15,6 +16,7 @@ import { LegacyDatasetRedirect, LegacyMapRedirect } from './pages/LegacyRedirect
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <RankerProvider>
+      <NavActionsProvider>
       <BrowserRouter>
         <Nav />
         {/* Tight bottom padding: the map is sized to fit the window without scrolling,
@@ -44,6 +46,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           </Routes>
         </main>
       </BrowserRouter>
+      </NavActionsProvider>
     </RankerProvider>
   </React.StrictMode>,
 );

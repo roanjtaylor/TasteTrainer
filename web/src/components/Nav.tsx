@@ -3,6 +3,7 @@ import { DOMAIN_LABELS, slugifyTopic } from '../../../shared/types';
 import { useDomain } from '../lib/domain';
 import { useDatasetList } from '../lib/data';
 import { useRanker } from '../lib/ranker';
+import { NavActionsSlot } from '../lib/navActions';
 
 // Centred pill-style top nav — a floating rounded bar (6-ui.md), not a full-width
 // banner. It sits at the top of the page and scrolls away with it: the one thing worth
@@ -47,7 +48,8 @@ export function Nav() {
 
   return (
     <div className="px-4 pt-3">
-      <div className="flex flex-wrap items-center justify-center gap-2">
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+        <div />
         <nav className="flex max-w-full items-center gap-1 overflow-x-auto rounded-full border border-[var(--color-line)] bg-[var(--color-card)]/90 px-2 py-1.5 shadow-sm backdrop-blur">
         <div className="flex shrink-0 items-center px-2">
           {crumbs.map((crumb, i) => {
@@ -79,10 +81,6 @@ export function Nav() {
           })}
         </div>
 
-        {/* Nothing else lives here. The bar is the path and only the path — actions
-            belong next to the thing they act on, so "new dataset" is a button above the
-            map and editing a field happens inside that field. */}
-
         {/* Whose scores the next vote lands on. Click to hand the cabinet over. */}
         {ranker && (
           <>
@@ -97,6 +95,10 @@ export function Nav() {
           </>
         )}
         </nav>
+        {/* The page owning the current route portals its own action buttons in here
+            (lib/navActions.tsx), so they sit inline with the bar instead of on a row
+            of their own below it. */}
+        <NavActionsSlot className="flex flex-wrap items-center justify-end gap-2" />
       </div>
     </div>
   );

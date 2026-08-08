@@ -29,10 +29,9 @@ import { NameEntry, RankerBadge } from '../components/NameEntry';
 import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
 import { ReviewCard } from './Curate';
+import { NavActions } from '../lib/navActions';
 
-// 'edit' shows the same grid as 'browse' plus the destructive affordances (remove).
-// It is reached from the mode switcher in the header.
-type Mode = 'browse' | 'edit' | 'rank' | 'leaderboard';
+type Mode = 'browse' | 'rank' | 'leaderboard';
 
 // The single active filter — one axis at a time (a subtopic OR an era-group), or none.
 // Derived from the URL so it's shareable and back-button friendly.
@@ -57,10 +56,6 @@ export function DatasetView() {
   const [gapProgress, setGapProgress] = useState('');
   const [gapSuggestedCount, setGapSuggestedCount] = useState(8);
   const [gapError, setGapError] = useState('');
-
-  const [refetching, setRefetching] = useState(false);
-  const [refetchProgress, setRefetchProgress] = useState('');
-  const [refetchNote, setRefetchNote] = useState('');
 
   // The single active filter lives in the URL (?sub=… or ?era=start-end), so it's
   // shareable and the back button steps through filter states. The Filters subpage
@@ -97,52 +92,6 @@ export function DatasetView() {
     } finally {
       setLoadingGaps(false);
       setGapProgress('');
-    }
-  }
-
-  /**
-   * Re-run the image pipeline over this saved field.
-   *
-   * Images were only ever resolved while curating, so a field keeps whatever its items
-   * were given the day they were made — including a screenshot service's "generating…"
-   * placeholder, or a present-day capture standing in for a decades-old design. Every
-   * later improvement to sourcing skipped them entirely. This is how those get fixed
-   * without re-curating the field and losing the writing.
-   *
-   * Only items with a real problem are touched: a missing image, one that can't be
-   * showing its stated year, or one the scoring layer didn't trust. A confident,
-   * period-accurate picture is left exactly as it is.
-   */
-  async function refetchImages() {
-    if (!ds || refetching) return;
-    setMode('browse');
-    setRefetching(true);
-    setRefetchProgress('');
-    setRefetchNote('');
-    try {
-      const res = await api.reResolveImages(
-        { datasetId: ds.id, onlyProblems: true },
-        setRefetchProgress,
-      );
-      if (!res.items.length) {
-        setRefetchNote('Every image already looks right — nothing to re-fetch.');
-        return;
-      }
-      // Merge by id: only the checked items came back.
-      const byId = new Map(res.items.map((i) => [i.id, i]));
-      const merged = ds.items.map((i) => byId.get(i.id) ?? i);
-      const updated = await saveDataset(ds.id, { items: merged });
-      setDs(updated);
-      setRefetchNote(
-        res.changed
-          ? `Replaced ${res.changed} of ${res.checked} image${res.checked === 1 ? '' : 's'}.`
-          : `Checked ${res.checked} — nothing better found.`,
-      );
-    } catch (e: any) {
-      setRefetchNote(e?.message ?? 'Re-fetching images failed');
-    } finally {
-      setRefetching(false);
-      setRefetchProgress('');
     }
   }
 
@@ -205,10 +154,7 @@ export function DatasetView() {
         </p>
       </div>
 
-      {/* No way back here: the path in the nav bar is the way out. The controls sit on a
-          centred line, the same shape as the shelf's — with the pen where the shelf
-          keeps its "+". */}
-      <header className="relative flex flex-wrap items-center justify-center gap-2 py-4">
+      <NavActions>
         {/* Filters live behind this button — opens the /:domain/:slug/filters subpage. */}
         <Link
           to="filters"
@@ -221,22 +167,10 @@ export function DatasetView() {
           disabled={loadingGaps || !ds}
           className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)] disabled:opacity-40"
         >
-          {loadingGaps ? gapProgress || 'Sweeping…' : "What's missing?"}
+          {loadingGaps ? gapProgress || 'Sweeping…' : 'Expand dataset'}
         </button>
-        {/* Digital only: physical items resolve to a stable Wikimedia photo that doesn't
-            drift, so there is nothing to re-fetch. */}
-        {ds?.domain === 'digital' && (
-          <button
-            onClick={refetchImages}
-            disabled={refetching || !ds}
-            title="Re-run the image pipeline over items whose picture is missing, off-era, or low confidence"
-            className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)] disabled:opacity-40"
-          >
-            {refetching ? refetchProgress || 'Re-fetching…' : 'Re-fetch images'}
-          </button>
-        )}
         <div className="flex gap-0.5 rounded-full border border-[var(--color-line)] bg-[var(--color-card)] p-0.5">
-          {(['browse', 'edit', 'rank', 'leaderboard'] as Mode[]).map((m) => (
+          {(['browse', 'rank', 'leaderboard'] as Mode[]).map((m) => (
             <button
               key={m}
               onClick={() => setMode(m)}
@@ -251,14 +185,14 @@ export function DatasetView() {
           ))}
         </div>
 
-        {/* Where the shelf's "+" sits, a pen: this field's own name and description are
-            edited here, in front of the thing they describe, rather than in a grid of
-            inputs on a screen you were only glancing at. */}
+        {/* This field's own name and description are edited here, in front of the
+            thing they describe, rather than in a grid of inputs on a screen you were
+            only glancing at. */}
         <button
           onClick={() => setEditingMeta((v) => !v)}
           title="Edit this field's name and description"
           aria-label="Edit this field"
-          className={`absolute right-0 flex h-9 w-9 items-center justify-center rounded-full shadow-sm transition-transform hover:scale-105 ${
+          className={`flex h-9 w-9 items-center justify-center rounded-full shadow-sm transition-transform hover:scale-105 ${
             editingMeta
               ? 'bg-[var(--color-accent)] text-white'
               : 'bg-[var(--color-ink)] text-[var(--color-wall)]'
@@ -266,7 +200,7 @@ export function DatasetView() {
         >
           ✎
         </button>
-      </header>
+      </NavActions>
 
       {editingMeta && (
         <DatasetMeta
@@ -278,10 +212,6 @@ export function DatasetView() {
           }}
           onClose={() => setEditingMeta(false)}
         />
-      )}
-
-      {refetchNote && (
-        <p className="text-center text-sm text-[var(--color-muted)]">{refetchNote}</p>
       )}
 
       {/* Active-filter read: a pill with × to clear. The count it used to sit beside now
@@ -301,14 +231,13 @@ export function DatasetView() {
         </div>
       )}
 
-      {(mode === 'browse' || mode === 'edit') && (
+      {mode === 'browse' && (
         <Browse
           ds={ds}
           pool={pool}
           gaps={gaps}
           gapSuggestedCount={gapSuggestedCount}
           gapError={gapError}
-          editMode={mode === 'edit'}
           onChanged={setDs}
         />
       )}
@@ -450,7 +379,6 @@ function Browse({
   gaps,
   gapSuggestedCount,
   gapError,
-  editMode,
   onChanged,
 }: {
   ds: Dataset;
@@ -458,7 +386,6 @@ function Browse({
   gaps: CoverageGap[] | null;
   gapSuggestedCount: number;
   gapError: string;
-  editMode: boolean;
   onChanged: (ds: Dataset) => void;
 }) {
   // Inline editing: `editing` holds a working copy of the item being edited; `picker`
@@ -466,14 +393,6 @@ function Browse({
   const [editing, setEditing] = useState<Item | null>(null);
   const [picker, setPicker] = useState(false);
   const [saving, setSaving] = useState(false);
-
-  async function removeItem(itemId: string) {
-    if (!confirm('Remove this item from the dataset?')) return;
-    const updated = await saveDataset(ds.id, {
-      items: ds.items.filter((i) => i.id !== itemId),
-    });
-    onChanged(updated);
-  }
 
   async function saveEdit() {
     if (!editing) return;
@@ -514,19 +433,6 @@ function Browse({
               <div key={item.id} className="relative">
                 {/* The card itself opens the editor — works on touch, not just hover. */}
                 <ItemCard item={item} onClick={() => setEditing({ ...item })} />
-                {/* Removal is destructive, so it only appears in edit mode — browsing
-                    stays a clean wall of images. */}
-                {editMode && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      removeItem(item.id);
-                    }}
-                    className="absolute right-2 top-2 rounded-full bg-[var(--color-ink)]/80 px-2 py-1 text-xs text-[var(--color-wall)]"
-                  >
-                    Remove
-                  </button>
-                )}
               </div>
             ),
           )}
