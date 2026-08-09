@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import type { EraGroup } from '../../../shared/types';
 import { useDataset } from '../lib/data';
 import { EraTimeline } from '../components/EraTimeline';
 import { SubtopicFans } from '../components/SubtopicFans';
+import { NavActions } from '../lib/navActions';
 
 // The Filters subpage (6-ui.md): pick a slice by SUBTOPIC or by ERA — the dataset's
 // two independent axes. An item lives on both at once, which is why they're separate
@@ -37,18 +38,7 @@ export function FilterPicker() {
 
   return (
     <div className="space-y-6">
-      <header className="mt-4 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <Link to={`/${domain}/${slug}`} className="text-sm text-[var(--color-muted)]">
-            ← {ds.topic}
-          </Link>
-          <h1 className="serif text-4xl">Filters</h1>
-          <p className="mt-1 max-w-2xl text-[var(--color-muted)]">
-            {axis === 'subtopic'
-              ? 'Pick a theme to browse, rank, and rate.'
-              : 'Pick a period to browse, rank, and rate.'}
-          </p>
-        </div>
+      <NavActions>
         <div className="flex gap-1 rounded-full border border-[var(--color-line)] bg-[var(--color-card)] p-1">
           {(['subtopic', 'era'] as Axis[]).map((a) => (
             <button
@@ -64,7 +54,7 @@ export function FilterPicker() {
             </button>
           ))}
         </div>
-      </header>
+      </NavActions>
 
       {axis === 'subtopic' ? (
         <SubtopicFans ds={ds} onSelect={chooseSubtopic} />

@@ -47,7 +47,7 @@ export function Nav() {
   }
 
   return (
-    <div className="px-4 pt-3">
+    <div className="mx-auto max-w-6xl px-6 pt-3">
       <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
         <div />
         <nav className="flex max-w-full items-center gap-1 overflow-x-auto rounded-full border border-[var(--color-line)] bg-[var(--color-card)]/90 px-2 py-1.5 shadow-sm backdrop-blur">

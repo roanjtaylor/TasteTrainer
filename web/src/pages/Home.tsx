@@ -69,14 +69,6 @@ export function Home() {
           >
             {hasMap ? 'Review' : 'Check this world'}
           </Link>
-          <Link
-            to={`/${domain}/new`}
-            title="New dataset"
-            aria-label="New dataset"
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--color-ink)] text-xl leading-none text-[var(--color-wall)] shadow-sm transition-transform hover:scale-105"
-          >
-            +
-          </Link>
         </NavActions>
       )}
 

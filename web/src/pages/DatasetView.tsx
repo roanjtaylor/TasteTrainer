@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { EVERYONE, slugifyTopic } from '../../../shared/types';
 import type {
   CoverageGap,
@@ -14,7 +14,6 @@ import type {
 } from '../../../shared/types';
 import { api, type Progress, type ScopeQuery } from '../lib/api';
 import {
-  deleteDataset,
   saveDataset,
   useDataset,
   useLeaderboard,
@@ -50,7 +49,6 @@ export function DatasetView() {
   const { data: ds, error: loadError, set: setDs } = useDataset(slug || null);
   const [mode, setMode] = useState<Mode>('browse');
 
-  const [editingMeta, setEditingMeta] = useState(false);
   const [gaps, setGaps] = useState<CoverageGap[] | null>(null);
   const [loadingGaps, setLoadingGaps] = useState(false);
   const [gapProgress, setGapProgress] = useState('');
@@ -169,50 +167,18 @@ export function DatasetView() {
         >
           {loadingGaps ? gapProgress || 'Sweeping…' : 'Expand dataset'}
         </button>
-        <div className="flex gap-0.5 rounded-full border border-[var(--color-line)] bg-[var(--color-card)] p-0.5">
-          {(['browse', 'rank', 'leaderboard'] as Mode[]).map((m) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              className={`rounded-full px-4 py-1 text-sm capitalize ${
-                mode === m
-                  ? 'bg-[var(--color-ink)] text-[var(--color-wall)]'
-                  : 'text-[var(--color-muted)]'
-              }`}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
-
-        {/* This field's own name and description are edited here, in front of the
-            thing they describe, rather than in a grid of inputs on a screen you were
-            only glancing at. */}
-        <button
-          onClick={() => setEditingMeta((v) => !v)}
-          title="Edit this field's name and description"
-          aria-label="Edit this field"
-          className={`flex h-9 w-9 items-center justify-center rounded-full shadow-sm transition-transform hover:scale-105 ${
-            editingMeta
-              ? 'bg-[var(--color-accent)] text-white'
-              : 'bg-[var(--color-ink)] text-[var(--color-wall)]'
-          }`}
+        <select
+          value={mode}
+          onChange={(e) => setMode(e.target.value as Mode)}
+          className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm capitalize text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
         >
-          ✎
-        </button>
+          {(['browse', 'rank', 'leaderboard'] as Mode[]).map((m) => (
+            <option key={m} value={m} className="capitalize">
+              {m}
+            </option>
+          ))}
+        </select>
       </NavActions>
-
-      {editingMeta && (
-        <DatasetMeta
-          ds={ds}
-          domain={domain}
-          onSaved={(updated) => {
-            setDs(updated);
-            setEditingMeta(false);
-          }}
-          onClose={() => setEditingMeta(false)}
-        />
-      )}
 
       {/* Active-filter read: a pill with × to clear. The count it used to sit beside now
           lives in the pinned title block, where it stays readable down the page. */}
@@ -244,131 +210,6 @@ export function DatasetView() {
       {mode === 'rank' && <Rank datasetId={ds.id} scope={scope} poolSize={pool.length} />}
       {mode === 'leaderboard' && <Leaderboard datasetId={ds.id} scope={scope} />}
     </div>
-  );
-}
-
-/**
- * This field's own name and description, edited in place.
- *
- * The shelf used to carry a mode full of rename inputs, one per dataset. It's here
- * instead because this is the only screen that shows what a field actually contains —
- * renaming "Cars" is a decision you make looking at the cars, not at a card.
- *
- * Deleting lives here too, for the same reason and because otherwise it lives nowhere:
- * it went away with the shelf's edit mode, and a field you can create but never remove
- * is a one-way door.
- */
-function DatasetMeta({
-  ds,
-  domain,
-  onSaved,
-  onClose,
-}: {
-  ds: Dataset;
-  domain: string;
-  onSaved: (ds: Dataset) => void;
-  onClose: () => void;
-}) {
-  const navigate = useNavigate();
-  const [topic, setTopic] = useState(ds.topic);
-  const [description, setDescription] = useState(ds.description);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  const trimmedTopic = topic.trim();
-  const trimmedDescription = description.trim();
-  const changed = trimmedTopic !== ds.topic || trimmedDescription !== ds.description;
-  const valid = trimmedTopic !== '' && trimmedDescription !== '';
-
-  async function save() {
-    if (!changed || !valid) return;
-    setBusy(true);
-    setError('');
-    try {
-      const updated = await saveDataset(ds.id, {
-        topic: trimmedTopic,
-        description: trimmedDescription,
-      });
-      // A rename changes the field's address, so the URL has to follow it.
-      const slug = slugifyTopic(updated.topic);
-      if (slug !== slugifyTopic(ds.topic)) navigate(`/${domain}/${slug}`, { replace: true });
-      onSaved(updated);
-    } catch (e: any) {
-      setError(e?.message ?? 'Could not save');
-      setBusy(false);
-    }
-  }
-
-  async function remove() {
-    if (!confirm(`Delete "${ds.topic}" and all ${ds.items.length} of its items?\n\nThis cannot be undone.`)) {
-      return;
-    }
-    setBusy(true);
-    setError('');
-    try {
-      await deleteDataset(ds.id, ds.topic);
-      navigate(`/${domain}`, { replace: true });
-    } catch (e: any) {
-      setError(e?.message ?? 'Could not delete');
-      setBusy(false);
-    }
-  }
-
-  return (
-    <section className="space-y-3 rounded-xl border border-[var(--color-accent)] bg-[var(--color-card)] p-5">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block">
-          <span className="text-sm text-[var(--color-muted)]">Name</span>
-          <input
-            className="serif mt-1 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-2 text-lg"
-            value={topic}
-            onChange={(e) => setTopic(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && save()}
-          />
-        </label>
-        <label className="block">
-          <span className="text-sm text-[var(--color-muted)]">Description</span>
-          <input
-            className="mt-1 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-2"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && save()}
-          />
-        </label>
-      </div>
-
-      {error && <p className="text-sm text-[var(--color-accent)]">{error}</p>}
-      {!valid && (
-        <p className="text-sm text-[var(--color-muted)]">
-          Both a name and a description are required — the description is what tells the
-          curation engine what this field is (2-data.md).
-        </p>
-      )}
-
-      <div className="flex flex-wrap items-center gap-2 pt-1">
-        <button
-          onClick={save}
-          disabled={!changed || !valid || busy}
-          className="rounded-full bg-[var(--color-ink)] px-5 py-1.5 text-sm text-[var(--color-wall)] disabled:opacity-30"
-        >
-          {busy ? 'Saving…' : 'Save'}
-        </button>
-        <button
-          onClick={onClose}
-          disabled={busy}
-          className="rounded-full border border-[var(--color-line)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={remove}
-          disabled={busy}
-          className="ml-auto rounded-full border border-[var(--color-accent)] px-4 py-1.5 text-sm text-[var(--color-accent)] hover:bg-[var(--color-wall-soft)] disabled:opacity-30"
-        >
-          Delete this field
-        </button>
-      </div>
-    </section>
   );
 }
 
