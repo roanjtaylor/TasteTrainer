@@ -62,6 +62,23 @@ export function DatasetView() {
 
   const groups = useMemo(() => (ds ? eraGroupsOf(ds) : []), [ds]);
 
+  // "Expand dataset" can be launched from outside this page — the world review's
+  // thin-fields list links here with `?expand=1` so its button is a real one-click
+  // action rather than just a navigation. The param is stripped immediately so a
+  // refresh or the back button doesn't re-run the sweep.
+  useEffect(() => {
+    if (!ds || searchParams.get('expand') !== '1') return;
+    setSearchParams(
+      (p) => {
+        p.delete('expand');
+        return p;
+      },
+      { replace: true },
+    );
+    whatsMissing();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ds]);
+
   async function whatsMissing() {
     if (!ds) return;
     setMode('browse');

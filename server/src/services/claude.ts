@@ -20,6 +20,26 @@ import type {
   WorldMap,
 } from '../../../shared/types.ts';
 
+/** A resulting field from a boundary fix — either an existing field kept in a new
+ *  shape, or a brand-new one split off from another. See `planBoundaryFix`. */
+export interface BoundaryFieldPlan {
+  /** The exact existing topic this replaces (a rename, or the surviving side of a
+   *  merge), or "" for a field created fresh by a split. */
+  sourceTopic: string;
+  topic: string;
+  description: string;
+  subtopics: Subtopic[];
+  /** Item ids, drawn from the pooled items of every field the issue named, that end
+   *  up in this field. */
+  itemIds: string[];
+}
+
+export interface BoundaryPlan {
+  fields: BoundaryFieldPlan[];
+  /** One short sentence describing what was done, shown to the person who accepted it. */
+  note: string;
+}
+
 /** One line of domain context folded into every curation prompt (7-software-design.md) —
  *  the rules file's domain-aware section (curation-rules.md §f) only applies correctly
  *  once the model knows which world it's mapping. */
@@ -608,6 +628,94 @@ export async function reviewFieldMap(args: {
       .map((t) => ({ topic: String(t.topic).trim(), detail: String(t.detail ?? '').trim() })),
     proposal: parseMapProposal(json, existingMap),
   };
+}
+
+/**
+ * Turn an accepted `BoundaryIssue` into a concrete plan — which resulting field(s)
+ * exist, in what shape, and which of the involved items land in each. The route
+ * (routes/curation.ts) then carries the plan out: updating, creating and deleting
+ * datasets as it requires.
+ *
+ * Only fed the involved field(s)' items (id, name, subtopic, year) rather than their
+ * full records — the same "reason about shape, not content" split as `findGaps` and
+ * `reviewFieldMap`, and per-item ids are all the apply step needs back.
+ */
+export async function planBoundaryFix(args: {
+  domain: Domain;
+  kind: BoundaryKind;
+  proposal: string;
+  why: string;
+  fields: Array<{
+    topic: string;
+    description: string;
+    subtopics: Subtopic[];
+    items: Array<{ id: string; name: string; subtopic: string; year: number | null }>;
+  }>;
+}, onProgress?: ProgressFn): Promise<BoundaryPlan> {
+  const { domain, kind, proposal, why, fields } = args;
+  const rules = await loadRules();
+  const system = `You are the curation engine for TasteTrainer.\n\n${rules}\n\n${JSON_ONLY}`;
+
+  const fieldBlock = fields
+    .map((f) => {
+      const subs = f.subtopics.map((s) => s.name).join(', ') || '(none)';
+      const items = f.items
+        .map((i) => `  - ${i.id}: ${i.name} [${i.subtopic || 'unfiled'}, ${i.year ?? '?'}]`)
+        .join('\n');
+      return `Field "${f.topic}" — ${f.description}\nSubtopics: ${subs}\nItems (${f.items.length}):\n${items || '  (none)'}`;
+    })
+    .join('\n\n');
+
+  const prompt = `${domainLine(domain)}\n\nA world-level review flagged a boundary problem between these existing field(s):\n\n${fieldBlock}\n\nProblem (kind: "${kind}"): ${proposal}\nReason: ${why}\n\nWork out the concrete result of applying this fix. Account for EVERY item id listed above exactly once across your "fields" — none may be dropped, none duplicated.\n\nReturn "fields", one entry per resulting field:\n- For a field that keeps one of the existing topics above (a rename, or the surviving side of a merge), set "sourceTopic" to that EXACT existing topic name.\n- For a brand-new field created by a split, set "sourceTopic" to "".\n- "topic" is the field's final name (same as sourceTopic when nothing is renamed).\n- "description" is its final description.\n- "subtopics" is its final canonical subtopic list.\n- "itemIds" lists which of the item ids above end up in this field.\n\nReturn JSON of shape: { "fields": [ { "sourceTopic": string, "topic": string, "description": string, "subtopics": [ { "name": string, "description": string } ], "itemIds": [string] } ], "note": string }\n\n"note" is one short sentence describing what you did, shown to the person who accepted this fix.`;
+
+  const totalItems = fields.reduce((n, f) => n + f.items.length, 0);
+  const json = await runJson(system, prompt, {
+    onProgress,
+    count: { key: 'sourceTopic', noun: 'fields' },
+    timeoutMs: 90_000 + totalItems * 400,
+  });
+
+  const knownIds = new Set(fields.flatMap((f) => f.items.map((i) => i.id)));
+  const resultFields: BoundaryFieldPlan[] = ((json.fields ?? []) as any[])
+    .filter((f) => f?.topic)
+    .map((f) => ({
+      sourceTopic: String(f.sourceTopic ?? '').trim(),
+      topic: String(f.topic).trim(),
+      description: String(f.description ?? '').trim(),
+      subtopics: (Array.isArray(f.subtopics) ? f.subtopics : [])
+        .filter((s: any) => s?.name)
+        .map((s: any) => ({
+          name: String(s.name).trim(),
+          description: String(s.description ?? '').trim(),
+        })),
+      itemIds: (Array.isArray(f.itemIds) ? f.itemIds : [])
+        .map((id: unknown) => String(id))
+        .filter((id: string) => knownIds.has(id)),
+    }));
+
+  // Anything the model dropped stays exactly where it was — assigned back into a
+  // field carrying its original topic (creating one if every field it named was
+  // renamed away), so a slip in the plan can never quietly lose an item.
+  const assigned = new Set(resultFields.flatMap((f) => f.itemIds));
+  for (const f of fields) {
+    for (const it of f.items) {
+      if (assigned.has(it.id)) continue;
+      let home = resultFields.find((r) => r.sourceTopic === f.topic);
+      if (!home) {
+        home = {
+          sourceTopic: f.topic,
+          topic: f.topic,
+          description: f.description,
+          subtopics: f.subtopics,
+          itemIds: [],
+        };
+        resultFields.push(home);
+      }
+      home.itemIds.push(it.id);
+    }
+  }
+
+  return { fields: resultFields, note: typeof json.note === 'string' ? json.note.trim() : '' };
 }
 
 export async function fillGaps(args: {

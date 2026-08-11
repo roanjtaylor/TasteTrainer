@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import {
   DOMAIN_LABELS,
   slugifyTopic,
+  type BoundaryIssue,
   type FieldMapReview,
   type MapSuggestion,
   type WorldMap,
@@ -10,6 +11,7 @@ import {
 import { api } from '../lib/api';
 import { publishWorldMap, saveWorldMap, useWorldMap } from '../lib/data';
 import { useDomain } from '../lib/domain';
+import { NavActions } from '../lib/navActions';
 
 // The world review (8-field-map.md) — the level above "what's missing?".
 //
@@ -30,6 +32,13 @@ export function WorldReview() {
   const [progress, setProgress] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  // The prose half of the last review is durable on the map (`lastReview`) so it
+  // survives a reload. Only backfills an empty `review` — a fresh check() below sets
+  // it directly and this effect must never clobber that with a stale map.
+  useEffect(() => {
+    if (map?.lastReview) setReview((r) => r ?? map.lastReview!);
+  }, [map]);
 
   if (!domain) return <Navigate to="/" replace />;
 
@@ -75,46 +84,76 @@ export function WorldReview() {
     }
   }
 
+  // Per-card state, keyed by the boundary issue's index — several of these can sit on
+  // screen at once and each runs its own Claude call independently.
+  const [boundaryBusy, setBoundaryBusy] = useState<Record<number, boolean>>({});
+  const [boundaryProgress, setBoundaryProgress] = useState<Record<number, string>>({});
+  const [boundaryError, setBoundaryError] = useState<Record<number, string>>({});
+
+  async function acceptBoundaryFix(i: number, b: BoundaryIssue) {
+    if (!domain) return;
+    if (
+      !confirm(
+        `Apply this fix?\n\n${b.proposal}\n\nClaude will work out the concrete change and carry ` +
+          "it out directly — this can rename, split or delete datasets, and there's no undo.",
+      )
+    ) {
+      return;
+    }
+    setBoundaryBusy((s) => ({ ...s, [i]: true }));
+    setBoundaryError((s) => ({ ...s, [i]: '' }));
+    try {
+      const result = await api.applyBoundaryFix(
+        { domain, kind: b.kind, fields: b.fields, proposal: b.proposal, why: b.why },
+        (line) => setBoundaryProgress((s) => ({ ...s, [i]: line })),
+      );
+      if (result.map) {
+        publishWorldMap(domain, result.map);
+        setMap(result.map);
+      }
+      // The issue is handled — drop it from the list on screen rather than waiting for
+      // the next full review to notice it's gone. Filtered by reference (not index),
+      // so this stays correct even if another card's accept resolves in between.
+      setReview((r) => (r ? { ...r, boundaryIssues: r.boundaryIssues.filter((x) => x !== b) } : r));
+    } catch (e: any) {
+      setBoundaryError((s) => ({ ...s, [i]: e?.message ?? 'Could not apply this fix' }));
+    } finally {
+      setBoundaryBusy((s) => ({ ...s, [i]: false }));
+      setBoundaryProgress((s) => ({ ...s, [i]: '' }));
+    }
+  }
+
   const hasMap = !!map && map.regions.length > 0;
 
   return (
     <div className="space-y-8">
+      <NavActions>
+        <button
+          onClick={() => check(false)}
+          disabled={busy}
+          className="rounded-full bg-[var(--color-ink)] px-4 py-1.5 text-sm text-[var(--color-wall)] disabled:opacity-40"
+        >
+          {busy ? progress || 'Reviewing…' : hasMap ? 'Review again' : 'Check this world →'}
+        </button>
+        {hasMap && !busy && (
+          <button
+            onClick={() => check(true)}
+            title="Throw the current map away and draw a new one"
+            className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
+          >
+            Redraw from scratch
+          </button>
+        )}
+      </NavActions>
+
       <header className="mt-4">
-        <Link to={`/${domain}`} className="text-sm text-[var(--color-muted)]">
-          ← {DOMAIN_LABELS[domain].title}
-        </Link>
         <h1 className="serif text-4xl">
           Review the {DOMAIN_LABELS[domain].short.toLowerCase()} world
         </h1>
-        <p className="mt-2 max-w-2xl text-[var(--color-muted)]">
-          Claude reads every field you've built here and reports the shape of the whole world
-          — what's missing from your map, which boundaries are drawn wrong, and which fields
-          are thin. {hasMap
-            ? 'Your map stays as it is: anything it wants to change comes back as a suggestion below.'
-            : 'The first run also draws the map you see on the shelf.'}
-        </p>
-        <div className="mt-5 flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => check(false)}
-            disabled={busy}
-            className="rounded-full bg-[var(--color-ink)] px-5 py-2 text-sm text-[var(--color-wall)] disabled:opacity-40"
-          >
-            {busy ? progress || 'Reviewing…' : hasMap ? 'Review again' : 'Check this world →'}
-          </button>
-          {hasMap && !busy && (
-            <button
-              onClick={() => check(true)}
-              title="Throw the current map away and draw a new one"
-              className="rounded-full border border-[var(--color-line)] px-4 py-2 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
-            >
-              Redraw from scratch
-            </button>
-          )}
-        </div>
         {busy && (
           <p className="mt-2 text-sm text-[var(--color-muted)]">
             A first draw of a well-stocked world takes a few minutes — it's writing the whole
-            map in one pass. The line above keeps moving while it works.
+            map in one pass. The button above keeps moving while it works.
           </p>
         )}
       </header>
@@ -201,7 +240,7 @@ export function WorldReview() {
 
           <Section
             title="Boundaries drawn wrong"
-            note="Fields that should merge, split, or be renamed. These stay advice rather than one-click changes — acting on them means moving items between datasets, and a suggestion isn't consent for that."
+            note="Fields that should merge, split, or be renamed. Accepting hands the fix to Claude, which works out the concrete result and applies it — there's no undo, so read the proposal first."
             empty={
               review.boundaryIssues.length === 0
                 ? 'The boundaries between your fields look sound.'
@@ -222,6 +261,29 @@ export function WorldReview() {
                   </div>
                   <p className="mt-2">{b.proposal}</p>
                   <p className="mt-1 text-sm text-[var(--color-muted)]">{b.why}</p>
+                  {boundaryError[i] && (
+                    <p className="mt-2 text-sm text-[var(--color-accent)]">{boundaryError[i]}</p>
+                  )}
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() => acceptBoundaryFix(i, b)}
+                      disabled={!!boundaryBusy[i]}
+                      className="rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-sm text-white disabled:opacity-40"
+                    >
+                      {boundaryBusy[i] ? boundaryProgress[i] || 'Applying…' : 'Accept changes'}
+                    </button>
+                    {/* A way to go look before committing, or to make the change by
+                        hand instead of trusting the automated plan. */}
+                    {b.fields.map((f) => (
+                      <Link
+                        key={f}
+                        to={`/${domain}/${slugifyTopic(f)}`}
+                        className="rounded-full border border-[var(--color-line)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
+                      >
+                        Open {f} →
+                      </Link>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
@@ -229,21 +291,30 @@ export function WorldReview() {
 
           <Section
             title="Fields that look thin"
-            note="Judged from item counts, subtopics and year spans only. Open one and press “What's missing?” for the item-level sweep."
+            note="Judged from item counts, subtopics and year spans only."
             empty={
               review.thinFields.length === 0 ? 'Every field looks reasonably built out.' : null
             }
           >
-            <div className="space-y-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               {review.thinFields.map((t) => (
-                <Link
+                <div
                   key={t.topic}
-                  to={`/${domain}/${slugifyTopic(t.topic)}`}
-                  className="block rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-5 hover:bg-[var(--color-wall-soft)]"
+                  className="flex flex-col rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-5"
                 >
-                  <h3 className="serif text-lg leading-tight">{t.topic}</h3>
-                  <p className="mt-1 text-sm text-[var(--color-muted)]">{t.detail}</p>
-                </Link>
+                  <Link to={`/${domain}/${slugifyTopic(t.topic)}`} className="hover:underline">
+                    <h3 className="serif text-lg leading-tight">{t.topic}</h3>
+                  </Link>
+                  <p className="mt-1 flex-1 text-sm text-[var(--color-muted)]">{t.detail}</p>
+                  {/* Jumps straight to the field with its gap sweep already running —
+                      the item-level pass this card's own judgement can't replace. */}
+                  <Link
+                    to={`/${domain}/${slugifyTopic(t.topic)}?expand=1`}
+                    className="mt-4 self-start rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-sm text-white"
+                  >
+                    Expand dataset →
+                  </Link>
+                </div>
               ))}
             </div>
           </Section>

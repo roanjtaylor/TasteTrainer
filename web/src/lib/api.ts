@@ -1,4 +1,6 @@
 import type {
+  BoundaryFixResult,
+  BoundaryKind,
   CoverageGap,
   Dataset,
   DatasetSummary,
@@ -164,6 +166,18 @@ export const api = {
     streamSSE<FieldMapReview & { map: WorldMap | null }>(
       '/api/curation/field-map',
       { domain, redraw },
+      onProgress,
+    ),
+  // "Accept changes" on a boundary issue — hands the review's own wording straight
+  // back to the server, which resolves it to the actual dataset(s) and asks Claude to
+  // work out the concrete fix. `fields` must be exactly `BoundaryIssue.fields`.
+  applyBoundaryFix: (
+    body: { domain: Domain; kind: BoundaryKind; fields: string[]; proposal: string; why: string },
+    onProgress?: OnProgress,
+  ) =>
+    streamSSE<BoundaryFixResult & { map: WorldMap | null }>(
+      '/api/curation/boundary-fix',
+      body,
       onProgress,
     ),
   findGaps: (

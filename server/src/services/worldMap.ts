@@ -71,7 +71,7 @@ export function mergeProposal(args: {
   if (!regions.length) {
     // Nothing to place things into. Return the base untouched rather than writing a
     // map with no regions, which would render as an empty canvas and look like data loss.
-    return { ...base, suggestions: base.suggestions, updatedAt: now() };
+    return { ...base, suggestions: base.suggestions, lastReview: review, updatedAt: now() };
   }
 
   const byId = new Map(regions.map((r) => [r.id, r]));
@@ -150,7 +150,7 @@ export function mergeProposal(args: {
     })
     .filter((s): s is MapSuggestion => !!s);
 
-  return { domain, axes, regions, placements, ghosts, suggestions, updatedAt: now() };
+  return { domain, axes, regions, placements, ghosts, suggestions, lastReview: review, updatedAt: now() };
 }
 
 /** Apply one accepted suggestion. Returns a new map; unknown ids are a no-op. */

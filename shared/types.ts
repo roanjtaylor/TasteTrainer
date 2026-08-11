@@ -408,6 +408,20 @@ export interface ThinField {
   detail: string;
 }
 
+/**
+ * Applying an accepted `BoundaryIssue`: Claude works out the concrete result (which
+ * fields end up with what shape, and where each item lands) and the server carries
+ * it out — updating, creating and deleting datasets as the fix requires.
+ */
+export interface BoundaryFixResult {
+  /** Every dataset left standing once the fix is applied, in its final shape. */
+  updated: Dataset[];
+  /** Topics of datasets that were fully absorbed elsewhere and removed. */
+  deletedTopics: string[];
+  /** One sentence from Claude on what it did. */
+  note: string;
+}
+
 /** The whole world-level review. */
 export interface FieldMapReview {
   /** One paragraph on how this world actually divides — the shape to build toward. */
@@ -492,6 +506,10 @@ export interface WorldMap {
   ghosts: GhostField[];
   /** Proposed changes awaiting accept/dismiss. */
   suggestions: MapSuggestion[];
+  /** The prose half of the last review that drew or amended this map — durable, so
+   *  reopening the review page shows the full analysis rather than just the map's
+   *  mechanical leftovers (ghosts, suggestions). Overwritten by the next review. */
+  lastReview?: FieldMapReview;
   updatedAt: string;
 }
 

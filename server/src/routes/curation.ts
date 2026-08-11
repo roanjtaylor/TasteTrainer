@@ -4,18 +4,30 @@ import {
   fillGaps,
   findGaps,
   generateItems,
+  planBoundaryFix,
   proposePeriods,
   proposeSubtopics,
   reviewFieldMap,
 } from '../services/claude.ts';
 import { wikimediaImage } from '../services/images.ts';
 import { mapWithLimit, resolveDigitalImage } from '../services/imageResolvers.ts';
-import { cleanProposals } from '../services/itemHygiene.ts';
+import { canonicalSubtopic, cleanProposals } from '../services/itemHygiene.ts';
 import { mergeProposal, type MapField } from '../services/worldMap.ts';
-import { getDataset, getWorldMap, listDatasets, saveWorldMap } from '../storage.ts';
-import { isPeriodAccurate, normalizeDomain } from '../../../shared/types.ts';
+import {
+  deleteDataset,
+  getDataset,
+  getWorldMap,
+  listDatasets,
+  saveDataset,
+  saveWorldMap,
+} from '../storage.ts';
+import { newId, now } from '../util.ts';
+import { isPeriodAccurate, normalizeDomain, slugifyTopic } from '../../../shared/types.ts';
 import type {
+  BoundaryIssue,
+  BoundaryKind,
   CoverageGap,
+  Dataset,
   Domain,
   EraGroup,
   FieldSummary,
@@ -261,6 +273,141 @@ curationRouter.post('/field-map', async (req, res) => {
     send('done', { ...review, map });
   } catch (err: any) {
     send('error', { error: err?.message ?? 'Field-map review failed' });
+  }
+  res.end();
+});
+
+// "Accept changes" on a boundary issue — the review named the problem, this carries
+// out the fix: Claude works out the concrete result (services/claude.ts,
+// planBoundaryFix) and this route updates, creates and deletes datasets accordingly.
+//
+// `fields` must be exactly the topics the boundary issue named — that's how the
+// stored map's `lastReview` finds and drops the issue once it's been handled.
+curationRouter.post('/boundary-fix', async (req, res) => {
+  const { domain: rawDomain, kind, fields: topics, proposal, why } = req.body as {
+    domain?: Domain;
+    kind?: BoundaryKind;
+    fields?: string[];
+    proposal?: string;
+    why?: string;
+  };
+  const domain = normalizeDomain(rawDomain);
+
+  const send = sse(res);
+  try {
+    if (!kind || !topics?.length || !proposal?.trim()) {
+      send('error', { error: 'kind, fields and proposal are required' });
+      return res.end();
+    }
+
+    send('progress', { line: 'Reading the field(s)…' });
+    const summaries = await listDatasets(domain);
+    const byTopic = new Map(summaries.map((s) => [s.topic.trim().toLowerCase(), s]));
+    const datasets: Dataset[] = [];
+    for (const topic of topics) {
+      const summary = byTopic.get(topic.trim().toLowerCase());
+      const ds = summary && (await getDataset(summary.id));
+      if (!ds) {
+        send('error', { error: `Field "${topic}" no longer exists — try reviewing again.` });
+        return res.end();
+      }
+      datasets.push(ds);
+    }
+
+    const plan = await planBoundaryFix(
+      {
+        domain,
+        kind,
+        proposal: proposal.trim(),
+        why: why?.trim() ?? '',
+        fields: datasets.map((d) => ({
+          topic: d.topic,
+          description: d.description,
+          subtopics: d.subtopics,
+          items: d.items.map((i) => ({ id: i.id, name: i.name, subtopic: i.subtopic, year: i.year })),
+        })),
+      },
+      (line) => send('progress', { line }),
+    );
+
+    send('progress', { line: 'Writing the change…' });
+    const pool = new Map(datasets.flatMap((d) => d.items.map((i) => [i.id, i] as const)));
+    const byTopicExact = new Map(datasets.map((d) => [d.topic, d]));
+
+    const claimedTopics = new Set<string>();
+    const updated: Dataset[] = [];
+    for (const rf of plan.fields) {
+      const source = rf.sourceTopic ? byTopicExact.get(rf.sourceTopic) : undefined;
+      const subtopics = rf.subtopics.length ? rf.subtopics : (source?.subtopics ?? []);
+      const items = rf.itemIds
+        .map((id) => pool.get(id))
+        .filter((it): it is Item => !!it)
+        .map((it) => ({ ...it, subtopic: canonicalSubtopic(it.subtopic, subtopics) }));
+
+      if (source) {
+        claimedTopics.add(source.topic);
+        updated.push(
+          await saveDataset(
+            { ...source, topic: rf.topic || source.topic, description: rf.description || source.description, subtopics, items },
+            slugifyTopic(source.topic),
+          ),
+        );
+      } else {
+        updated.push(
+          await saveDataset({
+            id: newId(),
+            domain,
+            topic: rf.topic,
+            description: rf.description,
+            subtopics,
+            eraGroups: [],
+            items,
+            createdAt: now(),
+            updatedAt: now(),
+          }),
+        );
+      }
+    }
+
+    // Whatever no result field claimed as its source had every one of its items moved
+    // elsewhere by the plan — it's fully absorbed, so it goes away rather than lingering
+    // as an empty field nobody asked to keep.
+    const deletedTopics: string[] = [];
+    for (const d of datasets) {
+      if (claimedTopics.has(d.topic)) continue;
+      await deleteDataset(d.id, slugifyTopic(d.topic));
+      deletedTopics.push(d.topic);
+    }
+
+    // Best-effort: drop the now-handled issue from the map's stored review, so it
+    // doesn't keep showing an "Accept changes" button for a fix already applied.
+    let map = null;
+    try {
+      const stored = await getWorldMap(domain);
+      if (stored?.lastReview) {
+        const wanted = new Set(topics.map((t) => t.trim().toLowerCase()));
+        const remaining = stored.lastReview.boundaryIssues.filter(
+          (b: BoundaryIssue) =>
+            !(
+              b.kind === kind &&
+              b.fields.length === topics.length &&
+              b.fields.every((f) => wanted.has(f.trim().toLowerCase()))
+            ),
+        );
+        if (remaining.length !== stored.lastReview.boundaryIssues.length) {
+          map = await saveWorldMap({
+            ...stored,
+            lastReview: { ...stored.lastReview, boundaryIssues: remaining },
+          });
+        } else {
+          map = stored;
+        }
+      }
+    } catch { /* the next review will settle it either way */ }
+
+    send('done', { updated, deletedTopics, note: plan.note, map });
+  } catch (err: any) {
+    send('error', { error: err?.message ?? 'Applying the fix failed' });
   }
   res.end();
 });
