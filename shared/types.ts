@@ -539,7 +539,7 @@ export function mapSlug(name: string): string {
 /** Which curation call a job wraps. Only calls that return a proposal for the user to
  *  review (rather than writing straight to storage themselves, like the field-map
  *  review or a boundary fix) need this. */
-export type JobKind = 'items' | 'gap-fill';
+export type JobKind = 'items' | 'gap-fill' | 'gaps';
 
 export type JobStatus = 'running' | 'done' | 'error';
 

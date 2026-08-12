@@ -92,6 +92,17 @@ interface RunOpts {
   timeoutMs?: number;
 }
 
+/** "90s" below a minute, "5m" / "5m30s" at or above — the timeout error used to always
+ *  say "Ns", which read fine at 120s but turns into an ugly "600s" now that some calls
+ *  (findGaps on a big dataset) have multi-minute budgets. */
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds ? `${minutes}m${seconds}s` : `${minutes}m`;
+}
+
 /** Marks a failure as "Claude's own output wasn't valid JSON" specifically — as
  *  opposed to a timeout, a network/auth error, or the model reporting its own error —
  *  so `runJson` knows retrying with an identical prompt is actually worth trying. */
@@ -265,7 +276,7 @@ async function runJsonOnce(system: string, prompt: string, opts: RunOpts = {}): 
       // time is a stuck request. Those want different responses from the user.
       const produced = lastCount > 0 ? ` It had produced ${lastCount} ${count?.noun ?? 'results'}.` : '';
       throw new Error(
-        `Claude ran out of time after ${Math.round(timeoutMs / 1000)}s.${produced} ` +
+        `Claude ran out of time after ${formatDuration(timeoutMs)}.${produced} ` +
           'Nothing was saved — try again, or narrow what you asked for.',
       );
     }
@@ -479,6 +490,14 @@ export async function findGaps(args: {
   const json = await runJson(system, prompt, {
     onProgress,
     count: { key: 'axis', noun: 'gaps' },
+    // This runs as a durable job (server/src/routes/curation.ts's /gaps route), not a
+    // blocking call anyone watches spin — so there's no cost to a generous floor, only
+    // to cutting it off too early. 120s wasn't even enough for a SMALL sweep (17 gaps
+    // still in progress) — the bottleneck is generation length, which a per-item slope
+    // alone doesn't cover. 5 min floor for every sweep regardless of size; the per-item
+    // margin on top covers genuinely large inventories; 10 min hard ceiling so a stuck
+    // stream still gets shut down rather than tying up the job indefinitely.
+    timeoutMs: Math.min(600_000, 300_000 + items.length * 1_500),
   });
   const gaps = (json.gaps ?? []) as CoverageGap[];
   const raw = Number(json.suggestedCount);

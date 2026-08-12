@@ -196,7 +196,8 @@ export const api = {
       eraGroups?: EraGroup[];
     },
     onProgress?: OnProgress,
-  ) => streamSSE<{ gaps: CoverageGap[]; suggestedCount: number }>(
+    // See generateItems' jobId above.
+  ) => streamSSE<{ gaps: CoverageGap[]; suggestedCount: number; jobId: string }>(
     '/api/curation/gaps',
     body,
     onProgress,

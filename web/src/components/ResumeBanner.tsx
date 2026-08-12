@@ -7,8 +7,15 @@ import { useJobs } from '../lib/jobs';
 // the point of the whole durable-job layer (lib/jobs.ts). Sits at the top of the
 // per-world shelf (pages/Home.tsx) since a job is domain-scoped; the Nav badge is the
 // cross-domain heads-up that something like this exists at all.
-export function ResumeBanner({ domain }: { domain: Domain }) {
-  const { jobs, refresh } = useJobs(domain);
+//
+// `topic` narrows it to one dataset's own jobs — DatasetView mounts it that way so a
+// 'gaps' sweep or a 'gap-fill' research call queued for THIS field is still visible
+// (and resumable) right here after a refresh, not just from the world shelf.
+export function ResumeBanner({ domain, topic }: { domain: Domain; topic?: string }) {
+  const { jobs: allJobs, refresh } = useJobs(domain);
+  const jobs = topic
+    ? allJobs.filter((j) => (j.input as { topic?: string } | null)?.topic === topic)
+    : allJobs;
   if (jobs.length === 0) return null;
 
   function dismiss(id: string) {

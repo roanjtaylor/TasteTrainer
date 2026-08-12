@@ -79,6 +79,23 @@ The curation behaviour above lives in a **single editable rules file** (see impl
 
 **The one-paragraph theory:** the server never calls a Claude HTTP API directly, and no API key exists anywhere in it. It POSTs to a **self-hosted Hugging Face Space** that holds the owner's Claude subscription and proxies the call, streaming the answer back as Server-Sent Events. Every curation feature funnels through **one function** — `runJson()` in `server/src/services/claude.ts` — the single place the model is reached.
 
+> **This Space is shared, not TasteTrainer's own.** It's a generic relay — it knows nothing
+> about curation, prompts, or JSON shapes; all of that is built entirely in *this* project's
+> `server/src/services/claude.ts` and handed over as a finished `systemPrompt`/`prompt` pair.
+> That's what makes the Space itself reusable: any project that builds its own prompts can
+> share it. It currently also serves **IphoneClaude** (an unrelated personal iPhone chat app),
+> each with its own `x-app-secret` (TasteTrainer's is `HF_APP_SECRET` → the Space's
+> `APP_SHARED_SECRET`, the original/shared value).
+>
+> - **Source:** `../hf-space` (sibling folder, own git repo) — edit and push there, not here,
+>   for anything that isn't curation-prompt-specific (timeouts, models, new endpoints, adding
+>   a new caller).
+> - **Live URL:** `https://roanjtaylor-claudesubscription.hf.space` — visit `/` for the
+>   server's own landing page: current callers, env vars, and the OAuth token's real expiry.
+> - **To onboard a future project:** mint it its own secret and add it to the `CALLERS` list
+>   in the Space's `src/index.ts`, rather than reusing `HF_APP_SECRET` — so any one caller's
+>   secret can be rotated without breaking the others.
+
 ```
  ┌─────────────────────────────────────────────────────────────────────────┐
  │ BROWSER  (web/, React)                                                    │

@@ -30,6 +30,7 @@ import { NameEntry, RankerBadge } from '../components/NameEntry';
 import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
 import { BackToTop } from '../components/BackToTop';
+import { ResumeBanner } from '../components/ResumeBanner';
 import { ReviewCard } from './Curate';
 import { NavActions } from '../lib/navActions';
 
@@ -64,6 +65,11 @@ export function DatasetView() {
   const [resumeJob, setResumeJob] = useState<Job | null>(null);
   const [resumingJob, setResumingJob] = useState(false);
 
+  // The durable job (lib/jobs.ts) the current gap SWEEP came from (kind 'gaps' — not
+  // to be confused with GapPanel's own gap-fill job). Superseded, not deleted, by a
+  // fresh sweep: the old row's gaps are already replaced by the new ones on screen.
+  const gapsJobIdRef = useRef<string | null>(null);
+
   // The single active filter lives in the URL (?sub=… or ?era=start-end), so it's
   // shareable and the back button steps through filter states. The Filters subpage
   // sets it; the pill's × clears it. One axis at a time (decision 3).
@@ -94,8 +100,9 @@ export function DatasetView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ds, searchParams]);
 
-  // Same idea, for `?job=<id>` — a link from the ResumeBanner/Nav badge to a specific
-  // gap-fill job rather than a fresh sweep.
+  // Same idea, for `?job=<id>` — a link from the ResumeBanner/Nav badge to either kind
+  // of job this page can produce: a 'gaps' sweep (the coverage-gap list itself) or a
+  // 'gap-fill' research call (a proposal built from gaps already found).
   useEffect(() => {
     const jobId = searchParams.get('job');
     if (!ds || !jobId) return;
@@ -106,11 +113,11 @@ export function DatasetView() {
       },
       { replace: true },
     );
-    void resumeGapFillJob(jobId);
+    void resumeJobById(jobId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ds, searchParams]);
 
-  async function resumeGapFillJob(id: string) {
+  async function resumeJobById(id: string) {
     setResumingJob(true);
     setGapError('');
     try {
@@ -123,8 +130,17 @@ export function DatasetView() {
         setGapError(`Resumed job failed: ${job.error ?? 'unknown error'}`);
         return;
       }
-      const input = job.input as { gaps?: CoverageGap[]; count?: number };
       setMode('browse');
+      if (job.kind === 'gaps') {
+        const result = job.result as { gaps: CoverageGap[]; suggestedCount: number };
+        setGaps(result.gaps ?? []);
+        setGapSuggestedCount(result.suggestedCount ?? 8);
+        gapsJobIdRef.current = job.id;
+        return;
+      }
+      // 'gap-fill' — the sweep's gaps travelled in as its input, the proposal it built
+      // is handed to GapPanel via resumeJob.
+      const input = job.input as { gaps?: CoverageGap[]; count?: number };
       setGaps(input.gaps ?? []);
       setGapSuggestedCount(input.count ?? 8);
       setResumeJob(job);
@@ -159,6 +175,14 @@ export function DatasetView() {
       );
       setGaps(res.gaps);
       setGapSuggestedCount(res.suggestedCount);
+      if (res.jobId) {
+        // Superseding whatever sweep was tracked before — its gaps are already
+        // replaced by this one, so nothing is lost by forgetting it.
+        if (gapsJobIdRef.current && gapsJobIdRef.current !== res.jobId) {
+          api.deleteJob(gapsJobIdRef.current).catch(() => {});
+        }
+        gapsJobIdRef.current = res.jobId;
+      }
     } catch (e: any) {
       setGapError(e?.message ?? 'Gap analysis failed');
     } finally {
@@ -260,6 +284,12 @@ export function DatasetView() {
         </button>
       </NavActions>
 
+      {/* This field's own queued/finished review jobs — a 'gaps' sweep or a 'gap-fill'
+          research call started here and not yet acted on. Scoped to this dataset's
+          topic so it's still here (and resumable) after a refresh, without having to
+          go back to the world shelf (ResumeBanner also lives there, unscoped). */}
+      <ResumeBanner domain={ds.domain} topic={ds.topic} />
+
       {/* Active-filter read: a pill with × to clear. The count it used to sit beside now
           lives in the pinned title block, where it stays readable down the page. */}
       {filterLabel && (
@@ -284,7 +314,6 @@ export function DatasetView() {
           gaps={gaps}
           gapSuggestedCount={gapSuggestedCount}
           gapError={gapError}
-          loadingGaps={loadingGaps}
           resumeJob={resumeJob}
           resumingJob={resumingJob}
           onChanged={setDs}
@@ -305,7 +334,6 @@ function Browse({
   gaps,
   gapSuggestedCount,
   gapError,
-  loadingGaps,
   resumeJob,
   resumingJob,
   onChanged,
@@ -315,7 +343,6 @@ function Browse({
   gaps: CoverageGap[] | null;
   gapSuggestedCount: number;
   gapError: string;
-  loadingGaps: boolean;
   resumeJob: Job | null;
   resumingJob: boolean;
   onChanged: (ds: Dataset) => void;
@@ -342,16 +369,9 @@ function Browse({
 
   return (
     <div className="space-y-4">
-      {/* Visible the instant a sweep starts (including the auto-triggered one from the
-          world review's "Expand dataset →" link) — GapPanel itself renders nothing
-          until it has gaps or an error, which reads as "nothing happened" for however
-          long the Claude call takes. */}
-      {loadingGaps && !gaps && !gapError && (
-        <p className="flex items-center gap-2 text-sm text-[var(--color-muted)]">
-          <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]" />
-          Reviewing this field for gaps…
-        </p>
-      )}
+      {/* A sweep in progress (or the resume-from-job case below) is already announced
+          by the top-right task notification (lib/tasks.ts) — this used to duplicate
+          that with its own "Reviewing this field for gaps…" line. */}
       {resumingJob && (
         <p className="flex items-center gap-2 text-sm text-[var(--color-muted)]">
           <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]" />

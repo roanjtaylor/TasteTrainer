@@ -579,8 +579,18 @@ curationRouter.post('/gaps', async (req, res) => {
     eraGroups?: EraGroup[];
   };
   if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
+  const dom: Domain = normalizeDomain(domain);
 
-  const send = sse(res);
+  // Durable like /items and /gap-fill below — this is the third proposal-for-review
+  // call, and until now was the one exception: its result only ever lived in the
+  // live SSE stream, so a refresh mid-sweep (or after) lost the gap list outright,
+  // with no row in the resume banner to get it back from.
+  const job = await createJob({
+    id: newId(), domain: dom, kind: 'gaps', status: 'running',
+    title: `Review ${topic.trim()} for gaps`, input: req.body,
+    progress: '', result: null, error: null, createdAt: now(), updatedAt: now(),
+  });
+  const send = jobSend(res, job);
   try {
     const { gaps, suggestedCount } = await findGaps(
       {
@@ -588,12 +598,12 @@ curationRouter.post('/gaps', async (req, res) => {
         description: description?.trim() ?? '',
         subtopics: subtopics ?? [],
         items: items ?? [],
-        domain: normalizeDomain(domain),
+        domain: dom,
         eraGroups: eraGroups ?? [],
       },
       (line) => send('progress', { line }),
     );
-    send('done', { gaps, suggestedCount });
+    send('done', { gaps, suggestedCount, jobId: job.id });
   } catch (err: any) {
     send('error', { error: err?.message ?? 'Gap analysis failed' });
   }
