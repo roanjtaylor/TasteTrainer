@@ -27,6 +27,7 @@ import { ImagePicker } from '../components/ImagePicker';
 import { NameEntry, RankerBadge } from '../components/NameEntry';
 import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
+import { BackToTop } from '../components/BackToTop';
 import { ReviewCard } from './Curate';
 import { NavActions } from '../lib/navActions';
 
@@ -159,10 +160,17 @@ export function DatasetView() {
           losing. It's left-aligned in the margin beside the centred content column, so
           it sits alongside the grid rather than over it. Below md there's no margin to
           sit in, so it scrolls with the page like an ordinary heading. */}
-      <div className="md:fixed md:left-4 md:top-3 md:z-30 md:w-48 lg:w-60 xl:w-72">
-        <h1 className="serif truncate text-xl leading-tight">{ds.topic}</h1>
+      <div className="group relative md:fixed md:left-4 md:top-3 md:z-30 md:w-48 lg:w-60 xl:w-72">
+        <h1 className="serif truncate text-xl leading-tight" title={ds.description || undefined}>
+          {ds.topic}
+        </h1>
         {ds.description && (
-          <p className="truncate text-xs text-[var(--color-muted)]">{ds.description}</p>
+          <div
+            role="tooltip"
+            className="pointer-events-none invisible absolute left-0 top-full z-40 mt-1 w-64 rounded-md bg-black px-2.5 py-1.5 text-xs text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:visible group-hover:opacity-100"
+          >
+            {ds.description}
+          </div>
         )}
         <p className="truncate text-xs text-[var(--color-muted)]">
           {pool.length} of {ds.items.length} items{filterLabel ? ' in scope' : ''}
@@ -177,13 +185,6 @@ export function DatasetView() {
         >
           Filters
         </Link>
-        <button
-          onClick={whatsMissing}
-          disabled={loadingGaps || !ds}
-          className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)] disabled:opacity-40"
-        >
-          {loadingGaps ? gapProgress || 'Sweeping…' : 'Expand dataset'}
-        </button>
         <select
           value={mode}
           onChange={(e) => setMode(e.target.value as Mode)}
@@ -195,6 +196,13 @@ export function DatasetView() {
             </option>
           ))}
         </select>
+        <button
+          onClick={whatsMissing}
+          disabled={loadingGaps || !ds}
+          className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)] disabled:opacity-40"
+        >
+          {loadingGaps ? gapProgress || 'Sweeping…' : 'Review'}
+        </button>
       </NavActions>
 
       {/* Active-filter read: a pill with × to clear. The count it used to sit beside now
@@ -226,6 +234,8 @@ export function DatasetView() {
       )}
       {mode === 'rank' && <Rank datasetId={ds.id} scope={scope} poolSize={pool.length} />}
       {mode === 'leaderboard' && <Leaderboard datasetId={ds.id} scope={scope} />}
+
+      <BackToTop />
     </div>
   );
 }

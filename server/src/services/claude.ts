@@ -587,7 +587,7 @@ export async function reviewFieldMap(args: {
     ? `\n\nTHE MAP ALREADY EXISTS, AND IS SETTLED. Do not re-derive, rename, reorder or re-position the axes or regions below.\n\nAxes:\n- x: ${existingMap.axes.x.label} (${existingMap.axes.x.low} → ${existingMap.axes.x.high})\n- y: ${existingMap.axes.y.label} (${existingMap.axes.y.low} → ${existingMap.axes.y.high})\n\nRegions:\n${existingMap.regions.map((r) => `- ${r.name} — ${r.description}`).join('\n')}\n\nFor the map, return:\n5. "assignments" — one entry per field ABOVE and per field you list in "missingFields", giving the region it belongs to. "field" must match a topic exactly as written; "region" must be one of the region names above.\n6. "suggestions" — at most 4 changes to the map, or an empty array. Each is one of:\n   { "kind": "add-region", "why": string, "region": { "name": string, "description": string, "x": number, "y": number } }\n   { "kind": "move-field", "why": string, "field": "<an existing topic>", "toRegion": "<a region name>" }\n   { "kind": "rename-region", "why": string, "region": "<current region name>", "name": "<better name>" }\n\nLeave "axes" and "regions" out of your response entirely — they are settled.`
     : `\n\nTHIS WORLD HAS NO MAP YET — draw one (see the spatial-map rule). Return:\n5. "axes" — the two dimensions this whole world is best laid out on. Each has a "label" and a named "low" and "high" end. They must be concrete enough that any field in this world can be confidently placed on both.\n6. "regions" — the named areas of this world. Few, genuinely distinct, together covering it. Each needs a "name", a one-line "description", and an "x" and "y" between 0 and 1 giving where it sits on those two axes. Spread them out: regions that would sit in the same place probably want merging.\n7. "assignments" — one entry per field ABOVE and per field you list in "missingFields", giving the region it belongs to. "field" must match a topic exactly as written; "region" must be one of your region names.\n\nReturn "suggestions" as an empty array — there is no existing map to change.`;
 
-  const prompt = `${domainLine(domain)}\n\nThis is a WORLD-LEVEL review (see the field-map rule). Below is every field the user has built in this world, each with its description, item count, dated year span, and subtopic names. The items themselves are deliberately not included.\n\nFields built so far:\n${inventory}\n\nReview this collection AS A MAP OF THE WHOLE WORLD:\n1. "mapSummary" — one paragraph on how this world genuinely divides into fields, and what a complete map of it would look like.\n2. "missingFields" — fields of this world with no dataset yet. Give each a "topic" and "description" ready to start a new dataset with, plus "why" it matters. Favour the ones the user is least likely to have thought of.\n3. "boundaryIssues" — existing fields drawn wrong: "kind" is exactly one of "merge", "split", or "rename"; "fields" lists the existing topic name(s) involved, EXACTLY as written above; "proposal" is the concrete change; "why" is the reason. Return an empty array if the boundaries are sound.\n4. "thinFields" — existing fields that look under-built or skewed, judged only from the counts, spans and subtopics above. "topic" must match an existing field name exactly. Empty array if none.${mapBlock}\n\nReturn JSON of shape: { "mapSummary": string, "missingFields": [ { "topic": string, "description": string, "why": string } ], "boundaryIssues": [ { "kind": string, "fields": [string], "proposal": string, "why": string } ], "thinFields": [ { "topic": string, "detail": string } ], "axes": { "x": { "label": string, "low": string, "high": string }, "y": { "label": string, "low": string, "high": string } }, "regions": [ { "name": string, "description": string, "x": number, "y": number } ], "assignments": [ { "field": string, "region": string } ], "suggestions": [ ... ] }`;
+  const prompt = `${domainLine(domain)}\n\nThis is a WORLD-LEVEL review (see the field-map rule). Below is every field the user has built in this world, each with its description, item count, dated year span, and subtopic names. The items themselves are deliberately not included.\n\nFields built so far:\n${inventory}\n\nReview this collection AS A MAP OF THE WHOLE WORLD. Be concise everywhere below — this is a scan of the shelf, not an essay; short, direct sentences over paragraphs:\n1. "mapSummary" — 2-3 sentences on how this world genuinely divides into fields, and what a complete map of it would look like.\n2. "missingFields" — fields of this world with no dataset yet. Give each a "topic", a one-sentence "description" ready to start a new dataset with, and a one-sentence "why" it matters. Favour the ones the user is least likely to have thought of.\n3. "boundaryIssues" — existing fields drawn wrong: "kind" is exactly one of "merge", "split", or "rename"; "fields" lists the existing topic name(s) involved, EXACTLY as written above; "proposal" is the concrete change in one sentence; "why" is the reason in one sentence. Return an empty array if the boundaries are sound.\n4. "thinFields" — existing fields that look under-built or skewed, judged only from the counts, spans and subtopics above. "topic" must match an existing field name exactly. "detail" is one sentence, leading with the item count (e.g. "12 items across 6 subtopics..."). Empty array if none.${mapBlock}\n\nReturn JSON of shape: { "mapSummary": string, "missingFields": [ { "topic": string, "description": string, "why": string } ], "boundaryIssues": [ { "kind": string, "fields": [string], "proposal": string, "why": string } ], "thinFields": [ { "topic": string, "detail": string } ], "axes": { "x": { "label": string, "low": string, "high": string }, "y": { "label": string, "low": string, "high": string } }, "regions": [ { "name": string, "description": string, "x": number, "y": number } ], "assignments": [ { "field": string, "region": string } ], "suggestions": [ ... ] }`;
 
   const json = await runJson(system, prompt, {
     onProgress,
@@ -636,6 +636,17 @@ export async function reviewFieldMap(args: {
  * (routes/curation.ts) then carries the plan out: updating, creating and deleting
  * datasets as it requires.
  *
+ * Two Claude calls instead of one:
+ * 1. Shape — decide the resulting fields (topic/description/subtopics) with no item
+ *    list in the prompt and no item ids in the output. Small and fast regardless of
+ *    field size.
+ * 2. Classify — assign every item to one of those shaped fields, in batches run
+ *    concurrently. A single call that both plans the shape AND echoes back an id for
+ *    every one of a big field's items (226 items → timed out mid-stream even at an
+ *    8+ minute budget) scales output size with item count; batching keeps each call's
+ *    output — and its odds of tripping any timeout, ours or an upstream proxy's —
+ *    roughly constant no matter how large the field is.
+ *
  * Only fed the involved field(s)' items (id, name, subtopic, year) rather than their
  * full records — the same "reason about shape, not content" split as `findGaps` and
  * `reviewFieldMap`, and per-item ids are all the apply step needs back.
@@ -656,46 +667,129 @@ export async function planBoundaryFix(args: {
   const rules = await loadRules();
   const system = `You are the curation engine for TasteTrainer.\n\n${rules}\n\n${JSON_ONLY}`;
 
-  const fieldBlock = fields
+  // ---- Stage 1: shape ----
+  const shapeFieldBlock = fields
     .map((f) => {
       const subs = f.subtopics.map((s) => s.name).join(', ') || '(none)';
-      const items = f.items
-        .map((i) => `  - ${i.id}: ${i.name} [${i.subtopic || 'unfiled'}, ${i.year ?? '?'}]`)
-        .join('\n');
-      return `Field "${f.topic}" — ${f.description}\nSubtopics: ${subs}\nItems (${f.items.length}):\n${items || '  (none)'}`;
+      return `Field "${f.topic}" — ${f.description}\nSubtopics: ${subs}\n${f.items.length} items currently.`;
     })
     .join('\n\n');
 
-  const prompt = `${domainLine(domain)}\n\nA world-level review flagged a boundary problem between these existing field(s):\n\n${fieldBlock}\n\nProblem (kind: "${kind}"): ${proposal}\nReason: ${why}\n\nWork out the concrete result of applying this fix. Account for EVERY item id listed above exactly once across your "fields" — none may be dropped, none duplicated.\n\nReturn "fields", one entry per resulting field:\n- For a field that keeps one of the existing topics above (a rename, or the surviving side of a merge), set "sourceTopic" to that EXACT existing topic name.\n- For a brand-new field created by a split, set "sourceTopic" to "".\n- "topic" is the field's final name (same as sourceTopic when nothing is renamed).\n- "description" is its final description.\n- "subtopics" is its final canonical subtopic list.\n- "itemIds" lists which of the item ids above end up in this field.\n\nReturn JSON of shape: { "fields": [ { "sourceTopic": string, "topic": string, "description": string, "subtopics": [ { "name": string, "description": string } ], "itemIds": [string] } ], "note": string }\n\n"note" is one short sentence describing what you did, shown to the person who accepted this fix.`;
+  // Kind-specific line spelling out how the field COUNT must change, since a bare
+  // "decide the shape" prompt tends to read "split" as "clean up this field" and
+  // hand back the same one field, quietly dropping the carved-out piece instead of
+  // creating it — the fix is applied (items leave the source field) but the new
+  // field the proposal promised never gets created.
+  const kindLine =
+    kind === 'split'
+      ? `This is a SPLIT: the field(s) above must become MORE fields than were given — at least one brand-new field (sourceTopic: "") carved out of an existing one, in addition to the existing field(s) it was carved from (which you keep, with "sourceTopic" set to their exact existing name). Returning the same number of fields as were given is WRONG for a split — it means the carved-out material was described but never actually given a field of its own.`
+      : kind === 'merge'
+        ? `This is a MERGE: the field(s) above must become FEWER fields than were given — every item ends up under one surviving "sourceTopic", or a new combined name if you're renaming the result.`
+        : `This is a RENAME: the same field(s) as were given, just with corrected "topic"/"description"/"subtopics" — the field COUNT does not change.`;
 
-  const totalItems = fields.reduce((n, f) => n + f.items.length, 0);
-  const json = await runJson(system, prompt, {
+  const shapePrompt = `${domainLine(domain)}\n\nA world-level review flagged a boundary problem between these existing field(s):\n\n${shapeFieldBlock}\n\nProblem (kind: "${kind}"): ${proposal}\nReason: ${why}\n\n${kindLine}\n\nDecide the SHAPE of the fix only — which fields exist once it's applied. Do not assign items; that's done separately. Keep "description" and "note" to one concise sentence each — this is a mechanical plan, not prose.\n\nReturn "fields", one entry per resulting field:\n- For a field that keeps one of the existing topics above (a rename, or the surviving side of a merge), set "sourceTopic" to that EXACT existing topic name.\n- For a brand-new field created by a split, set "sourceTopic" to "".\n- "topic" is the field's final name (same as sourceTopic when nothing is renamed).\n- "description" is its final description, one sentence.\n- "subtopics" is its final canonical subtopic list, each with a one-sentence description.\n\nReturn JSON of shape: { "fields": [ { "sourceTopic": string, "topic": string, "description": string, "subtopics": [ { "name": string, "description": string } ] } ], "note": string }\n\n"note" is one short sentence describing what you did, shown to the person who accepted this fix.`;
+
+  const parseShape = (json: any): BoundaryFieldPlan[] =>
+    ((json.fields ?? []) as any[])
+      .filter((f) => f?.topic)
+      .map((f) => ({
+        sourceTopic: String(f.sourceTopic ?? '').trim(),
+        topic: String(f.topic).trim(),
+        description: String(f.description ?? '').trim(),
+        subtopics: (Array.isArray(f.subtopics) ? f.subtopics : [])
+          .filter((s: any) => s?.name)
+          .map((s: any) => ({
+            name: String(s.name).trim(),
+            description: String(s.description ?? '').trim(),
+          })),
+        itemIds: [] as string[],
+      }));
+
+  let shapeJson = await runJson(system, shapePrompt, {
     onProgress,
     count: { key: 'sourceTopic', noun: 'fields' },
-    timeoutMs: 90_000 + totalItems * 400,
+    timeoutMs: 90_000,
   });
+  let resultFields = parseShape(shapeJson);
 
-  const knownIds = new Set(fields.flatMap((f) => f.items.map((i) => i.id)));
-  const resultFields: BoundaryFieldPlan[] = ((json.fields ?? []) as any[])
-    .filter((f) => f?.topic)
-    .map((f) => ({
-      sourceTopic: String(f.sourceTopic ?? '').trim(),
-      topic: String(f.topic).trim(),
-      description: String(f.description ?? '').trim(),
-      subtopics: (Array.isArray(f.subtopics) ? f.subtopics : [])
-        .filter((s: any) => s?.name)
-        .map((s: any) => ({
-          name: String(s.name).trim(),
-          description: String(s.description ?? '').trim(),
-        })),
-      itemIds: (Array.isArray(f.itemIds) ? f.itemIds : [])
-        .map((id: unknown) => String(id))
-        .filter((id: string) => knownIds.has(id)),
-    }));
+  // A split that came back with no more fields than it started with didn't actually
+  // split anything — give the model one corrective pass naming exactly what it did
+  // wrong, rather than silently applying a "fix" that just deletes the material the
+  // proposal said should get its own field.
+  if (kind === 'split' && resultFields.length <= fields.length) {
+    onProgress?.('First pass didn’t split the field — asking again…');
+    const retryPrompt = `${shapePrompt}\n\nYour previous answer returned ${resultFields.length} field(s) for ${fields.length} given — the same as (or fewer than) what you started with, which means nothing was actually split out. Try again: the JSON must include at least one field with "sourceTopic": "" for the carved-out material, alongside the field(s) it came from.`;
+    const retryJson = await runJson(system, retryPrompt, {
+      onProgress,
+      count: { key: 'sourceTopic', noun: 'fields' },
+      timeoutMs: 90_000,
+    });
+    const retryFields = parseShape(retryJson);
+    if (retryFields.length > fields.length) {
+      shapeJson = retryJson;
+      resultFields = retryFields;
+    }
+  }
 
-  // Anything the model dropped stays exactly where it was — assigned back into a
-  // field carrying its original topic (creating one if every field it named was
-  // renamed away), so a slip in the plan can never quietly lose an item.
+  const note = typeof shapeJson.note === 'string' ? shapeJson.note.trim() : '';
+
+  // ---- Stage 2: classify, in concurrent batches ----
+  const targetTopics = new Set(resultFields.map((f) => f.topic));
+  const targetBlock = resultFields
+    .map(
+      (f) =>
+        `- "${f.topic}"${f.sourceTopic && f.sourceTopic !== f.topic ? ` (was "${f.sourceTopic}")` : ''}: ${f.description}\n  Subtopics: ${f.subtopics.map((s) => s.name).join(', ') || '(none)'}`,
+    )
+    .join('\n');
+
+  const allItems = fields.flatMap((f) => f.items.map((i) => ({ ...i, fieldTopic: f.topic })));
+  const CHUNK_SIZE = 40;
+  const chunks: (typeof allItems)[] = [];
+  for (let i = 0; i < allItems.length; i += CHUNK_SIZE) chunks.push(allItems.slice(i, i + CHUNK_SIZE));
+
+  if (targetTopics.size && chunks.length) {
+    let classified = 0;
+    const CONCURRENCY = 4;
+    let nextChunk = 0;
+    const runWorker = async () => {
+      while (nextChunk < chunks.length) {
+        const idx = nextChunk++;
+        const batch = chunks[idx];
+        const itemBlock = batch
+          .map((i) => `  - ${i.id}: ${i.name} [currently in "${i.fieldTopic}" / ${i.subtopic || 'unfiled'}, ${i.year ?? '?'}]`)
+          .join('\n');
+        const classifyPrompt = `${domainLine(domain)}\n\nThese fields are the result of a boundary fix (kind: "${kind}"): ${proposal}\n\nResulting fields to classify items into:\n${targetBlock}\n\nFor EACH of these items, decide which resulting field (by its EXACT "topic" name above) it belongs in:\n${itemBlock}\n\nReturn JSON of shape: { "assignments": [ { "id": string, "topic": string } ] } — one entry per item id above, every id accounted for exactly once.`;
+
+        const json = await runJson(system, classifyPrompt, {
+          onProgress: onProgress
+            ? (line) => onProgress(`Classifying items… batch ${idx + 1}/${chunks.length} — ${line}`)
+            : undefined,
+          count: { key: 'id', total: batch.length, noun: 'items' },
+          timeoutMs: 45_000 + batch.length * 1_200,
+        });
+
+        const byId = new Map<string, string>();
+        for (const a of (Array.isArray(json.assignments) ? json.assignments : []) as any[]) {
+          const id = String(a?.id ?? '');
+          const topic = String(a?.topic ?? '').trim();
+          if (id && targetTopics.has(topic)) byId.set(id, topic);
+        }
+        for (const it of batch) {
+          const topic = byId.get(it.id);
+          const home = topic ? resultFields.find((r) => r.topic === topic) : undefined;
+          home?.itemIds.push(it.id);
+        }
+        classified += batch.length;
+        onProgress?.(`Classifying items… ${Math.min(classified, allItems.length)} of ${allItems.length}`);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, runWorker));
+  }
+
+  // Anything left unclassified — a batch miss, or the shape stage returning no fields
+  // at all — stays exactly where it was: assigned back into a field carrying its
+  // original topic (creating one if every field it named was renamed away), so a slip
+  // anywhere in the plan can never quietly lose an item.
   const assigned = new Set(resultFields.flatMap((f) => f.itemIds));
   for (const f of fields) {
     for (const it of f.items) {
@@ -715,7 +809,7 @@ export async function planBoundaryFix(args: {
     }
   }
 
-  return { fields: resultFields, note: typeof json.note === 'string' ? json.note.trim() : '' };
+  return { fields: resultFields, note };
 }
 
 export async function fillGaps(args: {

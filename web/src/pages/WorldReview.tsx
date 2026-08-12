@@ -9,7 +9,7 @@ import {
   type WorldMap,
 } from '../../../shared/types';
 import { api } from '../lib/api';
-import { publishWorldMap, saveWorldMap, useWorldMap } from '../lib/data';
+import { publishBoundaryFix, publishWorldMap, saveWorldMap, useWorldMap } from '../lib/data';
 import { useDomain } from '../lib/domain';
 import { NavActions } from '../lib/navActions';
 
@@ -107,6 +107,11 @@ export function WorldReview() {
         { domain, kind: b.kind, fields: b.fields, proposal: b.proposal, why: b.why },
         (line) => setBoundaryProgress((s) => ({ ...s, [i]: line })),
       );
+      // The route writes datasets straight to storage, bypassing the saveDataset /
+      // createDataset / deleteDataset mutators that normally keep the shelf's cache in
+      // sync — without this, a field the fix carved out into a brand-new dataset is
+      // correct in the database but invisible on screen until the cache expires.
+      publishBoundaryFix(result);
       if (result.map) {
         publishWorldMap(domain, result.map);
         setMap(result.map);
@@ -210,35 +215,6 @@ export function WorldReview() {
           )}
 
           <Section
-            title="Fields you don't have yet"
-            note="The unknown-unknowns. These also sit on the map as dashed holes — each one starts a new dataset with its topic and description already filled in."
-            empty={
-              review.missingFields.length === 0
-                ? 'No obvious gaps — this map reads as complete.'
-                : null
-            }
-          >
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {review.missingFields.map((f) => (
-                <div
-                  key={f.topic}
-                  className="flex flex-col rounded-xl border border-dashed border-[var(--color-line)] bg-[var(--color-card)] p-5"
-                >
-                  <h3 className="serif text-xl leading-tight">{f.topic}</h3>
-                  <p className="mt-1 text-sm text-[var(--color-muted)]">{f.description}</p>
-                  <p className="mt-3 flex-1 text-sm leading-relaxed">{f.why}</p>
-                  <Link
-                    to={`/${domain}/new?topic=${encodeURIComponent(f.topic)}&description=${encodeURIComponent(f.description)}`}
-                    className="mt-4 self-start rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-sm text-white"
-                  >
-                    Curate this →
-                  </Link>
-                </div>
-              ))}
-            </div>
-          </Section>
-
-          <Section
             title="Boundaries drawn wrong"
             note="Fields that should merge, split, or be renamed. Accepting hands the fix to Claude, which works out the concrete result and applies it — there's no undo, so read the proposal first."
             empty={
@@ -248,7 +224,7 @@ export function WorldReview() {
             }
           >
             <div className="space-y-3">
-              {review.boundaryIssues.map((b, i) => (
+              {sortBySize(review.boundaryIssues, (b) => b.fields.length).map(({ item: b, i }) => (
                 <div
                   key={i}
                   className="rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-5"
@@ -297,7 +273,7 @@ export function WorldReview() {
             }
           >
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {review.thinFields.map((t) => (
+              {sortBySize(review.thinFields, (t) => itemCountOf(t.detail)).map(({ item: t }) => (
                 <div
                   key={t.topic}
                   className="flex flex-col rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-5"
@@ -318,10 +294,59 @@ export function WorldReview() {
               ))}
             </div>
           </Section>
+
+          <Section
+            title="Fields you don't have yet"
+            note="The unknown-unknowns. These also sit on the map as dashed holes — each one starts a new dataset with its topic and description already filled in."
+            empty={
+              review.missingFields.length === 0
+                ? 'No obvious gaps — this map reads as complete.'
+                : null
+            }
+          >
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {review.missingFields.map((f) => (
+                <div
+                  key={f.topic}
+                  className="flex flex-col rounded-xl border border-dashed border-[var(--color-line)] bg-[var(--color-card)] p-5"
+                >
+                  <h3 className="serif text-xl leading-tight">{f.topic}</h3>
+                  <p className="mt-1 text-sm text-[var(--color-muted)]">{f.description}</p>
+                  <p className="mt-3 flex-1 text-sm leading-relaxed">{f.why}</p>
+                  <Link
+                    to={`/${domain}/new?topic=${encodeURIComponent(f.topic)}&description=${encodeURIComponent(f.description)}`}
+                    className="mt-4 self-start rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-sm text-white"
+                  >
+                    Curate this →
+                  </Link>
+                </div>
+              ))}
+            </div>
+          </Section>
         </div>
       )}
     </div>
   );
+}
+
+/**
+ * Rank a list biggest-first by a caller-supplied size score, without losing each
+ * item's original index — `acceptBoundaryFix` and the busy/progress/error state
+ * for boundary issues are keyed by position in `review.boundaryIssues`, not by
+ * render order, so a plain `.sort()` on the array itself would scramble those keys.
+ * Ties keep their original relative order (stable).
+ */
+function sortBySize<T>(items: T[], size: (item: T) => number): Array<{ item: T; i: number }> {
+  return items
+    .map((item, i) => ({ item, i }))
+    .sort((a, b) => size(b.item) - size(a.item));
+}
+
+/** Pulls the leading item count out of a thin-field's one-line detail (e.g. "12 items
+ *  across 6 subtopics…" → 12), so those cards can be ranked biggest-first. Falls back
+ *  to 0 — sorted last — when the model didn't lead with a number. */
+function itemCountOf(detail: string): number {
+  return Number(detail.match(/\d+/)?.[0] ?? 0);
 }
 
 /** Plain English for a proposed change, resolving ids the user never sees. */

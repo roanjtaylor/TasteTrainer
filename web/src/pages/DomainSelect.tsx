@@ -21,10 +21,6 @@ export function DomainSelect() {
     <div className="mx-auto mt-8 max-w-3xl">
       <header className="mb-10 text-center">
         <h1 className="serif text-4xl">Which taste are you training?</h1>
-        <p className="mt-3 text-[var(--color-muted)]">
-          TasteTrainer splits into two worlds — the physical and the digital. Pick one to see its
-          fields.
-        </p>
       </header>
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
         {(['physical', 'digital'] as Domain[]).map((domain) => (

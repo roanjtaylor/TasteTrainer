@@ -287,50 +287,47 @@ export function layoutWorld(map: WorldMap, cards: MapCard[]): MapLayout {
     tiles,
   );
 
-  // Largest scale at which every region's cards flow inside its tile. Binary search
-  // rather than a formula: whether a set of pills fits a rectangle depends on how they
-  // wrap, which no closed form predicts. It is what makes the cards both shrink to fit
-  // a crowded world and grow to fill a roomy one.
-  let lo = MIN_SCALE;
-  let hi = MAX_SCALE;
-  let best: { scale: number; spots: Map<string, Array<{ x: number; y: number }>> } | null = null;
+  // Largest scale at which a region's own cards flow inside its own tile. Binary
+  // search rather than a formula: whether a set of pills fits a rectangle depends on
+  // how they wrap, which no closed form predicts. It is what makes the cards both
+  // shrink to fit a crowded region and grow to fill a roomy one.
+  //
+  // The scale is found per region rather than once globally: a shared scale is capped
+  // by whatever region is tightest, so a sparse region — a tile with room for one card
+  // where five would fit — was stuck at the crowded region's size and left mostly
+  // blank. Sizing each tile against its own content lets an empty region's cards grow
+  // all the way to MAX_SCALE instead of being held back by a busier one elsewhere on
+  // the map.
+  const bestScaleForRegion = (
+    tile: Rect,
+    members: MapCard[],
+  ): { scale: number; spots: Array<{ x: number; y: number }> } => {
+    if (!members.length) return { scale: MIN_SCALE, spots: [] };
 
-  const attempt = (scale: number) => {
-    const spots = new Map<string, Array<{ x: number; y: number }>>();
-    for (const region of map.regions) {
-      const members = ordered.get(region.id) ?? [];
-      if (!members.length) {
-        spots.set(region.id, []);
-        continue;
-      }
-      const tile = tiles.get(region.id);
-      if (!tile) return null;
-      const placed = flowInto(
-        tileInner(tile),
+    const inner = tileInner(tile);
+    const attempt = (scale: number) =>
+      flowInto(
+        inner,
         members.map((c) => ({ w: naturalWidth(c.title) * scale, h: CARD_H * scale })),
       );
-      if (!placed) return null;
-      spots.set(region.id, placed);
+
+    let lo = MIN_SCALE;
+    let hi = MAX_SCALE;
+    let best: { scale: number; spots: Array<{ x: number; y: number }> } | null = null;
+    for (let step = 0; step < 14; step++) {
+      const mid = (lo + hi) / 2;
+      const placed = attempt(mid);
+      if (placed) {
+        best = { scale: mid, spots: placed };
+        lo = mid;
+      } else {
+        hi = mid;
+      }
     }
-    return spots;
+    // Nothing fit even at the floor — take the floor anyway and let cards clamp.
+    // Better a cramped tile than a blank one.
+    return best ?? { scale: MIN_SCALE, spots: attempt(MIN_SCALE) ?? [] };
   };
-
-  for (let step = 0; step < 14; step++) {
-    const mid = (lo + hi) / 2;
-    const spots = attempt(mid);
-    if (spots) {
-      best = { scale: mid, spots };
-      lo = mid;
-    } else {
-      hi = mid;
-    }
-  }
-  // Nothing fit even at the floor — take the floor anyway and let cards clamp. Better
-  // a cramped map than a blank one.
-  if (!best) best = { scale: MIN_SCALE, spots: attempt(MIN_SCALE) ?? new Map() };
-
-  const scale = best.scale;
-  const cardH = CARD_H * scale;
 
   const laidOut: LaidOutCard[] = [];
   for (const region of map.regions) {
@@ -338,7 +335,8 @@ export function layoutWorld(map: WorldMap, cards: MapCard[]): MapLayout {
     const tile = tiles.get(region.id);
     if (!tile) continue;
     const inner = tileInner(tile);
-    const flowed = best.spots.get(region.id) ?? [];
+    const { scale, spots: flowed } = bestScaleForRegion(tile, members);
+    const cardH = CARD_H * scale;
 
     // Straight from the flow. Nothing can sit anywhere else, so there is no collision
     // pass any more: the flow's output is inside the tile and non-overlapping by

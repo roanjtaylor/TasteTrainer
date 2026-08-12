@@ -1,5 +1,12 @@
 import { slugifyTopic } from '../../../shared/types';
-import type { Dataset, DatasetSummary, Domain, Ranker, WorldMap } from '../../../shared/types';
+import type {
+  BoundaryFixResult,
+  Dataset,
+  DatasetSummary,
+  Domain,
+  Ranker,
+  WorldMap,
+} from '../../../shared/types';
 import { api } from './api';
 import type { ScopeQuery } from './api';
 import { cacheKeys, drop, prefetch, useCached, write, type CachedResource } from './store';
@@ -130,6 +137,26 @@ export async function deleteDataset(id: string, topic: string): Promise<void> {
   drop(cacheKeys.datasetListPrefix, { prefix: true });
   drop(cacheKeys.leaderboardPrefix(id), { prefix: true });
   drop(cacheKeys.rankers(id));
+}
+
+/**
+ * Sync the client cache after a boundary fix — the server route that backs it writes
+ * datasets directly via `storage.ts` rather than through the `saveDataset`/
+ * `createDataset`/`deleteDataset` mutators above, so none of their cache invalidation
+ * ran. Without this, a field carved out into a brand-new dataset (or one absorbed and
+ * deleted) is correct in Supabase the moment "Accept changes" resolves, but the shelf
+ * and map both keep serving their pre-fix `useDatasetList` cache — up to a minute old
+ * — so the new field looks like it was never created.
+ */
+export function publishBoundaryFix(result: BoundaryFixResult): void {
+  for (const ds of result.updated) {
+    publish(ds);
+    drop(cacheKeys.leaderboardPrefix(ds.id), { prefix: true });
+  }
+  for (const topic of result.deletedTopics) {
+    drop(cacheKeys.dataset(slugifyTopic(topic)));
+  }
+  drop(cacheKeys.datasetListPrefix, { prefix: true });
 }
 
 /** Record one choice. Every board for this dataset is now stale, including the
