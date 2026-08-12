@@ -9,7 +9,7 @@ import {
   proposeSubtopics,
   reviewFieldMap,
 } from '../services/claude.ts';
-import { wikimediaImage } from '../services/images.ts';
+import { searchImages, wikimediaImage } from '../services/images.ts';
 import { mapWithLimit, resolveDigitalImage } from '../services/imageResolvers.ts';
 import { canonicalSubtopic, cleanProposals } from '../services/itemHygiene.ts';
 import { mergeProposal, type MapField } from '../services/worldMap.ts';
@@ -64,7 +64,19 @@ async function attachImages(
 
   if (domain !== 'digital') {
     return mapWithLimit(proposed, IMAGE_CONCURRENCY, async (it) => {
-      const image = await wikimediaImage(it.wikipediaTitle ?? '');
+      // The Wikipedia lead is usually the right call — a genuine, attributable photo
+      // when the article exists — but the article is about the whole model line, not
+      // this item's specific year/reference, so a missing article (an obscure model,
+      // a specific vintage reference with no dedicated page) falls through to a
+      // search built from `imageQuery`: the specific-model-and-year phrase the model
+      // was asked for, rather than the bare name+brand, which returns whatever
+      // version of the thing is most photographed today.
+      let image = await wikimediaImage(it.wikipediaTitle ?? '');
+      if (!image) {
+        const query = it.imageQuery?.trim() || [it.name, it.brand, it.year].filter(Boolean).join(' ');
+        const hits = await searchImages(query, 1);
+        image = hits[0] ?? '';
+      }
       done += 1;
       send('progress', { line: `Fetching images… ${done} of ${proposed.length}` });
       return { ...it, image };

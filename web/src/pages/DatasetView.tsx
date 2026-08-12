@@ -24,6 +24,7 @@ import {
 import { useRanker } from '../lib/ranker';
 import { runTracked } from '../lib/tasks';
 import { eraOf, eraGroupsOf, decadesInRange, itemsInGroup } from '../lib/format';
+import { physicalImageQuery } from '../lib/image';
 import { ItemCard, Chip } from '../components/ItemCard';
 import { ImagePicker } from '../components/ImagePicker';
 import { NameEntry, RankerBadge } from '../components/NameEntry';
@@ -427,7 +428,7 @@ function Browse({
                   wikipediaTitle: editing.wikipediaTitle,
                   imageQuery: editing.imageQuery,
                 }
-              : { kind: 'search', query: `${editing.name} ${editing.brand}`.trim() }
+              : { kind: 'search', query: physicalImageQuery(editing) }
           }
           onPick={(url) => {
             // Hand-picked, so the recorded capture no longer describes this image.
@@ -782,10 +783,7 @@ function GapPanel({
                   wikipediaTitle: pending[pickerIndex].wikipediaTitle,
                   imageQuery: pending[pickerIndex].imageQuery,
                 }
-              : {
-                  kind: 'search',
-                  query: `${pending[pickerIndex].name} ${pending[pickerIndex].brand}`.trim(),
-                }
+              : { kind: 'search', query: physicalImageQuery(pending[pickerIndex]) }
           }
           onPick={(url) => {
             setPending(

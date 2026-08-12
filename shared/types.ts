@@ -186,6 +186,12 @@ export interface Item {
    * saved before they existed (inferImageKind falls back).
    */
   imageKind?: ImageKind;
+  /**
+   * A precise, search-engine phrase for finding a picture of THIS SPECIFIC item —
+   * not just its name/brand, but the specific model/variant and year, e.g. "Rolex
+   * Submariner ref. 5513 1965" rather than "Rolex Submariner". Both domains; absent
+   * on anything saved before this field existed.
+   */
   imageQuery?: string;
   wikipediaTitle?: string;
   createdAt: string;
@@ -331,10 +337,11 @@ export interface ProposedItem {
   /** Digital domain: which sourcing strategy this item needs. */
   imageKind?: ImageKind;
   /**
-   * Digital domain: a precise phrase to search image archives with, e.g.
-   * "Mac OS System 7 Finder desktop screenshot". Written for a search engine, not as
-   * a title — the item's own name is often too terse or too ambiguous to find a
-   * picture with ("Forms", "Search").
+   * Both domains: a precise phrase to search image archives with, e.g.
+   * "Mac OS System 7 Finder desktop screenshot" or "Rolex Submariner ref. 5513 1965".
+   * Written for a search engine, not as a title — the item's own name+brand is often
+   * too generic to find the SPECIFIC model/year/version pictured ("Forms", "Search",
+   * "Rolex Submariner" alone returns today's current model, not the one being shown).
    */
   imageQuery?: string;
   /** Resolved image URL (filled by the server's image step). "" => needs image. */

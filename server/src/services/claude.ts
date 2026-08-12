@@ -362,7 +362,13 @@ export async function proposePeriods(args: {
  *  lets the server choose a resolver that can actually succeed, and lets it try more
  *  than one. */
 function itemShapeLine(domain: Domain): string {
-  if (domain !== 'digital') return '"subtopic": string, "wikipediaTitle": string';
+  if (domain !== 'digital') {
+    return [
+      '"subtopic": string',
+      '"wikipediaTitle": string — the most likely English Wikipedia article title for this work, or "" if there plainly is none',
+      '"imageQuery": string — a precise phrase to find a picture of THIS EXACT item in an image search, naming the specific model/reference/generation AND the year, not just the brand or product line. A bare brand+name (e.g. "Rolex Submariner", "Ford Mustang") returns whatever the current/most-photographed version is, which is usually wrong for an older or specific item. Write e.g. "Rolex Submariner ref. 5513 1965", "Ford Mustang 1965 fastback", "Eames Lounge Chair 670 rosewood 1956" — brand, the specific model/reference/trim, and the year or generation, every time one is knowable',
+    ].join(', ');
+  }
   return [
     '"subtopic": string',
     '"imageKind": one of "archived-site" | "live-site" | "software-ui" | "artifact" — how a picture of this can actually be obtained:',
@@ -372,7 +378,7 @@ function itemShapeLine(domain: Domain): string {
     '    "artifact"      = a graphic work: an icon set, typeface, logo, poster, or a still from a motion piece',
     '"url": string — the canonical site address (e.g. "https://stripe.com"), ONLY for "archived-site"/"live-site". Use "" for the other two. NEVER a Wikipedia url',
     '"wikipediaTitle": string — the most likely English Wikipedia article title for this work, or "" if there plainly is none. Give this for EVERY item, including websites; it is the fallback when a capture fails',
-    '"imageQuery": string — a precise phrase to find a picture of this in an image archive, e.g. "Mac OS System 7 Finder desktop screenshot" or "Susan Kare original Macintosh icons". Write it for a search engine, not as a title',
+    '"imageQuery": string — a precise phrase to find a picture of THIS EXACT design/snapshot in an image archive, naming the specific version AND the year, e.g. "Mac OS System 7 Finder desktop screenshot 1991" or "Susan Kare original Macintosh icons 1984", not just "System 7" or "Macintosh icons". Write it for a search engine, not as a title — vague terms return whichever version is most photographed today, not the specific one this item represents',
     '("year" is the year THIS SPECIFIC design/snapshot represents, which may be a past redesign, not necessarily today\'s look)',
   ].join(', ');
 }

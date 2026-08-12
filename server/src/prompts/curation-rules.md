@@ -44,10 +44,18 @@ Core principle: **find what you don't know that you don't know.**
   name, description (one or two sentences on *why it's great / defining*), year,
   brand (company/maker — "" if none, e.g. a painting), creator (the individual designer/
   artist/architect — "" if not applicable), definingFact (a one-sentence notable fact),
-  subtopic (must be exactly one of the dataset's canonical subtopics), and wikipediaTitle
+  subtopic (must be exactly one of the dataset's canonical subtopics), wikipediaTitle
   (the most likely English Wikipedia article title, used to fetch an image — replaced by
-  `url` in the digital world, see (f)).
+  `url` in the digital world, see (f)), and imageQuery.
 - Be accurate. If unsure of a year, give your best estimate rather than null, unless truly unknown.
+- **`imageQuery` must be specific enough to find THIS exact item, not the product line in
+  general.** Name the specific model/reference/trim AND the year whenever they're knowable —
+  "Rolex Submariner ref. 5513 1965", not "Rolex Submariner"; "Ford Mustang 1965 fastback", not
+  "Ford Mustang". A bare brand+name search returns whatever version is most photographed
+  today, which for a decades-old item is very often the wrong one — a modern reissue, a later
+  facelift, or an unrelated generation entirely. `wikipediaTitle` names an article, which
+  usually covers a whole model line, not one year of it — `imageQuery` is what disambiguates
+  which specific one a picture should show.
 
 ## (e) Web-search policy
 - Use web search when recency or completeness is genuinely in doubt (cutting-edge or
@@ -115,8 +123,9 @@ space, so adjust (a) and (d) accordingly; (b) and (c) apply as-is.
   picture is found with when a capture fails or is impossible, so they matter most for
   exactly the historic work that is hardest to illustrate. `imageQuery` should be a phrase
   you would actually type into an image search to see this specific thing — "Mac OS System 7
-  Finder desktop screenshot", not "System 7". An item's own name is often too terse
-  ("Search", "Forms") to find anything with.
+  Finder desktop screenshot 1991", not "System 7". An item's own name is often too terse
+  ("Search", "Forms") to find anything with, and dropping the year returns whichever version
+  of that UI is most-photographed today, not the `year` this item is meant to show.
 
 - **Prefer the snapshot that actually survives.** When two products could represent the
   same early era, pick the older, simpler, server-rendered one. Pages from before roughly

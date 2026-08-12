@@ -11,6 +11,7 @@ import {
 import { api } from '../lib/api';
 import { createDataset, saveDataset } from '../lib/data';
 import { useDomain } from '../lib/domain';
+import { physicalImageQuery } from '../lib/image';
 import { runTracked } from '../lib/tasks';
 import { CaptureBadge, SourceTag } from '../components/CaptureBadge';
 import { CandidateStrip } from '../components/CandidateStrip';
@@ -414,7 +415,7 @@ export function Curate() {
                   wikipediaTitle: items[pickerIndex].wikipediaTitle,
                   imageQuery: items[pickerIndex].imageQuery,
                 }
-              : { kind: 'search', query: `${items[pickerIndex].name} ${items[pickerIndex].brand}`.trim() }
+              : { kind: 'search', query: physicalImageQuery(items[pickerIndex]) }
           }
           onPick={(url) => {
             // A hand-picked image is a deliberate choice, so the recorded capture no
