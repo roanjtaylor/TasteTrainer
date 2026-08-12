@@ -61,6 +61,16 @@ export function slugifyTopic(topic: string): string {
   return topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
 
+/**
+ * A dataset's name is a single word by design — "Watches", not "Wrist watches". Claude
+ * proposes these (missing-field gaps, boundary-fix renames) and people type them too, so
+ * this is the one place both get corrected: whichever word came first wins, silently,
+ * rather than failing a save over it.
+ */
+export function singleWordTopic(topic: string): string {
+  return topic.trim().split(/\s+/)[0] ?? '';
+}
+
 /** One canonical category within a macro topic (e.g. Watches -> "Mechanical Watches"). */
 export interface Subtopic {
   name: string;
@@ -516,4 +526,39 @@ export interface WorldMap {
 /** URL-safe, stable id for a region or ghost. Shared so the server and the map agree. */
 export function mapSlug(name: string): string {
   return slugifyTopic(name) || 'unnamed';
+}
+
+// ---- Background jobs ----
+//
+// A curation call that streams its progress and result over SSE (server/src/routes/
+// curation.ts) is durably tracked here too, alongside the live stream — the server is
+// a persistent process (render.yaml), so the call itself keeps running after the
+// browser disconnects; a job row is what lets its result survive to be reviewed in a
+// later session instead of only ever reaching a browser that's still connected.
+
+/** Which curation call a job wraps. Only calls that return a proposal for the user to
+ *  review (rather than writing straight to storage themselves, like the field-map
+ *  review or a boundary fix) need this. */
+export type JobKind = 'items' | 'gap-fill';
+
+export type JobStatus = 'running' | 'done' | 'error';
+
+export interface Job {
+  id: string;
+  domain: Domain;
+  kind: JobKind;
+  status: JobStatus;
+  /** Shown in the resume banner, e.g. "Expand Watches dataset". */
+  title: string;
+  /** The exact request body the call was started with — enough to resume the screen
+   *  it belongs to (and, for a gap-fill job, to re-derive which dataset it targets:
+   *  there is no stored dataset id, see `slugifyTopic` on `input.topic`). */
+  input: unknown;
+  /** The latest progress line — the same text the live SSE stream shows. */
+  progress: string;
+  /** The call's `done` payload, once `status` is 'done'. */
+  result: unknown | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
 }

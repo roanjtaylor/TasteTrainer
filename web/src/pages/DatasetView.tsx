@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { EVERYONE, slugifyTopic } from '../../../shared/types';
 import type {
@@ -7,6 +7,7 @@ import type {
   Domain,
   EraGroup,
   Item,
+  Job,
   LeaderboardRow,
   ProposedItem,
   RankerSummary,
@@ -21,6 +22,7 @@ import {
   vote as castVote,
 } from '../lib/data';
 import { useRanker } from '../lib/ranker';
+import { runTracked } from '../lib/tasks';
 import { eraOf, eraGroupsOf, decadesInRange, itemsInGroup } from '../lib/format';
 import { ItemCard, Chip } from '../components/ItemCard';
 import { ImagePicker } from '../components/ImagePicker';
@@ -52,9 +54,15 @@ export function DatasetView() {
 
   const [gaps, setGaps] = useState<CoverageGap[] | null>(null);
   const [loadingGaps, setLoadingGaps] = useState(false);
-  const [gapProgress, setGapProgress] = useState('');
   const [gapSuggestedCount, setGapSuggestedCount] = useState(8);
   const [gapError, setGapError] = useState('');
+
+  // Resuming a durable gap-fill job (lib/jobs.ts) landed on from the ResumeBanner/Nav
+  // badge — `?job=<id>` carries research that already finished (or is still running)
+  // in a previous session. Handed to GapPanel, which hydrates its review grid from it
+  // instead of requiring a fresh research() call.
+  const [resumeJob, setResumeJob] = useState<Job | null>(null);
+  const [resumingJob, setResumingJob] = useState(false);
 
   // The single active filter lives in the URL (?sub=… or ?era=start-end), so it's
   // shareable and the back button steps through filter states. The Filters subpage
@@ -77,29 +85,77 @@ export function DatasetView() {
       { replace: true },
     );
     whatsMissing();
+    // `searchParams` deliberately in the deps (not just `ds`): navigating here from
+    // another dataset's "Expand dataset →" link reuses this same route component
+    // (React Router doesn't remount on a param-only change), so `ds` may already be
+    // the loaded object and never "change" — without `searchParams` here, the effect
+    // would only fire on first mount and silently do nothing on a second visit. The
+    // `delete('expand')` above makes the re-run this triggers a no-op, so this can't loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ds]);
+  }, [ds, searchParams]);
+
+  // Same idea, for `?job=<id>` — a link from the ResumeBanner/Nav badge to a specific
+  // gap-fill job rather than a fresh sweep.
+  useEffect(() => {
+    const jobId = searchParams.get('job');
+    if (!ds || !jobId) return;
+    setSearchParams(
+      (p) => {
+        p.delete('job');
+        return p;
+      },
+      { replace: true },
+    );
+    void resumeGapFillJob(jobId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ds, searchParams]);
+
+  async function resumeGapFillJob(id: string) {
+    setResumingJob(true);
+    setGapError('');
+    try {
+      let job = await api.getJob(id);
+      while (job.status === 'running') {
+        await new Promise((r) => setTimeout(r, 5000));
+        job = await api.getJob(id);
+      }
+      if (job.status === 'error') {
+        setGapError(`Resumed job failed: ${job.error ?? 'unknown error'}`);
+        return;
+      }
+      const input = job.input as { gaps?: CoverageGap[]; count?: number };
+      setMode('browse');
+      setGaps(input.gaps ?? []);
+      setGapSuggestedCount(input.count ?? 8);
+      setResumeJob(job);
+    } catch (e: any) {
+      setGapError(e?.message ?? 'Could not resume this job');
+    } finally {
+      setResumingJob(false);
+    }
+  }
 
   async function whatsMissing() {
     if (!ds) return;
     setMode('browse');
     setLoadingGaps(true);
     setGaps(null);
-    setGapProgress('');
     setGapError('');
     try {
-      const res = await api.findGaps(
-        {
-          topic: ds.topic,
-          description: ds.description,
-          subtopics: ds.subtopics,
-          items: ds.items,
-          domain: ds.domain,
-          // Named periods go in so an era-shaped gap comes back named, matching what
-          // the Filters screen and the gap-fill call already speak in.
-          eraGroups: ds.eraGroups ?? [],
-        },
-        setGapProgress,
+      const res = await runTracked(`Review ${ds.topic} for gaps`, (onProgress) =>
+        api.findGaps(
+          {
+            topic: ds.topic,
+            description: ds.description,
+            subtopics: ds.subtopics,
+            items: ds.items,
+            domain: ds.domain,
+            // Named periods go in so an era-shaped gap comes back named, matching what
+            // the Filters screen and the gap-fill call already speak in.
+            eraGroups: ds.eraGroups ?? [],
+          },
+          onProgress,
+        ),
       );
       setGaps(res.gaps);
       setGapSuggestedCount(res.suggestedCount);
@@ -107,7 +163,6 @@ export function DatasetView() {
       setGapError(e?.message ?? 'Gap analysis failed');
     } finally {
       setLoadingGaps(false);
-      setGapProgress('');
     }
   }
 
@@ -201,7 +256,7 @@ export function DatasetView() {
           disabled={loadingGaps || !ds}
           className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)] disabled:opacity-40"
         >
-          {loadingGaps ? gapProgress || 'Sweeping…' : 'Review'}
+          {loadingGaps ? 'Sweeping…' : 'Review'}
         </button>
       </NavActions>
 
@@ -229,6 +284,9 @@ export function DatasetView() {
           gaps={gaps}
           gapSuggestedCount={gapSuggestedCount}
           gapError={gapError}
+          loadingGaps={loadingGaps}
+          resumeJob={resumeJob}
+          resumingJob={resumingJob}
           onChanged={setDs}
         />
       )}
@@ -247,6 +305,9 @@ function Browse({
   gaps,
   gapSuggestedCount,
   gapError,
+  loadingGaps,
+  resumeJob,
+  resumingJob,
   onChanged,
 }: {
   ds: Dataset;
@@ -254,6 +315,9 @@ function Browse({
   gaps: CoverageGap[] | null;
   gapSuggestedCount: number;
   gapError: string;
+  loadingGaps: boolean;
+  resumeJob: Job | null;
+  resumingJob: boolean;
   onChanged: (ds: Dataset) => void;
 }) {
   // Inline editing: `editing` holds a working copy of the item being edited; `picker`
@@ -278,7 +342,30 @@ function Browse({
 
   return (
     <div className="space-y-4">
-      <GapPanel ds={ds} gaps={gaps} suggestedCount={gapSuggestedCount} gapError={gapError} onChanged={onChanged} />
+      {/* Visible the instant a sweep starts (including the auto-triggered one from the
+          world review's "Expand dataset →" link) — GapPanel itself renders nothing
+          until it has gaps or an error, which reads as "nothing happened" for however
+          long the Claude call takes. */}
+      {loadingGaps && !gaps && !gapError && (
+        <p className="flex items-center gap-2 text-sm text-[var(--color-muted)]">
+          <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]" />
+          Reviewing this field for gaps…
+        </p>
+      )}
+      {resumingJob && (
+        <p className="flex items-center gap-2 text-sm text-[var(--color-muted)]">
+          <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]" />
+          Picking up saved research…
+        </p>
+      )}
+      <GapPanel
+        ds={ds}
+        gaps={gaps}
+        suggestedCount={gapSuggestedCount}
+        gapError={gapError}
+        resumeJob={resumeJob}
+        onChanged={onChanged}
+      />
 
       {pool.length === 0 ? (
         <p className="text-[var(--color-muted)]">No items in this scope.</p>
@@ -395,18 +482,19 @@ function GapPanel({
   gaps,
   suggestedCount,
   gapError,
+  resumeJob,
   onChanged,
 }: {
   ds: Dataset;
   gaps: CoverageGap[] | null;
   suggestedCount: number;
   gapError: string;
+  resumeJob: Job | null;
   onChanged: (ds: Dataset) => void;
 }) {
   const [count, setCount] = useState(suggestedCount);
   const [feedback, setFeedback] = useState('');
   const [researching, setResearching] = useState(false);
-  const [addProgress, setAddProgress] = useState('');
   const [note, setNote] = useState('');
   const [pending, setPending] = useState<ProposedItem[] | null>(null);
   // What the server had to correct in the batch. Shown rather than swallowed: a
@@ -420,28 +508,53 @@ function GapPanel({
   // Sync count when a new gap analysis completes with a fresh suggestion.
   useEffect(() => { setCount(suggestedCount); }, [suggestedCount]);
 
+  // The durable job (lib/jobs.ts) this review grid came from, live or resumed — a ref
+  // since nothing on screen needs to re-render off it. addToDataset()/Discard delete
+  // it: once the user has acted on the proposal, there's nothing left to resume.
+  const jobIdRef = useRef<string | null>(null);
+
+  // A `?job=<id>` link landed a finished proposal directly in `resumeJob` — hydrate
+  // the same state a fresh research() call would have set, no new Claude call needed.
+  useEffect(() => {
+    if (!resumeJob) return;
+    const result = resumeJob.result as {
+      items: ProposedItem[];
+      note: string;
+      duplicates: number;
+      unsetSubtopics: number;
+    };
+    setPending(result.items ?? []);
+    setNote(result.note ?? '');
+    setCorrections({
+      duplicates: result.duplicates ?? 0,
+      unsetSubtopics: result.unsetSubtopics ?? 0,
+    });
+    jobIdRef.current = resumeJob.id;
+  }, [resumeJob]);
+
   async function research() {
     setResearching(true);
-    setAddProgress('');
     setError('');
     setNote('');
     setPending(null);
     try {
-      const res = await api.fillGaps(
-        {
-          topic: ds.topic,
-          description: ds.description,
-          subtopics: ds.subtopics,
-          items: ds.items,
-          gaps: gaps ?? [],
-          count: Math.max(1, Math.min(50, count || 8)),
-          feedback,
-          domain: ds.domain,
-          // Named periods as context, so an added item's year lands inside a real
-          // era of the field and an era-shaped gap can be filled by name.
-          eraGroups: ds.eraGroups ?? [],
-        },
-        setAddProgress,
+      const res = await runTracked(`Expand ${ds.topic} dataset`, (onProgress) =>
+        api.fillGaps(
+          {
+            topic: ds.topic,
+            description: ds.description,
+            subtopics: ds.subtopics,
+            items: ds.items,
+            gaps: gaps ?? [],
+            count: Math.max(1, Math.min(50, count || 8)),
+            feedback,
+            domain: ds.domain,
+            // Named periods as context, so an added item's year lands inside a real
+            // era of the field and an era-shaped gap can be filled by name.
+            eraGroups: ds.eraGroups ?? [],
+          },
+          onProgress,
+        ),
       );
       setPending(res.items);
       setNote(res.note);
@@ -449,12 +562,26 @@ function GapPanel({
         duplicates: res.duplicates ?? 0,
         unsetSubtopics: res.unsetSubtopics ?? 0,
       });
+      if (res.jobId) {
+        // Superseding whatever was tracked before (a resumed job re-run, or a second
+        // live research() before the first was acted on) — its proposal is already
+        // replaced by this one, so nothing is lost by forgetting it.
+        if (jobIdRef.current && jobIdRef.current !== res.jobId) {
+          api.deleteJob(jobIdRef.current).catch(() => {});
+        }
+        jobIdRef.current = res.jobId;
+      }
     } catch (e: any) {
       setError(e?.message ?? 'Could not research additions');
     } finally {
       setResearching(false);
-      setAddProgress('');
     }
+  }
+
+  function forgetJob() {
+    if (!jobIdRef.current) return;
+    api.deleteJob(jobIdRef.current).catch(() => {});
+    jobIdRef.current = null;
   }
 
   async function addToDataset() {
@@ -464,10 +591,11 @@ function GapPanel({
     try {
       // Proposed items carry no id/createdAt; the server's PUT handler mints those
       // (toItem). The cast mirrors the curate expansion path's existingItems handling.
-      const updated = await saveDataset(ds.id, {
-        items: [...ds.items, ...(pending as unknown as Item[])],
-      });
+      const updated = await runTracked(`Save additions to ${ds.topic}`, () =>
+        saveDataset(ds.id, { items: [...ds.items, ...(pending as unknown as Item[])] }),
+      );
       onChanged(updated);
+      forgetJob();
       // Clear the sub-flow; keep the gaps visible so the user can sweep again or add more.
       setPending(null);
       setNote('');
@@ -536,7 +664,7 @@ function GapPanel({
                 disabled={busy}
                 className="rounded-full bg-[var(--color-accent)] px-5 py-2 text-sm text-white disabled:opacity-40"
               >
-                {researching ? addProgress || 'Researching…' : `Research ${count} to add →`}
+                {researching ? 'Researching…' : `Research ${count} to add →`}
               </button>
             </div>
             <p className="text-xs text-[var(--color-muted)]">
@@ -584,6 +712,7 @@ function GapPanel({
               </button>
               <button
                 onClick={() => {
+                  forgetJob();
                   setPending(null);
                   setNote('');
                   setCorrections({ duplicates: 0, unsetSubtopics: 0 });

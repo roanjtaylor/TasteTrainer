@@ -2,11 +2,12 @@ import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } from './config.ts';
 import { now } from './util.ts';
 import { cached, invalidate, invalidatePrefix, keys, put } from './cache.ts';
-import { normalizeDomain, rankerKeyOf, slugifyTopic } from '../../shared/types.ts';
+import { normalizeDomain, rankerKeyOf, singleWordTopic, slugifyTopic } from '../../shared/types.ts';
 import type {
   Dataset,
   DatasetSummary,
   Domain,
+  Job,
   Ranker,
   RankerSummary,
   ResultsFile,
@@ -106,6 +107,7 @@ async function readDatasetBy(column: 'id' | 'slug', value: string): Promise<Data
 export async function saveDataset(ds: Dataset, previousSlug?: string): Promise<Dataset> {
   ds.updatedAt = now();
   ds.domain = normalizeDomain(ds.domain);
+  ds.topic = singleWordTopic(ds.topic);
   const slug = slugifyTopic(ds.topic);
   const { error } = await supabase
     .from('taste_datasets')
@@ -270,4 +272,87 @@ export async function getAllRankings(datasetId: string): Promise<ResultsFile[]> 
     if (error) throw new Error(error.message);
     return (data ?? []).map((row: any) => row.data as ResultsFile).filter(Boolean);
   });
+}
+
+// ---- Background jobs (one row per long curation call — see shared/types.ts) ----
+//
+// Not cached: a job's whole point is to be read fresh (its status changes while it's
+// being watched), and job traffic is low-volume enough that a Supabase round trip on
+// every read is not worth the staleness risk a TTL cache would introduce here.
+
+const JOBS_MIGRATION_HINT =
+  'The taste_jobs table is missing. Run supabase/migrations/004_jobs.sql in the Supabase SQL editor.';
+
+/** A `running` job whose row hasn't been touched in this long is presumed dead — most
+ *  likely a server restart interrupted it mid-call — rather than shown as spinning
+ *  forever. Computed at read time, not written back: there is no background sweep, so
+ *  a job that outlives this window simply reads as failed from then on. */
+const STALE_RUNNING_MS = 20 * 60_000;
+
+function rowToJob(row: any): Job {
+  const job: Job = { id: row.id, domain: normalizeDomain(row.domain), status: row.status, ...row.data };
+  if (job.status === 'running' && Date.now() - new Date(job.updatedAt).getTime() > STALE_RUNNING_MS) {
+    return { ...job, status: 'error', error: 'No update in over 20 minutes — probably interrupted by a restart.' };
+  }
+  return job;
+}
+
+export async function createJob(job: Job): Promise<Job> {
+  const { id, domain, status, ...data } = job;
+  const { error } = await supabase
+    .from('taste_jobs')
+    .insert({ id, domain, status, data, updated_at: job.updatedAt });
+  if (missingRelation(error)) throw new Error(JOBS_MIGRATION_HINT);
+  if (error) throw new Error(error.message);
+  return job;
+}
+
+/** Merge `patch` into a job's stored `data` and bump `status`/`updated_at`. A no-op,
+ *  not an error, if the row is already gone — the job's owner dismissed it on
+ *  purpose, and the call producing this update has no way to know that, or need to. */
+export async function updateJob(
+  id: string,
+  patch: Partial<Pick<Job, 'status' | 'progress' | 'result' | 'error'>>,
+): Promise<void> {
+  const { data: row, error: readErr } = await supabase
+    .from('taste_jobs')
+    .select('data, status')
+    .eq('id', id)
+    .maybeSingle();
+  if (missingRelation(readErr)) throw new Error(JOBS_MIGRATION_HINT);
+  if (readErr) throw new Error(readErr.message);
+  if (!row) return;
+
+  const nextStatus = patch.status ?? row.status;
+  const nextData = { ...row.data, ...patch, updatedAt: now() };
+  delete (nextData as any).status;
+  const { error } = await supabase
+    .from('taste_jobs')
+    .update({ status: nextStatus, data: nextData, updated_at: nextData.updatedAt })
+    .eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+export async function getJob(id: string): Promise<Job | null> {
+  const { data, error } = await supabase.from('taste_jobs').select('*').eq('id', id).maybeSingle();
+  if (missingRelation(error)) throw new Error(JOBS_MIGRATION_HINT);
+  if (error) throw new Error(error.message);
+  return data ? rowToJob(data) : null;
+}
+
+/** Every job, or one domain's — unscoped so a global "N waiting" indicator can query
+ *  both worlds in a single call. Newest first, same convention as `listDatasets`. */
+export async function listJobs(domain?: Domain): Promise<Job[]> {
+  let query = supabase.from('taste_jobs').select('*').order('updated_at', { ascending: false });
+  if (domain) query = query.eq('domain', domain);
+  const { data, error } = await query;
+  if (missingRelation(error)) return [];
+  if (error) throw new Error(error.message);
+  return (data ?? []).map(rowToJob);
+}
+
+export async function deleteJob(id: string): Promise<void> {
+  const { error } = await supabase.from('taste_jobs').delete().eq('id', id);
+  if (missingRelation(error)) return;
+  if (error) throw new Error(error.message);
 }

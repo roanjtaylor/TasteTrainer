@@ -2,6 +2,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { DOMAIN_LABELS, slugifyTopic } from '../../../shared/types';
 import { useDomain } from '../lib/domain';
 import { useDatasetList } from '../lib/data';
+import { useJobs } from '../lib/jobs';
 import { useRanker } from '../lib/ranker';
 import { NavActionsSlot } from '../lib/navActions';
 
@@ -19,6 +20,10 @@ export function Nav() {
   const { pathname } = useLocation();
   const domain = useDomain();
   const { ranker, release } = useRanker();
+  // Unscoped (both worlds) — a domain-scoped ResumeBanner alone would be invisible
+  // while browsing the other world, a dataset, or the review screen, and this is the
+  // one component mounted on every one of them.
+  const { jobs } = useJobs();
   // Only to turn a slug in the URL back into the field's real name. Cached and
   // usually already warm, since you nearly always arrive at a field from the shelf.
   const { data: datasets } = useDatasetList(domain);
@@ -80,6 +85,22 @@ export function Nav() {
             );
           })}
         </div>
+
+        {/* AI work done (or still running) that nobody stuck around to review — the
+            full list per world lives in ResumeBanner on the shelf; this is just
+            "something's waiting" visible from wherever you currently are. */}
+        {jobs.length > 0 && (
+          <>
+            <span className="mx-1 h-5 w-px shrink-0 bg-[var(--color-line)]" />
+            <Link
+              to="/"
+              title="AI work waiting to be reviewed"
+              className="shrink-0 whitespace-nowrap rounded-full bg-[var(--color-accent)]/10 px-3 py-1.5 text-xs text-[var(--color-accent)] hover:bg-[var(--color-accent)]/20"
+            >
+              {jobs.length} waiting
+            </Link>
+          </>
+        )}
 
         {/* Whose scores the next vote lands on. Click to hand the cabinet over. */}
         {ranker && (

@@ -25,6 +25,7 @@ import compression from 'compression';
 import { PORT } from './config.ts';
 import { datasetsRouter } from './routes/datasets.ts';
 import { curationRouter } from './routes/curation.ts';
+import { jobsRouter } from './routes/jobs.ts';
 import { imagesRouter } from './routes/images.ts';
 import { comparisonRouter } from './routes/comparison.ts';
 import { mapRouter } from './routes/map.ts';
@@ -61,6 +62,9 @@ app.set('etag', 'strong');
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 app.use('/api/datasets', datasetsRouter);
+// More specific prefix first — Express matches middleware in registration order, and
+// /api/curation would otherwise swallow every /api/curation/jobs request itself.
+app.use('/api/curation/jobs', jobsRouter);
 app.use('/api/curation', curationRouter);
 app.use('/api/images', imagesRouter);
 app.use('/api/comparison', comparisonRouter);

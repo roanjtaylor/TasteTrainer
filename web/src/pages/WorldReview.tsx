@@ -12,6 +12,8 @@ import { api } from '../lib/api';
 import { publishBoundaryFix, publishWorldMap, saveWorldMap, useWorldMap } from '../lib/data';
 import { useDomain } from '../lib/domain';
 import { NavActions } from '../lib/navActions';
+import { runTracked } from '../lib/tasks';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 
 // The world review (8-field-map.md) — the level above "what's missing?".
 //
@@ -29,9 +31,16 @@ export function WorldReview() {
   const domain = useDomain();
   const { data: map, set: setMap } = useWorldMap(domain);
   const [review, setReview] = useState<FieldMapReview | null>(null);
-  const [progress, setProgress] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // The one confirm() stand-in this screen needs at a time — redrawing the map, or
+  // (below) applying a boundary fix. Never both, so a single slot is enough.
+  const [confirming, setConfirming] = useState<null | {
+    title: string;
+    body: string;
+    confirmLabel: string;
+    onConfirm: () => void;
+  }>(null);
 
   // The prose half of the last review is durable on the map (`lastReview`) so it
   // survives a reload. Only backfills an empty `review` — a fresh check() below sets
@@ -42,23 +51,17 @@ export function WorldReview() {
 
   if (!domain) return <Navigate to="/" replace />;
 
-  async function check(redraw = false) {
+  async function runCheck(redraw: boolean) {
     if (!domain) return;
-    if (
-      redraw &&
-      !confirm(
-        "Redraw this world's map from scratch?\n\nThe axes, the regions, and everywhere you've " +
-          'moved a card will be replaced. Your datasets are not affected.',
-      )
-    ) {
-      return;
-    }
     setBusy(true);
     setError('');
-    setProgress('');
     setReview(null);
+    const label = DOMAIN_LABELS[domain].short;
     try {
-      const { map: nextMap, ...result } = await api.reviewFieldMap(domain, setProgress, redraw);
+      const { map: nextMap, ...result } = await runTracked(
+        redraw ? `Redraw the ${label.toLowerCase()} map` : `Review the ${label.toLowerCase()} world`,
+        (onProgress) => api.reviewFieldMap(domain, onProgress, redraw),
+      );
       setReview(result);
       publishWorldMap(domain, nextMap);
       setMap(nextMap);
@@ -66,8 +69,26 @@ export function WorldReview() {
       setError(e?.message ?? 'Review failed');
     } finally {
       setBusy(false);
-      setProgress('');
     }
+  }
+
+  function check(redraw = false) {
+    if (!domain) return;
+    if (redraw) {
+      setConfirming({
+        title: 'Redraw this map from scratch?',
+        body:
+          "The axes, the regions, and everywhere you've moved a card will be replaced. Your " +
+          'datasets are not affected.',
+        confirmLabel: 'Redraw',
+        onConfirm: () => {
+          setConfirming(null);
+          runCheck(true);
+        },
+      });
+      return;
+    }
+    runCheck(false);
   }
 
   async function resolve(suggestion: MapSuggestion, accept: boolean) {
@@ -87,25 +108,33 @@ export function WorldReview() {
   // Per-card state, keyed by the boundary issue's index — several of these can sit on
   // screen at once and each runs its own Claude call independently.
   const [boundaryBusy, setBoundaryBusy] = useState<Record<number, boolean>>({});
-  const [boundaryProgress, setBoundaryProgress] = useState<Record<number, string>>({});
   const [boundaryError, setBoundaryError] = useState<Record<number, string>>({});
 
-  async function acceptBoundaryFix(i: number, b: BoundaryIssue) {
+  function acceptBoundaryFix(i: number, b: BoundaryIssue) {
     if (!domain) return;
-    if (
-      !confirm(
-        `Apply this fix?\n\n${b.proposal}\n\nClaude will work out the concrete change and carry ` +
-          "it out directly — this can rename, split or delete datasets, and there's no undo.",
-      )
-    ) {
-      return;
-    }
+    setConfirming({
+      title: 'Apply this fix?',
+      body:
+        `${b.proposal}\n\nClaude will work out the concrete change and carry it out directly — ` +
+        "this can rename, split or delete datasets, and there's no undo.",
+      confirmLabel: 'Apply',
+      onConfirm: () => {
+        setConfirming(null);
+        runBoundaryFix(i, b);
+      },
+    });
+  }
+
+  async function runBoundaryFix(i: number, b: BoundaryIssue) {
+    if (!domain) return;
     setBoundaryBusy((s) => ({ ...s, [i]: true }));
     setBoundaryError((s) => ({ ...s, [i]: '' }));
     try {
-      const result = await api.applyBoundaryFix(
-        { domain, kind: b.kind, fields: b.fields, proposal: b.proposal, why: b.why },
-        (line) => setBoundaryProgress((s) => ({ ...s, [i]: line })),
+      const result = await runTracked(`Fix: ${b.proposal}`, (onProgress) =>
+        api.applyBoundaryFix(
+          { domain, kind: b.kind, fields: b.fields, proposal: b.proposal, why: b.why },
+          onProgress,
+        ),
       );
       // The route writes datasets straight to storage, bypassing the saveDataset /
       // createDataset / deleteDataset mutators that normally keep the shelf's cache in
@@ -124,7 +153,6 @@ export function WorldReview() {
       setBoundaryError((s) => ({ ...s, [i]: e?.message ?? 'Could not apply this fix' }));
     } finally {
       setBoundaryBusy((s) => ({ ...s, [i]: false }));
-      setBoundaryProgress((s) => ({ ...s, [i]: '' }));
     }
   }
 
@@ -133,13 +161,6 @@ export function WorldReview() {
   return (
     <div className="space-y-8">
       <NavActions>
-        <button
-          onClick={() => check(false)}
-          disabled={busy}
-          className="rounded-full bg-[var(--color-ink)] px-4 py-1.5 text-sm text-[var(--color-wall)] disabled:opacity-40"
-        >
-          {busy ? progress || 'Reviewing…' : hasMap ? 'Review again' : 'Check this world →'}
-        </button>
         {hasMap && !busy && (
           <button
             onClick={() => check(true)}
@@ -149,6 +170,13 @@ export function WorldReview() {
             Redraw from scratch
           </button>
         )}
+        <button
+          onClick={() => check(false)}
+          disabled={busy}
+          className="rounded-full bg-[var(--color-ink)] px-4 py-1.5 text-sm text-[var(--color-wall)] disabled:opacity-40"
+        >
+          {busy ? 'Reviewing…' : hasMap ? 'Review again' : 'Check this world →'}
+        </button>
       </NavActions>
 
       <header className="mt-4">
@@ -157,8 +185,7 @@ export function WorldReview() {
         </h1>
         {busy && (
           <p className="mt-2 text-sm text-[var(--color-muted)]">
-            A first draw of a well-stocked world takes a few minutes — it's writing the whole
-            map in one pass. The button above keeps moving while it works.
+            A first draw of a well-stocked world can take a few minutes.
           </p>
         )}
       </header>
@@ -169,8 +196,8 @@ export function WorldReview() {
           deal with them, so closing the tab mid-decision doesn't lose them. */}
       {map && map.suggestions.length > 0 && (
         <Section
-          title="Changes to the map"
-          note="Accepting one edits the map on the shelf. Nothing changes until you say so."
+          title="Map Edits"
+          note="Accepting one edits the map on the shelf — nothing changes until you say so."
           empty={null}
         >
           <div className="space-y-3">
@@ -203,7 +230,6 @@ export function WorldReview() {
         </Section>
       )}
 
-      {map && hasMap && <MapSettings domain={domain} map={map} onChanged={setMap} />}
 
       {review && (
         <div className="space-y-10">
@@ -215,89 +241,87 @@ export function WorldReview() {
           )}
 
           <Section
-            title="Boundaries drawn wrong"
-            note="Fields that should merge, split, or be renamed. Accepting hands the fix to Claude, which works out the concrete result and applies it — there's no undo, so read the proposal first."
+            title="Dataset Edits"
+            note="Existing fields that break a rule — naming, boundaries, or thinness — with a fix Claude applies directly, so read before accepting."
             empty={
-              review.boundaryIssues.length === 0
-                ? 'The boundaries between your fields look sound.'
+              review.boundaryIssues.length === 0 && review.thinFields.length === 0
+                ? 'Every existing field looks sound and reasonably built out.'
                 : null
             }
           >
-            <div className="space-y-3">
-              {sortBySize(review.boundaryIssues, (b) => b.fields.length).map(({ item: b, i }) => (
-                <div
-                  key={i}
-                  className="rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-5"
-                >
-                  <div className="flex flex-wrap items-baseline gap-3">
-                    <span className="rounded-full bg-[var(--color-wall-soft)] px-3 py-0.5 text-xs uppercase tracking-wider text-[var(--color-muted)]">
-                      {b.kind}
-                    </span>
-                    <span className="serif text-lg">{b.fields.join(' + ')}</span>
-                  </div>
-                  <p className="mt-2">{b.proposal}</p>
-                  <p className="mt-1 text-sm text-[var(--color-muted)]">{b.why}</p>
-                  {boundaryError[i] && (
-                    <p className="mt-2 text-sm text-[var(--color-accent)]">{boundaryError[i]}</p>
-                  )}
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <button
-                      onClick={() => acceptBoundaryFix(i, b)}
-                      disabled={!!boundaryBusy[i]}
-                      className="rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-sm text-white disabled:opacity-40"
+            <div className="space-y-6">
+              {review.boundaryIssues.length > 0 && (
+                <div className="space-y-3">
+                  {sortBySize(review.boundaryIssues, (b) => b.fields.length).map(({ item: b, i }) => (
+                    <div
+                      key={i}
+                      className="rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-5"
                     >
-                      {boundaryBusy[i] ? boundaryProgress[i] || 'Applying…' : 'Accept changes'}
-                    </button>
-                    {/* A way to go look before committing, or to make the change by
-                        hand instead of trusting the automated plan. */}
-                    {b.fields.map((f) => (
-                      <Link
-                        key={f}
-                        to={`/${domain}/${slugifyTopic(f)}`}
-                        className="rounded-full border border-[var(--color-line)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
-                      >
-                        Open {f} →
+                      <div className="flex flex-wrap items-baseline gap-3">
+                        <span className="rounded-full bg-[var(--color-wall-soft)] px-3 py-0.5 text-xs uppercase tracking-wider text-[var(--color-muted)]">
+                          {b.kind}
+                        </span>
+                        <span className="serif text-lg">{b.fields.join(' + ')}</span>
+                      </div>
+                      <p className="mt-2">{b.proposal}</p>
+                      <p className="mt-1 text-sm text-[var(--color-muted)]">{b.why}</p>
+                      {boundaryError[i] && (
+                        <p className="mt-2 text-sm text-[var(--color-accent)]">{boundaryError[i]}</p>
+                      )}
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={() => acceptBoundaryFix(i, b)}
+                          disabled={!!boundaryBusy[i]}
+                          className="rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-sm text-white disabled:opacity-40"
+                        >
+                          {boundaryBusy[i] ? 'Applying…' : 'Accept changes'}
+                        </button>
+                        {/* A way to go look before committing, or to make the change by
+                            hand instead of trusting the automated plan. */}
+                        {b.fields.map((f) => (
+                          <Link
+                            key={f}
+                            to={`/${domain}/${slugifyTopic(f)}`}
+                            className="rounded-full border border-[var(--color-line)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
+                          >
+                            Open {f} →
+                          </Link>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {review.thinFields.length > 0 && (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  {sortBySize(review.thinFields, (t) => itemCountOf(t.detail)).map(({ item: t }) => (
+                    <div
+                      key={t.topic}
+                      className="flex flex-col rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-5"
+                    >
+                      <Link to={`/${domain}/${slugifyTopic(t.topic)}`} className="hover:underline">
+                        <h3 className="serif text-lg leading-tight">{t.topic}</h3>
                       </Link>
-                    ))}
-                  </div>
+                      <p className="mt-1 flex-1 text-sm text-[var(--color-muted)]">{t.detail}</p>
+                      {/* Jumps straight to the field with its gap sweep already running —
+                          the item-level pass this card's own judgement can't replace. */}
+                      <Link
+                        to={`/${domain}/${slugifyTopic(t.topic)}?expand=1`}
+                        className="mt-4 self-start rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-sm text-white"
+                      >
+                        Expand dataset →
+                      </Link>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
             </div>
           </Section>
 
           <Section
-            title="Fields that look thin"
-            note="Judged from item counts, subtopics and year spans only."
-            empty={
-              review.thinFields.length === 0 ? 'Every field looks reasonably built out.' : null
-            }
-          >
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {sortBySize(review.thinFields, (t) => itemCountOf(t.detail)).map(({ item: t }) => (
-                <div
-                  key={t.topic}
-                  className="flex flex-col rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-5"
-                >
-                  <Link to={`/${domain}/${slugifyTopic(t.topic)}`} className="hover:underline">
-                    <h3 className="serif text-lg leading-tight">{t.topic}</h3>
-                  </Link>
-                  <p className="mt-1 flex-1 text-sm text-[var(--color-muted)]">{t.detail}</p>
-                  {/* Jumps straight to the field with its gap sweep already running —
-                      the item-level pass this card's own judgement can't replace. */}
-                  <Link
-                    to={`/${domain}/${slugifyTopic(t.topic)}?expand=1`}
-                    className="mt-4 self-start rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-sm text-white"
-                  >
-                    Expand dataset →
-                  </Link>
-                </div>
-              ))}
-            </div>
-          </Section>
-
-          <Section
-            title="Fields you don't have yet"
-            note="The unknown-unknowns. These also sit on the map as dashed holes — each one starts a new dataset with its topic and description already filled in."
+            title="Dataset Additions"
+            note="Fields you don't have yet, shown as dashed holes on the map — each one starts a new dataset ready to curate."
             empty={
               review.missingFields.length === 0
                 ? 'No obvious gaps — this map reads as complete.'
@@ -324,6 +348,16 @@ export function WorldReview() {
             </div>
           </Section>
         </div>
+      )}
+
+      {confirming && (
+        <ConfirmDialog
+          title={confirming.title}
+          body={confirming.body}
+          confirmLabel={confirming.confirmLabel}
+          onConfirm={confirming.onConfirm}
+          onCancel={() => setConfirming(null)}
+        />
       )}
     </div>
   );
@@ -360,107 +394,6 @@ function describe(s: MapSuggestion, map: WorldMap): string {
     case 'rename-region':
       return `Rename ${regionName(s.regionId)} to ${s.name}`;
   }
-}
-
-/**
- * The map's own words, editable.
- *
- * Axes and region names are the labels you read the whole map through, and the model
- * only gets one attempt at them (they're settled after the first review, by design).
- * So they're plain text inputs: if Claude's first pass at "what are the two dimensions
- * of the digital world" is weak, you fix it here rather than re-rolling the map.
- */
-function MapSettings({
-  domain,
-  map,
-  onChanged,
-}: {
-  domain: 'physical' | 'digital';
-  map: WorldMap;
-  onChanged: (map: WorldMap) => void;
-}) {
-  const [axes, setAxes] = useState(map.axes);
-  const [names, setNames] = useState<Record<string, string>>(() =>
-    Object.fromEntries(map.regions.map((r) => [r.id, r.name])),
-  );
-  const [saving, setSaving] = useState(false);
-  const [open, setOpen] = useState(false);
-
-  const dirty =
-    JSON.stringify(axes) !== JSON.stringify(map.axes) ||
-    map.regions.some((r) => names[r.id]?.trim() && names[r.id].trim() !== r.name);
-
-  async function save() {
-    setSaving(true);
-    try {
-      onChanged(await saveWorldMap(domain, { axes, regionNames: names }));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <section className="rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-5">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-baseline justify-between gap-3 text-left"
-      >
-        <span className="serif text-2xl">The map's labels</span>
-        <span className="text-sm text-[var(--color-muted)]">{open ? 'Hide' : 'Edit'}</span>
-      </button>
-
-      {open && (
-        <div className="mt-4 space-y-5">
-          <p className="text-sm text-[var(--color-muted)]">
-            The two dimensions this world is laid out on, and the names of its regions. Claude
-            proposes these once and then leaves them alone — so this is where you correct them.
-          </p>
-
-          {(['x', 'y'] as const).map((k) => (
-            <div key={k} className="grid gap-2 sm:grid-cols-3">
-              {(['label', 'low', 'high'] as const).map((part) => (
-                <label key={part} className="block">
-                  <span className="text-xs uppercase tracking-wider text-[var(--color-muted)]">
-                    {k === 'x' ? 'Across' : 'Up'} · {part === 'label' ? 'name' : part}
-                  </span>
-                  <input
-                    className="mt-1 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-1.5 text-sm"
-                    value={axes[k][part]}
-                    onChange={(e) =>
-                      setAxes((a) => ({ ...a, [k]: { ...a[k], [part]: e.target.value } }))
-                    }
-                  />
-                </label>
-              ))}
-            </div>
-          ))}
-
-          <div className="grid gap-2 sm:grid-cols-2">
-            {map.regions.map((r) => (
-              <label key={r.id} className="block">
-                <span className="text-xs uppercase tracking-wider text-[var(--color-muted)]">
-                  Region
-                </span>
-                <input
-                  className="mt-1 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-1.5 text-sm"
-                  value={names[r.id] ?? r.name}
-                  onChange={(e) => setNames((n) => ({ ...n, [r.id]: e.target.value }))}
-                />
-              </label>
-            ))}
-          </div>
-
-          <button
-            onClick={save}
-            disabled={!dirty || saving}
-            className="rounded-full bg-[var(--color-ink)] px-5 py-2 text-sm text-[var(--color-wall)] disabled:opacity-30"
-          >
-            {saving ? 'Saving…' : 'Save labels'}
-          </button>
-        </div>
-      )}
-    </section>
-  );
 }
 
 function Section({

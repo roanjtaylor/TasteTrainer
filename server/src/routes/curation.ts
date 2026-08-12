@@ -14,12 +14,14 @@ import { mapWithLimit, resolveDigitalImage } from '../services/imageResolvers.ts
 import { canonicalSubtopic, cleanProposals } from '../services/itemHygiene.ts';
 import { mergeProposal, type MapField } from '../services/worldMap.ts';
 import {
+  createJob,
   deleteDataset,
   getDataset,
   getWorldMap,
   listDatasets,
   saveDataset,
   saveWorldMap,
+  updateJob,
 } from '../storage.ts';
 import { newId, now } from '../util.ts';
 import { isPeriodAccurate, normalizeDomain, slugifyTopic } from '../../../shared/types.ts';
@@ -32,6 +34,7 @@ import type {
   EraGroup,
   FieldSummary,
   Item,
+  Job,
   ProposedItem,
   Subtopic,
 } from '../../../shared/types.ts';
@@ -114,8 +117,66 @@ function sse(res: Response) {
   // No proxy buffering — we need each line to reach the browser as it's written.
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
+  // The server is a persistent process (render.yaml) — a client that closes the tab
+  // mid-request does NOT stop the Claude call or the work still in flight below,
+  // only the connection carrying its progress. Without this listener, writing to
+  // that dead socket emits an unhandled 'error' on `res`, which by default crashes
+  // the whole Node process — taking down every OTHER request in flight with it.
+  res.on('error', () => {});
   return (event: 'progress' | 'done' | 'error', data: unknown) => {
-    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    if (res.writableEnded) return;
+    try {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    } catch {
+      /* client is gone; the caller's work still runs to completion above */
+    }
+  };
+}
+
+/** Per-job write queues, so a `progress` write can never land AFTER the `done`/`error`
+ *  write that follows it and silently flip a finished job back to looking unfinished —
+ *  `updateJob` calls for one job always run in the order they were issued, never
+ *  concurrently. Cleared once a job reaches a terminal state. */
+const jobWriteChains = new Map<string, Promise<void>>();
+
+/**
+ * Wraps `sse()` for the two calls whose result needs to survive the browser closing
+ * (items, gap-fill — see shared/types.ts's `Job`). Every event still streams to a
+ * connected client exactly as before; this only ADDS a durable write alongside it, so
+ * a client that's watching sees no difference at all.
+ *
+ * `progress` writes are throttled — `attachImages` below reports one line per item,
+ * and writing every one of those to Supabase is not worth it for a line nobody but a
+ * (currently disconnected) later session will ever read as "in progress". `done` and
+ * `error` are never throttled.
+ */
+function jobSend(res: Response, job: Job) {
+  const send = sse(res);
+  let lastProgressWrite = 0;
+
+  const enqueue = (fn: () => Promise<void>) => {
+    const next = (jobWriteChains.get(job.id) ?? Promise.resolve()).then(fn).catch(() => {
+      /* best-effort — a lost progress/result write here doesn't affect the live client,
+         which already has the event via send() above */
+    });
+    jobWriteChains.set(job.id, next);
+    return next;
+  };
+
+  return (event: 'progress' | 'done' | 'error', data: unknown) => {
+    send(event, data);
+    if (event === 'progress') {
+      const now = Date.now();
+      if (now - lastProgressWrite < 1500) return;
+      lastProgressWrite = now;
+      enqueue(() => updateJob(job.id, { progress: (data as any).line }));
+    } else {
+      const patch =
+        event === 'done'
+          ? { status: 'done' as const, result: data }
+          : { status: 'error' as const, error: (data as any).error };
+      enqueue(() => updateJob(job.id, patch).finally(() => jobWriteChains.delete(job.id)));
+    }
   };
 }
 
@@ -185,7 +246,15 @@ curationRouter.post('/items', async (req, res) => {
   if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
   const dom: Domain = normalizeDomain(domain);
 
-  const send = sse(res);
+  // This is one of the two calls whose result needs to survive the browser closing —
+  // it returns a review-before-save proposal, not something the server writes itself
+  // (see shared/types.ts's `Job`, and jobSend above).
+  const job = await createJob({
+    id: newId(), domain: dom, kind: 'items', status: 'running',
+    title: `Research ${topic.trim()}`, input: req.body,
+    progress: '', result: null, error: null, createdAt: now(), updatedAt: now(),
+  });
+  const send = jobSend(res, job);
   try {
     const proposed = await generateItems(
       {
@@ -204,7 +273,7 @@ curationRouter.post('/items', async (req, res) => {
     // when none found.
     const withImages = await attachImages(proposed, dom, send);
 
-    send('done', { items: withImages });
+    send('done', { items: withImages, jobId: job.id });
   } catch (err: any) {
     send('error', { error: err?.message ?? 'Item generation failed' });
   }
@@ -550,7 +619,13 @@ curationRouter.post('/gap-fill', async (req, res) => {
   if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
   const dom: Domain = normalizeDomain(domain);
 
-  const send = sse(res);
+  // The other durable call — see the comment on /items above.
+  const job = await createJob({
+    id: newId(), domain: dom, kind: 'gap-fill', status: 'running',
+    title: `Expand ${topic.trim()}`, input: req.body,
+    progress: '', result: null, error: null, createdAt: now(), updatedAt: now(),
+  });
+  const send = jobSend(res, job);
   try {
     const { items: proposed, note } = await fillGaps(
       {
@@ -578,7 +653,7 @@ curationRouter.post('/gap-fill', async (req, res) => {
     if (duplicates) send('progress', { line: `Dropped ${duplicates} already in the set…` });
 
     const withImages = await attachImages(clean, dom, send);
-    send('done', { items: withImages, note, duplicates, unsetSubtopics });
+    send('done', { items: withImages, note, duplicates, unsetSubtopics, jobId: job.id });
   } catch (err: any) {
     send('error', { error: err?.message ?? 'Gap fill failed' });
   }

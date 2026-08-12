@@ -10,6 +10,7 @@ import type {
   ImageCandidate,
   ImageKind,
   Item,
+  Job,
   LeaderboardRow,
   Ranker,
   RankerSummary,
@@ -137,7 +138,10 @@ export const api = {
       existingItems?: Item[];
     },
     onProgress?: OnProgress,
-  ) => streamSSE<{ items: ProposedItem[] }>('/api/curation/items', body, onProgress),
+    // `jobId` identifies the durable row this call was tracked under (web/lib/jobs.ts)
+    // — present once it's `done`, so a live caller can delete it the moment its
+    // proposal is saved or discarded, same as a resumed one does.
+  ) => streamSSE<{ items: ProposedItem[]; jobId: string }>('/api/curation/items', body, onProgress),
   // `items` is optional — the curate flow asks for periods before any items exist.
   generatePeriods: (
     body: { topic: string; description: string; items?: Item[]; domain: Domain },
@@ -218,6 +222,8 @@ export const api = {
       // and proposals whose subtopic was off-list and now needs one picked.
       duplicates: number;
       unsetSubtopics: number;
+      // See generateItems' jobId above.
+      jobId: string;
     }>('/api/curation/gap-fill', body, onProgress),
 
   // The world map (8-field-map.md). Generating it belongs to the review above; these
@@ -285,6 +291,13 @@ export const api = {
       leaderboard: LeaderboardRow[];
       progress: Progress;
     }>(`/api/comparison/${id}/leaderboard?${scopeQuery(scope, ranker)}`),
+
+  // Durable curation jobs (web/lib/jobs.ts) — what survives a refresh mid-Claude-call,
+  // and what the resume banner reads. `domain` omitted lists across both worlds.
+  listJobs: (domain?: Domain) =>
+    http<Job[]>(`/api/curation/jobs${domain ? `?domain=${domain}` : ''}`),
+  getJob: (id: string) => http<Job>(`/api/curation/jobs/${id}`),
+  deleteJob: (id: string) => http<void>(`/api/curation/jobs/${id}`, { method: 'DELETE' }),
 };
 
 export interface Progress {

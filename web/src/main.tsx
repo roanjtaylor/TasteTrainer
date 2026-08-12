@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import './index.css';
 import { Nav } from './components/Nav';
+import { TaskNotifications } from './components/TaskNotifications';
 import { RankerProvider } from './lib/ranker';
 import { NavActionsProvider } from './lib/navActions';
 import { DomainSelect } from './pages/DomainSelect';
@@ -18,6 +19,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <RankerProvider>
       <NavActionsProvider>
       <BrowserRouter>
+        <TaskNotifications />
         <Nav />
         {/* Tight bottom padding: the map is sized to fit the window without scrolling,
             and six rems of dead space under it was the difference between fitting and

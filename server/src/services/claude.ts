@@ -6,7 +6,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLAUDE_MODEL, HF_BASE_URL, HF_APP_SECRET } from '../config.ts';
+import { singleWordTopic } from '../../../shared/types.ts';
 import type {
+  BoundaryIssue,
   BoundaryKind,
   CoverageGap,
   Domain,
@@ -90,8 +92,41 @@ interface RunOpts {
   timeoutMs?: number;
 }
 
-/** One-shot prompt → parsed JSON via the HF Space /api/chat SSE endpoint. */
+/** Marks a failure as "Claude's own output wasn't valid JSON" specifically — as
+ *  opposed to a timeout, a network/auth error, or the model reporting its own error —
+ *  so `runJson` knows retrying with an identical prompt is actually worth trying. */
+class JsonParseError extends Error {}
+
+/**
+ * One-shot prompt → parsed JSON via the HF Space /api/chat SSE endpoint.
+ *
+ * Retries ONCE, only when Claude's response itself failed to parse as JSON (despite
+ * `JSON_ONLY` and the model normally complying) — that is model flakiness a re-ask
+ * usually fixes, not a bug worth surfacing as a raw `JSON.parse` error ("Expected ','
+ * or '}' after property value…") for the user to puzzle over. A timeout, a network
+ * failure, or the model reporting its own error are not retried here — those aren't
+ * fixed by asking the exact same question again.
+ */
 async function runJson(system: string, prompt: string, opts: RunOpts = {}): Promise<any> {
+  try {
+    return await runJsonOnce(system, prompt, opts);
+  } catch (err) {
+    if (!(err instanceof JsonParseError)) throw err;
+    opts.onProgress?.("Claude's answer wasn't valid JSON — retrying once…");
+    try {
+      return await runJsonOnce(system, prompt, opts);
+    } catch (retryErr: any) {
+      if (retryErr instanceof JsonParseError) {
+        throw new Error(
+          `Claude's response wasn't valid JSON, even after retrying once: ${retryErr.message}`,
+        );
+      }
+      throw retryErr;
+    }
+  }
+}
+
+async function runJsonOnce(system: string, prompt: string, opts: RunOpts = {}): Promise<any> {
   const { onProgress, count, timeoutMs = 120_000 } = opts;
 
   // Say which knob is missing rather than letting the Space answer for us. Without
@@ -218,7 +253,11 @@ async function runJson(system: string, prompt: string, opts: RunOpts = {}): Prom
 
     if (!accumulated) throw new Error('Empty response from Claude.');
     onProgress?.('Composing results…');
-    return extractJson(accumulated);
+    try {
+      return extractJson(accumulated);
+    } catch (e: any) {
+      throw new JsonParseError(e?.message ?? 'Could not parse JSON from model response.');
+    }
   } catch (err: any) {
     if (timedOut) {
       // Report how far it got: a call that was clearly still producing work when the
@@ -587,7 +626,7 @@ export async function reviewFieldMap(args: {
     ? `\n\nTHE MAP ALREADY EXISTS, AND IS SETTLED. Do not re-derive, rename, reorder or re-position the axes or regions below.\n\nAxes:\n- x: ${existingMap.axes.x.label} (${existingMap.axes.x.low} → ${existingMap.axes.x.high})\n- y: ${existingMap.axes.y.label} (${existingMap.axes.y.low} → ${existingMap.axes.y.high})\n\nRegions:\n${existingMap.regions.map((r) => `- ${r.name} — ${r.description}`).join('\n')}\n\nFor the map, return:\n5. "assignments" — one entry per field ABOVE and per field you list in "missingFields", giving the region it belongs to. "field" must match a topic exactly as written; "region" must be one of the region names above.\n6. "suggestions" — at most 4 changes to the map, or an empty array. Each is one of:\n   { "kind": "add-region", "why": string, "region": { "name": string, "description": string, "x": number, "y": number } }\n   { "kind": "move-field", "why": string, "field": "<an existing topic>", "toRegion": "<a region name>" }\n   { "kind": "rename-region", "why": string, "region": "<current region name>", "name": "<better name>" }\n\nLeave "axes" and "regions" out of your response entirely — they are settled.`
     : `\n\nTHIS WORLD HAS NO MAP YET — draw one (see the spatial-map rule). Return:\n5. "axes" — the two dimensions this whole world is best laid out on. Each has a "label" and a named "low" and "high" end. They must be concrete enough that any field in this world can be confidently placed on both.\n6. "regions" — the named areas of this world. Few, genuinely distinct, together covering it. Each needs a "name", a one-line "description", and an "x" and "y" between 0 and 1 giving where it sits on those two axes. Spread them out: regions that would sit in the same place probably want merging.\n7. "assignments" — one entry per field ABOVE and per field you list in "missingFields", giving the region it belongs to. "field" must match a topic exactly as written; "region" must be one of your region names.\n\nReturn "suggestions" as an empty array — there is no existing map to change.`;
 
-  const prompt = `${domainLine(domain)}\n\nThis is a WORLD-LEVEL review (see the field-map rule). Below is every field the user has built in this world, each with its description, item count, dated year span, and subtopic names. The items themselves are deliberately not included.\n\nFields built so far:\n${inventory}\n\nReview this collection AS A MAP OF THE WHOLE WORLD. Be concise everywhere below — this is a scan of the shelf, not an essay; short, direct sentences over paragraphs:\n1. "mapSummary" — 2-3 sentences on how this world genuinely divides into fields, and what a complete map of it would look like.\n2. "missingFields" — fields of this world with no dataset yet. Give each a "topic", a one-sentence "description" ready to start a new dataset with, and a one-sentence "why" it matters. Favour the ones the user is least likely to have thought of.\n3. "boundaryIssues" — existing fields drawn wrong: "kind" is exactly one of "merge", "split", or "rename"; "fields" lists the existing topic name(s) involved, EXACTLY as written above; "proposal" is the concrete change in one sentence; "why" is the reason in one sentence. Return an empty array if the boundaries are sound.\n4. "thinFields" — existing fields that look under-built or skewed, judged only from the counts, spans and subtopics above. "topic" must match an existing field name exactly. "detail" is one sentence, leading with the item count (e.g. "12 items across 6 subtopics..."). Empty array if none.${mapBlock}\n\nReturn JSON of shape: { "mapSummary": string, "missingFields": [ { "topic": string, "description": string, "why": string } ], "boundaryIssues": [ { "kind": string, "fields": [string], "proposal": string, "why": string } ], "thinFields": [ { "topic": string, "detail": string } ], "axes": { "x": { "label": string, "low": string, "high": string }, "y": { "label": string, "low": string, "high": string } }, "regions": [ { "name": string, "description": string, "x": number, "y": number } ], "assignments": [ { "field": string, "region": string } ], "suggestions": [ ... ] }`;
+  const prompt = `${domainLine(domain)}\n\nThis is a WORLD-LEVEL review (see the field-map rule). Below is every field the user has built in this world, each with its description, item count, dated year span, and subtopic names. The items themselves are deliberately not included.\n\nFields built so far:\n${inventory}\n\nReview this collection AS A MAP OF THE WHOLE WORLD. Be concise everywhere below — this is a scan of the shelf, not an essay; short, direct sentences over paragraphs:\n1. "mapSummary" — 2-3 sentences on how this world genuinely divides into fields, and what a complete map of it would look like.\n2. "missingFields" — fields of this world with no dataset yet. Give each a "topic" (a SINGLE WORD — datasets are named one word, e.g. "Watches" not "Wrist watches"), a one-sentence "description" ready to start a new dataset with, and a one-sentence "why" it matters. Favour the ones the user is least likely to have thought of.\n3. "boundaryIssues" — existing fields drawn wrong: "kind" is exactly one of "merge", "split", or "rename"; "fields" lists the existing topic name(s) involved, EXACTLY as written above; "proposal" is the concrete change in one sentence; "why" is the reason in one sentence. Return an empty array if the boundaries are sound. Before anything else, check EVERY field above against the app's own established rules — most concretely, the single-word naming rule from (2): any existing field whose name above is not one word (e.g. "Clocks & Timekeeping Instruments") is a rule violation and MUST be raised here as a "rename", even if nothing else about the field looks wrong. Do not rely on taste alone for this check — it is mechanical.\n4. "thinFields" — existing fields that look under-built or skewed, judged only from the counts, spans and subtopics above. "topic" must match an existing field name exactly. "detail" is one sentence, leading with the item count (e.g. "12 items across 6 subtopics..."). Empty array if none.${mapBlock}\n\nReturn JSON of shape: { "mapSummary": string, "missingFields": [ { "topic": string, "description": string, "why": string } ], "boundaryIssues": [ { "kind": string, "fields": [string], "proposal": string, "why": string } ], "thinFields": [ { "topic": string, "detail": string } ], "axes": { "x": { "label": string, "low": string, "high": string }, "y": { "label": string, "low": string, "high": string } }, "regions": [ { "name": string, "description": string, "x": number, "y": number } ], "assignments": [ { "field": string, "region": string } ], "suggestions": [ ... ] }`;
 
   const json = await runJson(system, prompt, {
     onProgress,
@@ -604,6 +643,33 @@ export async function reviewFieldMap(args: {
   const known = new Set(fields.map((f) => f.topic));
   const kinds = new Set(['merge', 'split', 'rename']);
 
+  const boundaryIssues: BoundaryIssue[] = ((json.boundaryIssues ?? []) as any[])
+    .filter((b) => b?.proposal && kinds.has(String(b.kind)))
+    .map((b) => ({
+      kind: String(b.kind) as BoundaryKind,
+      fields: (Array.isArray(b.fields) ? b.fields : []).map((f: unknown) => String(f).trim()),
+      proposal: String(b.proposal).trim(),
+      why: String(b.why ?? '').trim(),
+    }));
+
+  // Deterministic backstop for the single-word naming rule: the model is asked to
+  // catch this itself, but it's a mechanical check, not a judgement call, and
+  // shouldn't depend on the model remembering to make it every time (it didn't, for
+  // e.g. "Clocks & Timekeeping Instruments"). Only adds a rename the model didn't
+  // already raise for that field.
+  const alreadyRenameFlagged = new Set(
+    boundaryIssues.filter((b) => b.kind === 'rename').flatMap((b) => b.fields),
+  );
+  for (const f of fields) {
+    if (singleWordTopic(f.topic) === f.topic || alreadyRenameFlagged.has(f.topic)) continue;
+    boundaryIssues.push({
+      kind: 'rename',
+      fields: [f.topic],
+      proposal: `Rename to a single word, e.g. "${singleWordTopic(f.topic)}" — dataset names are one word by design.`,
+      why: 'Multi-word field names break the single-word naming convention every other field follows.',
+    });
+  }
+
   return {
     mapSummary: typeof json.mapSummary === 'string' ? json.mapSummary.trim() : '',
     missingFields: ((json.missingFields ?? []) as any[])
@@ -611,18 +677,11 @@ export async function reviewFieldMap(args: {
       // rather than sending the user to curate a duplicate of what they're looking at.
       .filter((m) => m?.topic && !known.has(String(m.topic).trim()))
       .map((m) => ({
-        topic: String(m.topic).trim(),
+        topic: singleWordTopic(String(m.topic)),
         description: String(m.description ?? '').trim(),
         why: String(m.why ?? '').trim(),
       })),
-    boundaryIssues: ((json.boundaryIssues ?? []) as any[])
-      .filter((b) => b?.proposal && kinds.has(String(b.kind)))
-      .map((b) => ({
-        kind: String(b.kind) as BoundaryKind,
-        fields: (Array.isArray(b.fields) ? b.fields : []).map((f: unknown) => String(f).trim()),
-        proposal: String(b.proposal).trim(),
-        why: String(b.why ?? '').trim(),
-      })),
+    boundaryIssues,
     thinFields: ((json.thinFields ?? []) as any[])
       .filter((t) => t?.topic && known.has(String(t.topic).trim()))
       .map((t) => ({ topic: String(t.topic).trim(), detail: String(t.detail ?? '').trim() })),
@@ -687,14 +746,14 @@ export async function planBoundaryFix(args: {
         ? `This is a MERGE: the field(s) above must become FEWER fields than were given — every item ends up under one surviving "sourceTopic", or a new combined name if you're renaming the result.`
         : `This is a RENAME: the same field(s) as were given, just with corrected "topic"/"description"/"subtopics" — the field COUNT does not change.`;
 
-  const shapePrompt = `${domainLine(domain)}\n\nA world-level review flagged a boundary problem between these existing field(s):\n\n${shapeFieldBlock}\n\nProblem (kind: "${kind}"): ${proposal}\nReason: ${why}\n\n${kindLine}\n\nDecide the SHAPE of the fix only — which fields exist once it's applied. Do not assign items; that's done separately. Keep "description" and "note" to one concise sentence each — this is a mechanical plan, not prose.\n\nReturn "fields", one entry per resulting field:\n- For a field that keeps one of the existing topics above (a rename, or the surviving side of a merge), set "sourceTopic" to that EXACT existing topic name.\n- For a brand-new field created by a split, set "sourceTopic" to "".\n- "topic" is the field's final name (same as sourceTopic when nothing is renamed).\n- "description" is its final description, one sentence.\n- "subtopics" is its final canonical subtopic list, each with a one-sentence description.\n\nReturn JSON of shape: { "fields": [ { "sourceTopic": string, "topic": string, "description": string, "subtopics": [ { "name": string, "description": string } ] } ], "note": string }\n\n"note" is one short sentence describing what you did, shown to the person who accepted this fix.`;
+  const shapePrompt = `${domainLine(domain)}\n\nA world-level review flagged a boundary problem between these existing field(s):\n\n${shapeFieldBlock}\n\nProblem (kind: "${kind}"): ${proposal}\nReason: ${why}\n\n${kindLine}\n\nDecide the SHAPE of the fix only — which fields exist once it's applied. Do not assign items; that's done separately. Keep "description" and "note" to one concise sentence each — this is a mechanical plan, not prose.\n\nReturn "fields", one entry per resulting field:\n- For a field that keeps one of the existing topics above (a rename, or the surviving side of a merge), set "sourceTopic" to that EXACT existing topic name.\n- For a brand-new field created by a split, set "sourceTopic" to "".\n- "topic" is the field's final name (same as sourceTopic when nothing is renamed) — a SINGLE WORD, e.g. "Watches" not "Wrist watches".\n- "description" is its final description, one sentence.\n- "subtopics" is its final canonical subtopic list, each with a one-sentence description.\n\nReturn JSON of shape: { "fields": [ { "sourceTopic": string, "topic": string, "description": string, "subtopics": [ { "name": string, "description": string } ] } ], "note": string }\n\n"note" is one short sentence describing what you did, shown to the person who accepted this fix.`;
 
   const parseShape = (json: any): BoundaryFieldPlan[] =>
     ((json.fields ?? []) as any[])
       .filter((f) => f?.topic)
       .map((f) => ({
         sourceTopic: String(f.sourceTopic ?? '').trim(),
-        topic: String(f.topic).trim(),
+        topic: singleWordTopic(String(f.topic)),
         description: String(f.description ?? '').trim(),
         subtopics: (Array.isArray(f.subtopics) ? f.subtopics : [])
           .filter((s: any) => s?.name)

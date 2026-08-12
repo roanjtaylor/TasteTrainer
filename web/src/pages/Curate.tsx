@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, Navigate, Link, useSearchParams } from 'react-router-dom';
 import {
+  singleWordTopic,
   slugifyTopic,
   type Domain,
   type EraGroup,
@@ -10,6 +11,7 @@ import {
 import { api } from '../lib/api';
 import { createDataset, saveDataset } from '../lib/data';
 import { useDomain } from '../lib/domain';
+import { runTracked } from '../lib/tasks';
 import { CaptureBadge, SourceTag } from '../components/CaptureBadge';
 import { CandidateStrip } from '../components/CandidateStrip';
 import { ImagePicker } from '../components/ImagePicker';
@@ -24,8 +26,8 @@ export function Curate() {
 
   // Arriving from the field map's "Curate this →" carries the proposed field in the
   // URL, so a gap you just read about becomes a dataset without retyping it.
-  const [params] = useSearchParams();
-  const [topic, setTopic] = useState(params.get('topic') ?? '');
+  const [params, setParams] = useSearchParams();
+  const [topic, setTopic] = useState(singleWordTopic(params.get('topic') ?? ''));
   const [description, setDescription] = useState(params.get('description') ?? '');
   const [count, setCount] = useState(12);
 
@@ -37,24 +39,78 @@ export function Curate() {
   const [items, setItems] = useState<ProposedItem[]>([]);
 
   const [busy, setBusy] = useState<null | string>(null);
-  const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
   const [pickerIndex, setPickerIndex] = useState<number | null>(null);
+
+  // Resuming a durable job (lib/jobs.ts) landed on from the ResumeBanner/Nav badge —
+  // `?job=<id>` carries research that already finished (or is still running) in a
+  // previous session. `resuming` covers both the fetch and the poll-while-running.
+  const [resuming, setResuming] = useState(false);
+  const [resumeError, setResumeError] = useState('');
+  // The job the CURRENT proposal came from, live or resumed — tracked so save() can
+  // clean it up. A ref, not state: nothing on screen needs to re-render off it.
+  const jobIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const jobId = params.get('job');
+    if (!jobId) return;
+    // Stripped immediately so a refresh or the back button doesn't re-resume it.
+    setParams((p) => { p.delete('job'); return p; }, { replace: true });
+    void resumeJob(jobId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function resumeJob(id: string) {
+    setResuming(true);
+    setResumeError('');
+    try {
+      let job = await api.getJob(id);
+      while (job.status === 'running') {
+        await new Promise((r) => setTimeout(r, 5000));
+        job = await api.getJob(id);
+      }
+      if (job.status === 'error') {
+        setResumeError(job.error ?? 'This job failed.');
+        return;
+      }
+      const input = job.input as {
+        topic: string;
+        description: string;
+        subtopics: Subtopic[];
+        count: number;
+        eraGroups?: EraGroup[];
+      };
+      const result = job.result as { items: ProposedItem[] };
+      setTopic(input.topic);
+      setDescription(input.description);
+      setSubtopics(input.subtopics ?? []);
+      setEraGroups(input.eraGroups ?? []);
+      setCount(input.count ?? 12);
+      setItems(result.items ?? []);
+      jobIdRef.current = id;
+    } catch (e: any) {
+      setResumeError(e?.message ?? 'Could not resume this job');
+    } finally {
+      setResuming(false);
+    }
+  }
 
   if (!domain) return <Navigate to="/" replace />;
   const dom: Domain = domain;
 
-  async function run<T>(label: string, fn: () => Promise<T>): Promise<T | undefined> {
+  async function run<T>(
+    label: string,
+    taskTitle: string,
+    fn: (onProgress: (line: string) => void) => Promise<T>,
+  ): Promise<T | undefined> {
     setBusy(label);
-    setProgress('');
     setError('');
     try {
-      return await fn();
+      return await runTracked(taskTitle, (onProgress) => fn(onProgress));
     } catch (e: any) {
       setError(e?.message ?? 'Something went wrong');
     } finally {
       setBusy(null);
-      setProgress('');
     }
   }
 
@@ -63,8 +119,8 @@ export function Curate() {
   // so the research call is filling a known frame rather than inventing one.
   async function initialise() {
     if (!topic.trim()) return;
-    await run('Mapping the field…', async () => {
-      const res = await api.proposeSubtopics(topic.trim(), description.trim(), dom, setProgress);
+    await run('Mapping the field…', `Map the ${topic.trim()} field`, async (onProgress) => {
+      const res = await api.proposeSubtopics(topic.trim(), description.trim(), dom, onProgress);
       setSubtopics(res.subtopics);
       // Claude sizes the collection to the field; the user can still override below.
       setCount(res.suggestedCount);
@@ -74,7 +130,7 @@ export function Curate() {
       try {
         const periods = await api.generatePeriods(
           { topic: topic.trim(), description: description.trim(), domain: dom },
-          setProgress,
+          onProgress,
         );
         setEraGroups(periods.eraGroups);
       } catch {
@@ -84,21 +140,35 @@ export function Curate() {
   }
 
   async function generate(more = false) {
-    await run(more ? 'Finding more…' : 'Researching the best…', async () => {
-      const res = await api.generateItems(
-        {
-          topic: topic.trim(),
-          description: description.trim(),
-          subtopics,
-          count,
-          domain: dom,
-          eraGroups,
-          existingItems: more ? (items as any) : [],
-        },
-        setProgress,
-      );
-      setItems((prev) => (more ? [...prev, ...res.items] : res.items));
-    });
+    const res = await run(
+      more ? 'Finding more…' : 'Researching the best…',
+      more ? `Find more for ${topic.trim()}` : `Research the ${topic.trim()} dataset`,
+      async (onProgress) => {
+        const res = await api.generateItems(
+          {
+            topic: topic.trim(),
+            description: description.trim(),
+            subtopics,
+            count,
+            domain: dom,
+            eraGroups,
+            existingItems: more ? (items as any) : [],
+          },
+          onProgress,
+        );
+        setItems((prev) => (more ? [...prev, ...res.items] : res.items));
+        return res;
+      },
+    );
+    if (res?.jobId) {
+      // Superseding whatever job was tracked before — its proposal is already folded
+      // into `items` above (or was this same job, resumed then immediately re-run),
+      // so nothing is lost by forgetting it.
+      if (jobIdRef.current && jobIdRef.current !== res.jobId) {
+        api.deleteJob(jobIdRef.current).catch(() => {});
+      }
+      jobIdRef.current = res.jobId;
+    }
   }
 
   async function save() {
@@ -106,7 +176,7 @@ export function Curate() {
       setError('A one-line description is required before saving.');
       return;
     }
-    const ds = await run('Saving…', async () => {
+    const ds = await run('Saving…', `Save ${topic.trim()} dataset`, async () => {
       const created = await createDataset({
         topic: topic.trim(),
         description: description.trim(),
@@ -124,7 +194,13 @@ export function Curate() {
         return created;
       }
     });
-    if (ds) navigate(`/${dom}/${slugifyTopic(ds.topic)}`);
+    if (ds) {
+      if (jobIdRef.current) {
+        api.deleteJob(jobIdRef.current).catch(() => {});
+        jobIdRef.current = null;
+      }
+      navigate(`/${dom}/${slugifyTopic(ds.topic)}`);
+    }
   }
 
   function patch(index: number, change: Partial<ProposedItem>) {
@@ -139,6 +215,14 @@ export function Curate() {
           Name a field, let Claude map it and research the defining work, then review before saving.
         </p>
       </header>
+
+      {resuming && (
+        <p className="flex items-center gap-2 text-sm text-[var(--color-muted)]">
+          <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]" />
+          Picking up saved research…
+        </p>
+      )}
+      {resumeError && <p className="text-[var(--color-accent)]">{resumeError}</p>}
 
       {/* "What are the fields to study?" isn't obvious — least of all in the digital
           world. This used to be a hardcoded list of 14 digital topics in TypeScript;
@@ -162,12 +246,16 @@ export function Curate() {
           sets the field's structure.) */}
       <section className="space-y-4 rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-5">
         <label className="block">
-          <span className="text-sm text-[var(--color-muted)]">Topic</span>
+          <span className="text-sm text-[var(--color-muted)]">
+            Topic <span className="text-[var(--color-muted)]">(a single word, e.g. Watches)</span>
+          </span>
           <input
             className="mt-1 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-2"
             value={topic}
-            onChange={(e) => setTopic(e.target.value)}
-            placeholder={domain === 'digital' ? 'e.g. Booking systems' : 'e.g. Watches'}
+            // Datasets are named one word — spaces are stripped as you type rather than
+            // caught at save, so what you see here is always what gets saved.
+            onChange={(e) => setTopic(e.target.value.replace(/\s+/g, ''))}
+            placeholder={domain === 'digital' ? 'e.g. Marketplaces' : 'e.g. Watches'}
           />
         </label>
         <label className="block">
@@ -272,12 +360,6 @@ export function Curate() {
         </section>
       )}
 
-      {busy && (
-        <div className="flex items-center gap-3 rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-3 text-sm">
-          <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]" />
-          <span className="text-[var(--color-muted)]">{progress || busy}</span>
-        </div>
-      )}
       {error && <p className="text-[var(--color-accent)]">{error}</p>}
 
       {/* Step 3: review grid */}
