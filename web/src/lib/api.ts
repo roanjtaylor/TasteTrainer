@@ -45,7 +45,10 @@ async function http<T>(url: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export type OnProgress = (line: string) => void;
+/** `jobId` rides along on progress lines from the durable calls (server's `jobSend`),
+ *  so the caller can pair its transient notification with the durable job row while
+ *  the call is still in flight. Absent for the plain, non-durable calls. */
+export type OnProgress = (line: string, jobId?: string) => void;
 
 // POST a body and consume the backend's Server-Sent Event stream (see
 // server/src/routes/curation.ts): `progress` lines drive the live status, then a
@@ -92,7 +95,7 @@ async function streamSSE<T>(url: string, body: unknown, onProgress?: OnProgress)
       }
       if (!data) continue;
       const parsed = JSON.parse(data);
-      if (event === 'progress') onProgress?.(parsed.line);
+      if (event === 'progress') onProgress?.(parsed.line, parsed.jobId);
       else if (event === 'done') result = parsed as T;
       else if (event === 'error') errorMessage = parsed.error;
     }
@@ -120,8 +123,10 @@ export const api = {
   deleteDataset: (id: string) => http<void>(`/api/datasets/${id}`, { method: 'DELETE' }),
 
   // Curation — these stream live progress (onProgress) and resolve with the result.
+  // "Map the field": subtopics AND the era-periods that steer research, in one durable
+  // call (see jobId below) — the client treats the two as a single step.
   proposeSubtopics: (topic: string, description: string, domain: Domain, onProgress?: OnProgress) =>
-    streamSSE<{ subtopics: Subtopic[]; suggestedCount: number }>(
+    streamSSE<{ subtopics: Subtopic[]; suggestedCount: number; eraGroups: EraGroup[]; jobId: string }>(
       '/api/curation/subtopics',
       { topic, description, domain },
       onProgress,
@@ -142,11 +147,6 @@ export const api = {
     // — present once it's `done`, so a live caller can delete it the moment its
     // proposal is saved or discarded, same as a resumed one does.
   ) => streamSSE<{ items: ProposedItem[]; jobId: string }>('/api/curation/items', body, onProgress),
-  // `items` is optional — the curate flow asks for periods before any items exist.
-  generatePeriods: (
-    body: { topic: string; description: string; items?: Item[]; domain: Domain },
-    onProgress?: OnProgress,
-  ) => streamSSE<{ eraGroups: EraGroup[] }>('/api/curation/periods', body, onProgress),
   // "Re-fetch images" — run the current image pipeline over a dataset that is already
   // saved. Images used to be resolved only at curation time, so every sourcing
   // improvement applied to future items and left existing ones untouched. Returns the

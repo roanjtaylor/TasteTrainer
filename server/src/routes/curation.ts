@@ -9,8 +9,7 @@ import {
   proposeSubtopics,
   reviewFieldMap,
 } from '../services/claude.ts';
-import { searchImages, wikimediaImage } from '../services/images.ts';
-import { mapWithLimit, resolveDigitalImage } from '../services/imageResolvers.ts';
+import { mapWithLimit, resolveDigitalImage, resolvePhysicalImage } from '../services/imageResolvers.ts';
 import { canonicalSubtopic, cleanProposals } from '../services/itemHygiene.ts';
 import { mergeProposal, type MapField } from '../services/worldMap.ts';
 import {
@@ -40,8 +39,9 @@ import type {
 } from '../../../shared/types.ts';
 
 /**
- * Resolve each proposed item's image — Wikimedia by wikipediaTitle in the physical
- * world, the scored multi-source cascade in the digital one (services/imageResolvers.ts).
+ * Resolve each proposed item's image — a scored multi-source cascade either way
+ * (services/imageResolvers.ts): `resolvePhysicalImage` for plain reference photos,
+ * `resolveDigitalImage` for the render/screenshot-aware digital pipeline.
  *
  * The digital branch used to be a single strategy: screenshot this url at this year.
  * That is right for websites and structurally wrong for the rest of the world it was
@@ -49,6 +49,13 @@ import type {
  * so the model invented Wikipedia article urls and the pipeline screenshotted the
  * encyclopaedia page. Now `imageKind` picks the resolvers, several sources compete, and
  * every candidate is scored before one is chosen.
+ *
+ * The physical branch used to be a single blind guess: one Wikipedia lookup, and if that
+ * came up empty, the #1 hit of an unscored image search — no candidates, no scoring,
+ * exactly the gap that made the manual "swap image" flow (nine candidates, a human
+ * picking) far more reliable than first-pass generation. It now runs the same scored
+ * reference-source cascade digital already uses (`resolvePhysicalImage`), so a wrong-era
+ * or wrong-model photo has competition instead of winning by being first.
  *
  * The progress line names the OUTCOME per item, not just a counter, and now includes
  * WHICH source won and how much it is trusted — because the characteristic failure here
@@ -64,22 +71,24 @@ async function attachImages(
 
   if (domain !== 'digital') {
     return mapWithLimit(proposed, IMAGE_CONCURRENCY, async (it) => {
-      // The Wikipedia lead is usually the right call — a genuine, attributable photo
-      // when the article exists — but the article is about the whole model line, not
-      // this item's specific year/reference, so a missing article (an obscure model,
-      // a specific vintage reference with no dedicated page) falls through to a
-      // search built from `imageQuery`: the specific-model-and-year phrase the model
-      // was asked for, rather than the bare name+brand, which returns whatever
-      // version of the thing is most photographed today.
-      let image = await wikimediaImage(it.wikipediaTitle ?? '');
-      if (!image) {
-        const query = it.imageQuery?.trim() || [it.name, it.brand, it.year].filter(Boolean).join(' ');
-        const hits = await searchImages(query, 1);
-        image = hits[0] ?? '';
-      }
+      const { image, capture, candidates } = await resolvePhysicalImage({
+        name: it.name,
+        year: it.year,
+        wikipediaTitle: it.wikipediaTitle,
+        imageQuery: it.imageQuery,
+      });
       done += 1;
-      send('progress', { line: `Fetching images… ${done} of ${proposed.length}` });
-      return { ...it, image };
+      const outcome = !image
+        ? 'no image found'
+        : `${capture?.source ?? '?'}${capture?.confidence && capture.confidence !== 'high' ? ` (${capture.confidence})` : ''}`;
+      send('progress', {
+        line: `${done}/${proposed.length} · ${it.name}${it.year ? `, ${it.year}` : ''} → ${outcome}`,
+      });
+      // Alternatives ride along only when the pick isn't trustworthy, so the review
+      // grid can offer a one-click swap without bloating every payload — same rule
+      // the digital branch below already applies.
+      const alternatives = capture?.confidence === 'high' ? undefined : candidates;
+      return { ...it, image, capture, candidates: alternatives };
     });
   }
 
@@ -165,6 +174,14 @@ const jobWriteChains = new Map<string, Promise<void>>();
 function jobSend(res: Response, job: Job) {
   const send = sse(res);
   let lastProgressWrite = 0;
+  // A line that lands inside the throttle window isn't dropped — it's held and
+  // written when the window closes (trailing write), so the row always ends up on the
+  // LATEST line. Dropping it was how a resumed card sat on "Reaching Claude…" for
+  // minutes: "Claude is researching the field…" arrives a few hundred ms after it and
+  // was silently discarded, and nothing else came until the first token.
+  let pendingLine: string | null = null;
+  let trailingTimer: ReturnType<typeof setTimeout> | undefined;
+  let finished = false;
 
   const enqueue = (fn: () => Promise<void>) => {
     const next = (jobWriteChains.get(job.id) ?? Promise.resolve()).then(fn).catch(() => {
@@ -175,14 +192,42 @@ function jobSend(res: Response, job: Job) {
     return next;
   };
 
+  // The live client learns the durable row's id from the FIRST progress line, not just
+  // from `done` — so it can pair its own transient card with the durable one while
+  // the call is still running (web/components/TaskNotifications.tsx). Before this,
+  // both showed side by side, and the durable one's ✕ read as "dismiss the duplicate"
+  // when it actually deleted the job — the result then had nowhere to land.
+  send('progress', { line: 'Starting…', jobId: job.id });
+
   return (event: 'progress' | 'done' | 'error', data: unknown) => {
-    send(event, data);
+    send(event, event === 'progress' ? { ...(data as object), jobId: job.id } : data);
     if (event === 'progress') {
+      if (finished) return;
+      const line = (data as any).line as string;
       const now = Date.now();
-      if (now - lastProgressWrite < 1500) return;
+      const wait = 1500 - (now - lastProgressWrite);
+      if (wait > 0) {
+        pendingLine = line;
+        if (!trailingTimer) {
+          trailingTimer = setTimeout(() => {
+            trailingTimer = undefined;
+            if (finished || pendingLine === null) return;
+            const held = pendingLine;
+            pendingLine = null;
+            lastProgressWrite = Date.now();
+            enqueue(() => updateJob(job.id, { progress: held }));
+          }, wait);
+        }
+        return;
+      }
+      pendingLine = null;
       lastProgressWrite = now;
-      enqueue(() => updateJob(job.id, { progress: (data as any).line }));
+      enqueue(() => updateJob(job.id, { progress: line }));
     } else {
+      // Terminal: a held progress line must not land after this and re-open the job.
+      finished = true;
+      pendingLine = null;
+      if (trailingTimer) { clearTimeout(trailingTimer); trailingTimer = undefined; }
       const patch =
         event === 'done'
           ? { status: 'done' as const, result: data }
@@ -192,20 +237,48 @@ function jobSend(res: Response, job: Job) {
   };
 }
 
-// Step 2: propose canonical subtopics for a new topic.
+// Step 2: propose canonical subtopics for a new topic, and the field's era-periods
+// alongside them — "map the field" is one step to the user, so it is one durable job.
+//
+// Durable like /items and /gap-fill below (see jobSend above): this used to be a
+// plain `sse()` call, whose result only ever lived in the live stream — a refresh or
+// a server restart mid-call lost it outright, with nothing in the notification gutter
+// to resume or even show that it happened. Now it survives the same way.
 curationRouter.post('/subtopics', async (req, res) => {
   const { topic, description, domain } = req.body as { topic: string; description: string; domain: Domain };
   if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
+  const dom: Domain = normalizeDomain(domain);
 
-  const send = sse(res);
+  const job = await createJob({
+    id: newId(), domain: dom, kind: 'subtopics', status: 'running',
+    title: `Map ${topic.trim()}`, input: req.body,
+    progress: '', result: null, error: null, createdAt: now(), updatedAt: now(),
+  });
+  const send = jobSend(res, job);
   try {
-    const { subtopics, suggestedCount } = await proposeSubtopics(
-      topic.trim(),
-      description?.trim() ?? '',
-      normalizeDomain(domain),
-      (line) => send('progress', { line }),
-    );
-    send('done', { subtopics, suggestedCount });
+    // Subtopics and periods are independent Claude calls — periods only reads
+    // topic/description, never the subtopic list — so running them sequentially was
+    // pure dead time: two ~2-3 minute calls back to back instead of the ~2-3 minutes
+    // the slower of the two actually takes. Progress lines from both are interleaved
+    // as they stream; `send` doesn't care which call a line came from.
+    const [subtopicsResult, eraGroups] = await Promise.all([
+      proposeSubtopics(
+        topic.trim(),
+        description?.trim() ?? '',
+        dom,
+        (line) => send('progress', { line }),
+      ),
+      // Best-effort, same as the client used to treat it: without periods the
+      // research step falls back to its old spread-across-eras behaviour rather than
+      // failing the whole "map the field" step.
+      proposePeriods(
+        { topic: topic.trim(), description: description?.trim() ?? '', domain: dom },
+        (line) => send('progress', { line }),
+      ).catch((): EraGroup[] => []),
+    ]);
+    const { subtopics, suggestedCount } = subtopicsResult;
+
+    send('done', { subtopics, suggestedCount, eraGroups, jobId: job.id });
   } catch (err: any) {
     send('error', { error: err?.message ?? 'Subtopic proposal failed' });
   }

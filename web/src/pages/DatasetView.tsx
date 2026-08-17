@@ -22,7 +22,8 @@ import {
   vote as castVote,
 } from '../lib/data';
 import { useRanker } from '../lib/ranker';
-import { runTracked } from '../lib/tasks';
+import { dismissTask, finishTask, runTracked, startTask, updateTask } from '../lib/tasks';
+import { refreshJobs } from '../lib/jobs';
 import { eraOf, eraGroupsOf, decadesInRange, itemsInGroup } from '../lib/format';
 import { physicalImageQuery } from '../lib/image';
 import { ItemCard, Chip } from '../components/ItemCard';
@@ -31,7 +32,6 @@ import { NameEntry, RankerBadge } from '../components/NameEntry';
 import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
 import { BackToTop } from '../components/BackToTop';
-import { ResumeBanner } from '../components/ResumeBanner';
 import { ReviewCard } from './Curate';
 import { NavActions } from '../lib/navActions';
 
@@ -59,8 +59,8 @@ export function DatasetView() {
   const [gapSuggestedCount, setGapSuggestedCount] = useState(8);
   const [gapError, setGapError] = useState('');
 
-  // Resuming a durable gap-fill job (lib/jobs.ts) landed on from the ResumeBanner/Nav
-  // badge — `?job=<id>` carries research that already finished (or is still running)
+  // Resuming a durable gap-fill job (lib/jobs.ts) landed on from the notification
+  // gutter's "View" link — `?job=<id>` carries research that already finished (or is still running)
   // in a previous session. Handed to GapPanel, which hydrates its review grid from it
   // instead of requiring a fresh research() call.
   const [resumeJob, setResumeJob] = useState<Job | null>(null);
@@ -101,8 +101,8 @@ export function DatasetView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ds, searchParams]);
 
-  // Same idea, for `?job=<id>` — a link from the ResumeBanner/Nav badge to either kind
-  // of job this page can produce: a 'gaps' sweep (the coverage-gap list itself) or a
+  // Same idea, for `?job=<id>` — a link from the notification gutter's "View" button
+  // to either kind of job this page can produce: a 'gaps' sweep (the coverage-gap list itself) or a
   // 'gap-fill' research call (a proposal built from gaps already found).
   useEffect(() => {
     const jobId = searchParams.get('job');
@@ -158,22 +158,28 @@ export function DatasetView() {
     setLoadingGaps(true);
     setGaps(null);
     setGapError('');
+    // A plain task, not `runTracked` — this call also creates a durable job row
+    // server-side (see shared/types.ts's `Job`), and `refreshJobs()` below pulls it in
+    // right after. That durable job is what represents this sweep in the notification
+    // gutter from here on, with a "View"/"Retry" action a transient task never has —
+    // so this one is dismissed the moment the call settles rather than left lingering
+    // beside it, dead-ended on its last progress line with only a bare ✕.
+    const taskId = startTask(`Review ${ds.topic} for gaps`);
     try {
-      const res = await runTracked(`Review ${ds.topic} for gaps`, (onProgress) =>
-        api.findGaps(
-          {
-            topic: ds.topic,
-            description: ds.description,
-            subtopics: ds.subtopics,
-            items: ds.items,
-            domain: ds.domain,
-            // Named periods go in so an era-shaped gap comes back named, matching what
-            // the Filters screen and the gap-fill call already speak in.
-            eraGroups: ds.eraGroups ?? [],
-          },
-          onProgress,
-        ),
+      const res = await api.findGaps(
+        {
+          topic: ds.topic,
+          description: ds.description,
+          subtopics: ds.subtopics,
+          items: ds.items,
+          domain: ds.domain,
+          // Named periods go in so an era-shaped gap comes back named, matching what
+          // the Filters screen and the gap-fill call already speak in.
+          eraGroups: ds.eraGroups ?? [],
+        },
+        (line, jobId) => updateTask(taskId, line, jobId),
       );
+      finishTask(taskId, true);
       setGaps(res.gaps);
       setGapSuggestedCount(res.suggestedCount);
       if (res.jobId) {
@@ -185,9 +191,17 @@ export function DatasetView() {
         gapsJobIdRef.current = res.jobId;
       }
     } catch (e: any) {
+      finishTask(taskId, false, e?.message ?? 'Gap analysis failed');
       setGapError(e?.message ?? 'Gap analysis failed');
     } finally {
+      dismissTask(taskId);
       setLoadingGaps(false);
+      // Unconditional (success or thrown): the server creates the durable job row
+      // BEFORE the Claude call, so a sweep that errors out still leaves a real
+      // `status: 'error'` row behind — the SSE stream only reports an `error` event
+      // in that case, never a `jobId`, so it'd otherwise stay invisible in the
+      // gutter until something unrelated triggered a refetch.
+      refreshJobs();
     }
   }
 
@@ -284,12 +298,6 @@ export function DatasetView() {
           {loadingGaps ? 'Sweeping…' : 'Review'}
         </button>
       </NavActions>
-
-      {/* This field's own queued/finished review jobs — a 'gaps' sweep or a 'gap-fill'
-          research call started here and not yet acted on. Scoped to this dataset's
-          topic so it's still here (and resumable) after a refresh, without having to
-          go back to the world shelf (ResumeBanner also lives there, unscoped). */}
-      <ResumeBanner domain={ds.domain} topic={ds.topic} />
 
       {/* Active-filter read: a pill with × to clear. The count it used to sit beside now
           lives in the pinned title block, where it stays readable down the page. */}
@@ -558,25 +566,27 @@ function GapPanel({
     setError('');
     setNote('');
     setPending(null);
+    // See the matching comment in whatsMissing() above — a plain task, dismissed once
+    // the durable job (refreshJobs() below) is what's left representing this call.
+    const taskId = startTask(`Expand ${ds.topic} dataset`);
     try {
-      const res = await runTracked(`Expand ${ds.topic} dataset`, (onProgress) =>
-        api.fillGaps(
-          {
-            topic: ds.topic,
-            description: ds.description,
-            subtopics: ds.subtopics,
-            items: ds.items,
-            gaps: gaps ?? [],
-            count: Math.max(1, Math.min(50, count || 8)),
-            feedback,
-            domain: ds.domain,
-            // Named periods as context, so an added item's year lands inside a real
-            // era of the field and an era-shaped gap can be filled by name.
-            eraGroups: ds.eraGroups ?? [],
-          },
-          onProgress,
-        ),
+      const res = await api.fillGaps(
+        {
+          topic: ds.topic,
+          description: ds.description,
+          subtopics: ds.subtopics,
+          items: ds.items,
+          gaps: gaps ?? [],
+          count: Math.max(1, Math.min(50, count || 8)),
+          feedback,
+          domain: ds.domain,
+          // Named periods as context, so an added item's year lands inside a real
+          // era of the field and an era-shaped gap can be filled by name.
+          eraGroups: ds.eraGroups ?? [],
+        },
+        (line, jobId) => updateTask(taskId, line, jobId),
       );
+      finishTask(taskId, true);
       setPending(res.items);
       setNote(res.note);
       setCorrections({
@@ -593,9 +603,17 @@ function GapPanel({
         jobIdRef.current = res.jobId;
       }
     } catch (e: any) {
+      finishTask(taskId, false, e?.message ?? 'Could not research additions');
       setError(e?.message ?? 'Could not research additions');
     } finally {
+      dismissTask(taskId);
       setResearching(false);
+      // Unconditional (success or thrown): the server creates the durable job row
+      // BEFORE the Claude call, so a research call that errors out still leaves a
+      // real `status: 'error'` row behind — the SSE stream only reports an `error`
+      // event in that case, never a `jobId`, so it'd otherwise stay invisible in the
+      // gutter until something unrelated triggered a refetch.
+      refreshJobs();
     }
   }
 

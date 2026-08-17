@@ -20,9 +20,9 @@ export function Nav() {
   const { pathname } = useLocation();
   const domain = useDomain();
   const { ranker, release } = useRanker();
-  // Unscoped (both worlds) — a domain-scoped ResumeBanner alone would be invisible
-  // while browsing the other world, a dataset, or the review screen, and this is the
-  // one component mounted on every one of them.
+  // Unscoped (both worlds) — the notification gutter (TaskNotifications) already
+  // lists every job in full, but this badge is what's visible while it's collapsed
+  // to a top-right overlay on a narrow screen.
   const { jobs } = useJobs();
   // Only to turn a slug in the URL back into the field's real name. Cached and
   // usually already warm, since you nearly always arrive at a field from the shelf.
@@ -87,7 +87,7 @@ export function Nav() {
         </div>
 
         {/* AI work done (or still running) that nobody stuck around to review — the
-            full list per world lives in ResumeBanner on the shelf; this is just
+            full list lives in the notification gutter (TaskNotifications); this is just
             "something's waiting" visible from wherever you currently are. */}
         {jobs.length > 0 && (
           <>

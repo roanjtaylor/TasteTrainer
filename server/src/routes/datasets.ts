@@ -92,6 +92,19 @@ datasetsRouter.post('/', async (req: Request, res: Response, next: NextFunction)
     if (!topic?.trim() || !description?.trim()) {
       return res.status(400).json({ error: 'topic and description are required' });
     }
+    // Names are unique across the shelf (the `slug` column's unique constraint —
+    // global, not per world). Say so in words, with where the existing one lives,
+    // rather than surfacing Postgres's "duplicate key value violates unique
+    // constraint" — which is what a second research run of an already-saved field
+    // hit when the user tried to save it.
+    const existing = await getDataset(slugifyTopic(topic));
+    if (existing) {
+      return res.status(409).json({
+        error:
+          `A ${existing.topic} dataset already exists (${existing.items.length} items) — ` +
+          `open it at /${existing.domain}/${slugifyTopic(existing.topic)}, or delete it first to replace it.`,
+      });
+    }
     const canonicalSubtopics = subtopics ?? [];
     const ds: Dataset = {
       id: newId(),

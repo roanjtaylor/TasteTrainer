@@ -26,8 +26,18 @@ jobsRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) =
 // Called once a job's proposal has been saved or discarded — live or resumed, the
 // screens that own that decision (Curate.tsx, DatasetView.tsx's GapPanel) are the
 // only callers.
+//
+// A job that is genuinely still running is refused (409): the server has no way to
+// stop the Claude call behind it, so deleting the row only throws away the result
+// when it lands — `updateJob` is a no-op on a missing row — and that is exactly how a
+// half-hour research run vanished without trace. A job that only READS as running
+// but has gone stale (storage.ts's rowToJob flips it to `error`) is still deletable.
 jobsRouter.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const job = await getJob(req.params.id);
+    if (job?.status === 'running') {
+      return res.status(409).json({ error: 'This job is still running; it can be dismissed once it finishes.' });
+    }
     await deleteJob(req.params.id);
     res.status(204).end();
   } catch (err) { next(err); }

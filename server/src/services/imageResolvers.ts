@@ -417,3 +417,35 @@ export async function resolveDigitalImage(
   const chosen = ranked[0];
   return { image: chosen.url, capture: captureFor(chosen, hints), candidates: ranked };
 }
+
+/**
+ * Resolve the best available image for one PHYSICAL item — a plain reference photo,
+ * never a render, so this is the reference-source half of `resolveDigitalImage` above
+ * (Wikipedia lead, Commons, DuckDuckGo) reused as-is, minus the render/screenshot and
+ * software-archive sources that only make sense for the digital world.
+ *
+ * This replaces what used to be a single blind `searchImages(query, 1)` call with no
+ * scoring at all — the same gap that made the manual "swap image" flow (which shows the
+ * human several candidates to choose from) far more reliable than first-pass generation.
+ * Scoring here is the same `scoreCandidate`/`bestFirst` used for digital reference
+ * sources, which already only exercises its render-specific signals when a candidate
+ * carries `.render` — a physical `RawCandidate` never does, so nothing digital-specific
+ * leaks into this path.
+ */
+export async function resolvePhysicalImage(hints: ResolveHints): Promise<ResolveResult> {
+  const query = hints.imageQuery?.trim() || hints.wikipediaTitle?.trim() || hints.name;
+  const [wiki, commons, ddg] = await Promise.all([
+    hints.wikipediaTitle ? wikipediaLead(hints.wikipediaTitle) : Promise.resolve([]),
+    commonsCandidates(query, 5),
+    ddgCandidates(query, 5),
+  ]);
+
+  const scored = (
+    await mapWithLimit([...wiki, ...commons, ...ddg], 4, (c) => scoreCandidate(c, hints))
+  ).filter((c): c is ImageCandidate => c !== null);
+
+  const ranked = bestFirst(scored, hints.year);
+  if (!ranked.length) return { image: '', candidates: [] };
+  const chosen = ranked[0];
+  return { image: chosen.url, capture: captureFor(chosen, hints), candidates: ranked };
+}

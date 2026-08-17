@@ -175,9 +175,8 @@ export interface Item {
    */
   url?: string;
   /**
-   * How `image` was captured (digital domain only). Absent on physical items and on
-   * anything curated before capture reporting existed — treated as "not known", not
-   * as "inaccurate".
+   * How `image` was captured. Absent on anything curated before capture reporting
+   * existed (both domains) — treated as "not known", not as "inaccurate".
    */
   capture?: Capture;
   /**
@@ -546,7 +545,7 @@ export function mapSlug(name: string): string {
 /** Which curation call a job wraps. Only calls that return a proposal for the user to
  *  review (rather than writing straight to storage themselves, like the field-map
  *  review or a boundary fix) need this. */
-export type JobKind = 'items' | 'gap-fill' | 'gaps';
+export type JobKind = 'subtopics' | 'items' | 'gap-fill' | 'gaps';
 
 export type JobStatus = 'running' | 'done' | 'error';
 

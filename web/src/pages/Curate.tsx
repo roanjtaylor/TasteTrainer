@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, Navigate, Link, useSearchParams } from 'react-router-dom';
+import { useNavigate, Navigate, Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   singleWordTopic,
   slugifyTopic,
@@ -9,21 +9,38 @@ import {
   type Subtopic,
 } from '../../../shared/types';
 import { api } from '../lib/api';
-import { createDataset, saveDataset } from '../lib/data';
+import { createDataset, saveDataset, useDatasetList } from '../lib/data';
 import { useDomain } from '../lib/domain';
 import { physicalImageQuery } from '../lib/image';
-import { runTracked } from '../lib/tasks';
+import { dismissTask, finishTask, runTracked, startTask, updateTask } from '../lib/tasks';
+import { refreshJobs } from '../lib/jobs';
 import { CaptureBadge, SourceTag } from '../components/CaptureBadge';
 import { CandidateStrip } from '../components/CandidateStrip';
 import { ImagePicker } from '../components/ImagePicker';
 import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
 
+// Route element for both "/:domain/new" (no field chosen yet) and "/:domain/:slug/new"
+// (a field's own dedicated research URL — see initialise() below for how a session
+// gets moved onto one). Keyed by domain+slug so React Router's usual behaviour —
+// reusing the same mounted component across a param-only navigation — can't happen
+// here: starting a second field's research always mounts a fresh `Curate`, so a
+// still-running call from the first can never write its result into the second's
+// screen. That cross-talk (a "Bank notes" item landing under a "Lighting" session
+// still on screen) was the actual bug behind "field research doesn't stack" — the
+// underlying calls always ran fine in parallel, only the one shared page didn't.
+export function CurateRoute() {
+  const { domain, slug } = useParams();
+  return <Curate key={`${domain}/${slug ?? ''}`} />;
+}
+
 // Curate flow (3-curation.md / 6-ui.md): topic -> AI subtopics -> review grid -> save.
-// Scoped to the world in the URL (7-software-design.md) — this screen is /physical/new.
-export function Curate() {
+// Scoped to the world in the URL (7-software-design.md) — this screen is /physical/new,
+// or /physical/<slug>/new once a field has been named (see initialise()).
+function Curate() {
   const navigate = useNavigate();
   const domain = useDomain();
+  const { slug: routeSlug } = useParams();
 
   // Arriving from the field map's "Curate this →" carries the proposed field in the
   // URL, so a gap you just read about becomes a dataset without retyping it.
@@ -43,14 +60,35 @@ export function Curate() {
   const [error, setError] = useState('');
   const [pickerIndex, setPickerIndex] = useState<number | null>(null);
 
-  // Resuming a durable job (lib/jobs.ts) landed on from the ResumeBanner/Nav badge —
-  // `?job=<id>` carries research that already finished (or is still running) in a
+  // Dataset names are unique across the whole shelf (server: the slug column's
+  // unique constraint, global not per world), so a topic that already exists can be
+  // mapped and researched here and then fail at the very last step. Both worlds'
+  // lists are read so the clash is caught as you type — before half an hour of
+  // research is spent on it — and offers the existing dataset instead.
+  const physicalList = useDatasetList('physical');
+  const digitalList = useDatasetList('digital');
+  const topicSlug = slugifyTopic(topic.trim());
+  const existing = topicSlug
+    ? [...(physicalList.data ?? []), ...(digitalList.data ?? [])].find(
+        (d) => slugifyTopic(d.topic) === topicSlug,
+      )
+    : undefined;
+
+  // Resuming a durable job (lib/jobs.ts) landed on from the notification gutter's
+  // "View" button — `?job=<id>` carries research that already finished (or is still running) in a
   // previous session. `resuming` covers both the fetch and the poll-while-running.
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState('');
-  // The job the CURRENT proposal came from, live or resumed — tracked so save() can
-  // clean it up. A ref, not state: nothing on screen needs to re-render off it.
+  // The job each step's CURRENT result came from, live or resumed — tracked so save()
+  // can clean them up. Refs, not state: nothing on screen needs to re-render off them.
+  // Two separate refs, not one: re-mapping the field after items already exist must
+  // not delete the items job just because a newer subtopics job superseded the old one.
+  const mapJobIdRef = useRef<string | null>(null);
   const jobIdRef = useRef<string | null>(null);
+  // Guards the autostart effect below against StrictMode's dev-only double-invoke,
+  // which would otherwise fire initialise() twice and create two mapping jobs for one
+  // handoff.
+  const autostartedRef = useRef(false);
 
   useEffect(() => {
     const jobId = params.get('job');
@@ -58,6 +96,23 @@ export function Curate() {
     // Stripped immediately so a refresh or the back button doesn't re-resume it.
     setParams((p) => { p.delete('job'); return p; }, { replace: true });
     void resumeJob(jobId);
+    // `params` deliberately in the deps (not `[]`): the notification gutter's "View"
+    // link points at this same `/:domain/new` route, so clicking it while already
+    // sitting on this page is a query-param-only navigation — React Router reuses
+    // this component instance rather than remounting it, so a mount-only effect would
+    // never see the new `job` param. The `delete('job')` above makes the re-run this
+    // triggers a no-op, so this can't loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
+
+  // Picks up a mapping call handed off by initialise() below, right after it moved
+  // this session onto its own "/:domain/<slug>/new" URL. Mount-only: this instance's
+  // `initialise()` is the one call that should actually run for this handoff.
+  useEffect(() => {
+    if (params.get('autostart') !== '1' || autostartedRef.current) return;
+    autostartedRef.current = true;
+    setParams((p) => { p.delete('autostart'); return p; }, { replace: true });
+    void initialise();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -70,25 +125,45 @@ export function Curate() {
         await new Promise((r) => setTimeout(r, 5000));
         job = await api.getJob(id);
       }
+
+      // Restore whatever the job was started with even on failure — that's what makes
+      // the "Retry" link from the notification gutter useful: it lands here with the
+      // topic/description/subtopics already filled in, so retrying is one more button
+      // press rather than retyping everything from scratch.
+      if (job.kind === 'subtopics') {
+        const input = job.input as { topic: string; description: string };
+        setTopic(input.topic);
+        setDescription(input.description);
+        mapJobIdRef.current = id;
+        if (job.status === 'done') {
+          const result = job.result as { subtopics: Subtopic[]; suggestedCount: number; eraGroups: EraGroup[] };
+          setSubtopics(result.subtopics ?? []);
+          setEraGroups(result.eraGroups ?? []);
+          setCount(result.suggestedCount ?? 12);
+        }
+      } else {
+        const input = job.input as {
+          topic: string;
+          description: string;
+          subtopics: Subtopic[];
+          count: number;
+          eraGroups?: EraGroup[];
+        };
+        setTopic(input.topic);
+        setDescription(input.description);
+        setSubtopics(input.subtopics ?? []);
+        setEraGroups(input.eraGroups ?? []);
+        setCount(input.count ?? 12);
+        jobIdRef.current = id;
+        if (job.status === 'done') {
+          const result = job.result as { items: ProposedItem[] };
+          setItems(result.items ?? []);
+        }
+      }
+
       if (job.status === 'error') {
         setResumeError(job.error ?? 'This job failed.');
-        return;
       }
-      const input = job.input as {
-        topic: string;
-        description: string;
-        subtopics: Subtopic[];
-        count: number;
-        eraGroups?: EraGroup[];
-      };
-      const result = job.result as { items: ProposedItem[] };
-      setTopic(input.topic);
-      setDescription(input.description);
-      setSubtopics(input.subtopics ?? []);
-      setEraGroups(input.eraGroups ?? []);
-      setCount(input.count ?? 12);
-      setItems(result.items ?? []);
-      jobIdRef.current = id;
     } catch (e: any) {
       setResumeError(e?.message ?? 'Could not resume this job');
     } finally {
@@ -115,33 +190,84 @@ export function Curate() {
     }
   }
 
+  /**
+   * Same as `run`, for the two calls that ALSO create a durable job row server-side
+   * (subtopics, items — see shared/types.ts's `Job`). Those don't need their own
+   * lingering notification card once they finish: the durable job (refreshJobs(),
+   * called right after this resolves) takes over as the gutter's representation of
+   * this operation, with a "View"/"Retry" action the plain transient task never had.
+   * Without this, the two cards sat side by side — one dead-ended on a stale
+   * "Composing results…" with only a dismiss ✕, the other offering the real action.
+   */
+  async function runJob<T>(
+    label: string,
+    taskTitle: string,
+    fn: (onProgress: (line: string, jobId?: string) => void) => Promise<T>,
+  ): Promise<T | undefined> {
+    setBusy(label);
+    setError('');
+    const id = startTask(taskTitle);
+    try {
+      // `jobId` arrives on the first progress line: pairing the transient card with
+      // the durable job keeps the gutter to one card per operation while it runs.
+      const result = await fn((line, jobId) => updateTask(id, line, jobId));
+      finishTask(id, true);
+      return result;
+    } catch (e: any) {
+      finishTask(id, false, e?.message ?? 'Something went wrong');
+      setError(e?.message ?? 'Something went wrong');
+    } finally {
+      dismissTask(id);
+      setBusy(null);
+    }
+  }
+
   // Mapping a field means both of its axes: the subtopics it divides into, and the
   // periods its history divides into. Both are settled before any item is researched,
   // so the research call is filling a known frame rather than inventing one.
   async function initialise() {
     if (!topic.trim()) return;
-    await run('Mapping the field…', `Map the ${topic.trim()} field`, async (onProgress) => {
-      const res = await api.proposeSubtopics(topic.trim(), description.trim(), dom, onProgress);
-      setSubtopics(res.subtopics);
+    // First call for this topic: move off the shared "/:domain/new" URL onto this
+    // field's own "/:domain/<slug>/new" before starting any Claude call — see
+    // CurateRoute above. `autostart=1` tells the freshly-mounted instance to pick up
+    // right where this one left off; that instance's own `initialise()` call is the
+    // one that actually runs the job, so nothing here should run twice.
+    if (!routeSlug) {
+      navigate(
+        `/${dom}/${slugifyTopic(topic.trim())}/new` +
+          `?topic=${encodeURIComponent(topic.trim())}&description=${encodeURIComponent(description.trim())}&autostart=1`,
+        { replace: true },
+      );
+      return;
+    }
+    const res = await runJob('Mapping the field…', `Map the ${topic.trim()} field`, (onProgress) =>
+      api.proposeSubtopics(topic.trim(), description.trim(), dom, onProgress),
+    );
+    // Unconditional, not just on success — see the matching comment in generate()
+    // below: the server creates the durable job row before the Claude call, so a
+    // failed call still leaves a real row for the gutter to show.
+    refreshJobs();
+    if (res) {
+      setSubtopics(res.subtopics ?? []);
       // Claude sizes the collection to the field; the user can still override below.
-      setCount(res.suggestedCount);
-
-      // Best-effort: without periods the research call falls back to its old
-      // spread-across-eras behaviour rather than failing the whole flow.
-      try {
-        const periods = await api.generatePeriods(
-          { topic: topic.trim(), description: description.trim(), domain: dom },
-          onProgress,
-        );
-        setEraGroups(periods.eraGroups);
-      } catch {
-        setEraGroups([]);
+      setCount(res.suggestedCount ?? 12);
+      // Defensive `?? []`: `eraGroups` and `jobId` were added to this payload later
+      // than `subtopics` was, and the server runs under plain `tsx` (no watch) — a
+      // server process started before that change still answers with the old shape,
+      // and `eraGroups.length` in the render below would then throw and blank the
+      // whole page. Missing periods just mean the research call falls back to its
+      // spread-across-eras behaviour, which is what it always did.
+      setEraGroups(res.eraGroups ?? []);
+      const jobId = res.jobId ?? null;
+      if (mapJobIdRef.current && jobId && mapJobIdRef.current !== jobId) {
+        api.deleteJob(mapJobIdRef.current).catch(() => {});
       }
-    });
+      if (jobId) mapJobIdRef.current = jobId;
+    }
   }
 
   async function generate(more = false) {
-    const res = await run(
+    const res = await runJob(
       more ? 'Finding more…' : 'Researching the best…',
       more ? `Find more for ${topic.trim()}` : `Research the ${topic.trim()} dataset`,
       async (onProgress) => {
@@ -161,6 +287,15 @@ export function Curate() {
         return res;
       },
     );
+    // Unconditional, not just on success: the server creates the durable job row
+    // BEFORE the Claude call, so a research call that errors out (e.g. a 401 from a
+    // misconfigured local proxy) still leaves a real `status: 'error'` row behind —
+    // the SSE stream only ever reports an `error` event in that case, never a
+    // `jobId`, so `res` is undefined here and the job would otherwise stay invisible
+    // in the gutter until something unrelated happened to trigger a refetch (a hard
+    // refresh, another job finishing elsewhere). Calling this either way means the
+    // gutter picks up whatever the server actually did, success or failure.
+    refreshJobs();
     if (res?.jobId) {
       // Superseding whatever job was tracked before — its proposal is already folded
       // into `items` above (or was this same job, resumed then immediately re-run),
@@ -196,6 +331,10 @@ export function Curate() {
       }
     });
     if (ds) {
+      if (mapJobIdRef.current) {
+        api.deleteJob(mapJobIdRef.current).catch(() => {});
+        mapJobIdRef.current = null;
+      }
       if (jobIdRef.current) {
         api.deleteJob(jobIdRef.current).catch(() => {});
         jobIdRef.current = null;
@@ -270,9 +409,23 @@ export function Curate() {
             placeholder="e.g. Watches — wearable timepieces, mechanical to digital"
           />
         </label>
+        {existing && (
+          <p className="rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-wall)] px-3 py-2 text-sm text-[var(--color-accent)]">
+            A <strong>{existing.topic}</strong> dataset already exists in the {existing.domain} world
+            ({existing.itemCount} items) — names are unique across the shelf, so this one can't be
+            saved under it.{' '}
+            <Link
+              to={`/${existing.domain}/${slugifyTopic(existing.topic)}`}
+              className="underline"
+            >
+              Open it →
+            </Link>{' '}
+            to add to it, or pick another name.
+          </p>
+        )}
         <button
           onClick={initialise}
-          disabled={!topic.trim() || !!busy}
+          disabled={!topic.trim() || !!busy || !!existing}
           className="rounded-full bg-[var(--color-ink)] px-5 py-2 text-sm text-[var(--color-wall)] disabled:opacity-40"
         >
           {subtopics.length ? 'Re-map field' : 'Map the field →'}
@@ -378,7 +531,11 @@ export function Curate() {
               </button>
               <button
                 onClick={save}
-                disabled={!!busy}
+                // Disabled on a name clash too (see the notice by the topic field):
+                // the save would only come back with a 409. Renaming the topic
+                // above re-enables it — the reviewed items save under the new name.
+                disabled={!!busy || !!existing}
+                title={existing ? `A ${existing.topic} dataset already exists — rename the topic to save this one.` : undefined}
                 className="rounded-full bg-[var(--color-accent)] px-5 py-2 text-sm text-white disabled:opacity-40"
               >
                 Save dataset

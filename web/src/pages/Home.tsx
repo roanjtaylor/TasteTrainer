@@ -5,7 +5,6 @@ import { useDomain } from '../lib/domain';
 import { prefetchDataset, useDatasetList, useWorldMap } from '../lib/data';
 import { cardsFor } from '../lib/mapLayout';
 import { WorldMapCanvas, WorldMapSections } from '../components/WorldMapCanvas';
-import { ResumeBanner } from '../components/ResumeBanner';
 import { NavActions } from '../lib/navActions';
 
 // Datasets home — one world's fields (6-ui.md, 7-software-design.md), addressed by
@@ -72,8 +71,6 @@ export function Home() {
           </Link>
         </NavActions>
       )}
-
-      <ResumeBanner domain={domain} />
 
       {error ? (
         <p className="text-[var(--color-accent)]">{error}</p>

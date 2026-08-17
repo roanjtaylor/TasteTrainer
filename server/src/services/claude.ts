@@ -5,7 +5,25 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CLAUDE_MODEL, HF_BASE_URL, HF_APP_SECRET } from '../config.ts';
+import { Agent, fetch as undiciFetch } from 'undici';
+import { CLAUDE_MODEL, CLAUDE_TIMEOUT_MS, HF_BASE_URL, HF_APP_SECRET } from '../config.ts';
+
+/**
+ * Node's built-in `fetch` (undici) has ITS OWN idle limits underneath any AbortSignal
+ * we pass: `headersTimeout` and `bodyTimeout` both default to 300 000 ms. Either one
+ * — no response headers for 5 min, or no body chunk for 5 min — kills the connection
+ * with a bare `TypeError: terminated`. That is exactly what a long-thinking research
+ * call looks like from here (the Space forwards nothing until the model starts
+ * emitting), so a run that had five silent minutes died at 300 s regardless of the
+ * hour-long CLAUDE_TIMEOUT_MS. This dispatcher lifts both to that same cap; the
+ * AbortController in `runJsonOnce` remains the one real deadline. Used with the
+ * `undici` package's own `fetch` (not the global one) so the Agent and the fetch are
+ * guaranteed the same undici version — Node's bundled copy and the package can drift.
+ */
+const claudeDispatcher = new Agent({
+  headersTimeout: CLAUDE_TIMEOUT_MS,
+  bodyTimeout: CLAUDE_TIMEOUT_MS,
+});
 import { singleWordTopic } from '../../../shared/types.ts';
 import type {
   BoundaryIssue,
@@ -88,7 +106,10 @@ interface RunOpts {
    * "X of N" lines when known, otherwise "Found X…".
    */
   count?: { key: string; total?: number; noun: string };
-  /** Hard cap on the whole call in ms. Defaults to 120 s (covers HF cold-start). */
+  /** Hard cap on the whole call in ms. Defaults to CLAUDE_TIMEOUT_MS (an hour) — a
+   *  stuck-request backstop, not a per-call budget. Callers used to pass their own
+   *  minute-scale budgets here; those were sized for the old proxy limits and cut
+   *  legitimately long research runs short, so none do any more. */
   timeoutMs?: number;
 }
 
@@ -138,7 +159,7 @@ async function runJson(system: string, prompt: string, opts: RunOpts = {}): Prom
 }
 
 async function runJsonOnce(system: string, prompt: string, opts: RunOpts = {}): Promise<any> {
-  const { onProgress, count, timeoutMs = 120_000 } = opts;
+  const { onProgress, count, timeoutMs = CLAUDE_TIMEOUT_MS } = opts;
 
   // Say which knob is missing rather than letting the Space answer for us. Without
   // this the request goes out with an empty `x-app-secret`, the Space correctly
@@ -170,9 +191,22 @@ async function runJsonOnce(system: string, prompt: string, opts: RunOpts = {}): 
     timedOut = true;
     controller.abort();
   }, timeoutMs);
+  // Timer-driven, not delta-driven: the "Still working…" line below used to fire only
+  // as text arrived, so the (often long) silent stretch before the FIRST token — the
+  // model thinking, the proxy waiting on it — reported nothing at all. To a card that
+  // is only reading the job row (a resumed session), that was indistinguishable from
+  // a call that never started. This ticks whether or not anything is streaming.
+  const heartbeat = onProgress
+    ? setInterval(() => {
+        if (Date.now() - lastProgressAt > 8_000) {
+          lastProgressAt = Date.now();
+          onProgress(`Still working… ${Math.round((Date.now() - startedAt) / 1000)}s`);
+        }
+      }, 4_000)
+    : undefined;
 
   try {
-    const res = await fetch(`${HF_BASE_URL}/api/chat`, {
+    const res = await undiciFetch(`${HF_BASE_URL}/api/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -185,6 +219,7 @@ async function runJsonOnce(system: string, prompt: string, opts: RunOpts = {}): 
         systemPrompt: system,
       }),
       signal: controller.signal,
+      dispatcher: claudeDispatcher,
     });
 
     if (!res.ok || !res.body) {
@@ -280,9 +315,19 @@ async function runJsonOnce(system: string, prompt: string, opts: RunOpts = {}): 
           'Nothing was saved — try again, or narrow what you asked for.',
       );
     }
+    // undici's word for "the connection died mid-stream" — the upstream closed it, or
+    // an idle limit fired. Say that, with how far it got, instead of one bare word.
+    if (err?.message === 'terminated' || err?.cause?.message === 'terminated') {
+      const produced = lastCount > 0 ? ` It had produced ${lastCount} ${count?.noun ?? 'results'}.` : '';
+      throw new Error(
+        `The connection to the Claude proxy dropped after ${formatDuration(Date.now() - startedAt)}, ` +
+          `before the response finished.${produced} Nothing was saved — try again.`,
+      );
+    }
     throw err;
   } finally {
     clearTimeout(timer);
+    if (heartbeat) clearInterval(heartbeat);
   }
 }
 
@@ -452,7 +497,6 @@ export async function generateItems(args: {
   const json = await runJson(system, prompt, {
     onProgress,
     count: { key: 'name', total: count, noun: 'items' },
-    timeoutMs: 120_000 + count * 7_000,
   });
   const items = (json.items ?? []) as Omit<ProposedItem, 'image'>[];
   return items.map((it) => ({ ...it, image: '' }));
@@ -496,14 +540,9 @@ export async function findGaps(args: {
   const json = await runJson(system, prompt, {
     onProgress,
     count: { key: 'axis', noun: 'gaps' },
-    // This runs as a durable job (server/src/routes/curation.ts's /gaps route), not a
-    // blocking call anyone watches spin — so there's no cost to a generous floor, only
-    // to cutting it off too early. 120s wasn't even enough for a SMALL sweep (17 gaps
-    // still in progress) — the bottleneck is generation length, which a per-item slope
-    // alone doesn't cover. 5 min floor for every sweep regardless of size; the per-item
-    // margin on top covers genuinely large inventories; 10 min hard ceiling so a stuck
-    // stream still gets shut down rather than tying up the job indefinitely.
-    timeoutMs: Math.min(600_000, 300_000 + items.length * 1_500),
+    // No per-call budget: this runs as a durable job (routes/curation.ts's /gaps), so
+    // there is no cost to letting it run, only to cutting it off early — see
+    // CLAUDE_TIMEOUT_MS in config.ts for the one backstop every call shares.
   });
   const gaps = (json.gaps ?? []) as CoverageGap[];
   const raw = Number(json.suggestedCount);
@@ -656,13 +695,9 @@ export async function reviewFieldMap(args: {
   const json = await runJson(system, prompt, {
     onProgress,
     count: { key: 'topic', noun: 'fields' },
-    // This is the largest single response the app asks for — a summary paragraph,
-    // missing fields each with a rationale, boundary issues, thin fields, and (on a
-    // first draw) two axes, every region, and one assignment per field. It grows with
-    // the shelf, so a fixed budget is wrong in exactly the way it was: the biggest job
-    // had the smallest one, and a first draw of a well-stocked world timed out
-    // mid-stream. Drawing from scratch costs roughly double amending an existing map.
-    timeoutMs: (existingMap ? 150_000 : 240_000) + fields.length * 9_000,
+    // This is the largest single response the app asks for and it grows with the
+    // shelf — a sized budget here twice cut a working draw off mid-stream. No per-call
+    // budget any more; CLAUDE_TIMEOUT_MS (config.ts) is the shared backstop.
   });
 
   const known = new Set(fields.map((f) => f.topic));
@@ -792,7 +827,6 @@ export async function planBoundaryFix(args: {
   let shapeJson = await runJson(system, shapePrompt, {
     onProgress,
     count: { key: 'sourceTopic', noun: 'fields' },
-    timeoutMs: 90_000,
   });
   let resultFields = parseShape(shapeJson);
 
@@ -806,7 +840,6 @@ export async function planBoundaryFix(args: {
     const retryJson = await runJson(system, retryPrompt, {
       onProgress,
       count: { key: 'sourceTopic', noun: 'fields' },
-      timeoutMs: 90_000,
     });
     const retryFields = parseShape(retryJson);
     if (retryFields.length > fields.length) {
@@ -849,7 +882,6 @@ export async function planBoundaryFix(args: {
             ? (line) => onProgress(`Classifying items… batch ${idx + 1}/${chunks.length} — ${line}`)
             : undefined,
           count: { key: 'id', total: batch.length, noun: 'items' },
-          timeoutMs: 45_000 + batch.length * 1_200,
         });
 
         const byId = new Map<string, string>();
@@ -929,7 +961,6 @@ export async function fillGaps(args: {
   const json = await runJson(system, prompt, {
     onProgress,
     count: { key: 'name', total: count, noun: 'items' },
-    timeoutMs: 120_000 + count * 7_000,
   });
   const items = (json.items ?? []) as Omit<ProposedItem, 'image'>[];
   const note = typeof json.note === 'string' ? json.note : '';

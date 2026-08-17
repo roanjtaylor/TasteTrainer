@@ -13,6 +13,10 @@ export interface Task {
   title: string;
   detail: string;
   status: TaskStatus;
+  /** The durable job row (lib/jobs.ts) this task is the live view of, once the
+   *  server has told us its id — so the notification gutter shows ONE card for the
+   *  operation, not this transient one beside the durable one. */
+  jobId?: string;
 }
 
 let tasks: Task[] = [];
@@ -35,16 +39,18 @@ export function startTask(title: string): string {
   return id;
 }
 
-/** Update the live status line under a running task (e.g. "3 fields fetched"). */
-export function updateTask(id: string, detail: string): void {
-  setTasks(tasks.map((t) => (t.id === id ? { ...t, detail } : t)));
+/** Update the live status line under a running task (e.g. "3 fields fetched"), and
+ *  record the durable job it belongs to once the server names one. Shaped to be
+ *  passed straight through as an `OnProgress` (lib/api.ts): `(line, jobId?)`. */
+export function updateTask(id: string, detail: string, jobId?: string): void {
+  setTasks(tasks.map((t) => (t.id === id ? { ...t, detail, jobId: jobId ?? t.jobId } : t)));
 }
 
-/** Mark a task finished. A success fades itself out; a failure stays until dismissed,
- *  since that's the one case where disappearing on its own would bury the message. */
+/** Mark a task finished. Both success and failure stay on screen until the user
+ *  dismisses them — a task that quietly cleared itself on success was easy to miss
+ *  finishing at all. */
 export function finishTask(id: string, ok: boolean, detail = ''): void {
   setTasks(tasks.map((t) => (t.id === id ? { ...t, status: ok ? 'done' : 'error', detail: detail || t.detail } : t)));
-  if (ok) setTimeout(() => dismissTask(id), 2500);
 }
 
 export function dismissTask(id: string): void {
@@ -58,11 +64,11 @@ export function dismissTask(id: string): void {
  */
 export async function runTracked<T>(
   title: string,
-  fn: (onProgress: (detail: string) => void) => Promise<T>,
+  fn: (onProgress: (detail: string, jobId?: string) => void) => Promise<T>,
 ): Promise<T> {
   const id = startTask(title);
   try {
-    const result = await fn((detail) => updateTask(id, detail));
+    const result = await fn((detail, jobId) => updateTask(id, detail, jobId));
     finishTask(id, true);
     return result;
   } catch (e: any) {
