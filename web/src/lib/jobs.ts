@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Domain, Job } from '../../../shared/types';
+import { slugifyTopic, type Domain, type Job, type JobKind } from '../../../shared/types';
 import { api } from './api';
 
 // The durable half of curation progress — deliberately separate from lib/tasks.ts,
@@ -15,6 +15,9 @@ import { api } from './api';
 // counting the cancelled job until its own poll happened to land minutes later.
 
 let jobs: Job[] = [];
+/** True once the first fetch has answered — so a page deciding whether to resume a
+ *  dataset's job on open (DatasetView, Curate) can tell "no job" from "not asked yet". */
+let loaded = false;
 const listeners = new Set<() => void>();
 let pollTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -25,6 +28,7 @@ function notify(): void {
 async function fetchAll(): Promise<void> {
   try {
     jobs = await api.listJobs();
+    loaded = true;
     notify();
   } catch {
     // Best-effort — a failed poll just tries again next time something asks.
@@ -48,7 +52,7 @@ function schedulePoll(): void {
 
 /** Every job for one world, or across both when `domain` is omitted (the Nav badge's
  *  and the notification gutter's case). */
-export function useJobs(domain?: Domain): { jobs: Job[]; refresh: () => void } {
+export function useJobs(domain?: Domain): { jobs: Job[]; loaded: boolean; refresh: () => void } {
   const [, setTick] = useState(0);
 
   useEffect(() => {
@@ -67,6 +71,7 @@ export function useJobs(domain?: Domain): { jobs: Job[]; refresh: () => void } {
 
   return {
     jobs: domain ? jobs.filter((j) => j.domain === domain) : jobs,
+    loaded,
     refresh: () => {
       void fetchAll();
     },
@@ -100,4 +105,71 @@ export async function cancelJob(id: string): Promise<void> {
   }
   jobs = jobs.filter((j) => j.id !== id);
   notify();
+}
+
+// ---- Grouping: one dataset, many steps ----
+//
+// A dataset moves through stages — map → research (Curate.tsx), or review → expand
+// (DatasetView.tsx) — and each stage is its own durable job row. To the user those
+// are ONE thing happening to ONE dataset, so everything that shows jobs (the
+// notification gutter, a page deciding what to resume on open) keys them by dataset
+// and picks a single "current" job per key.
+
+/** "physical/engines" — the dataset a job or task belongs to. Every job kind stores
+ *  the topic in its input (server/src/routes/curation.ts passes `req.body` through). */
+export function groupKey(domain: Domain, topic: string): string {
+  return `${domain}/${slugifyTopic(topic)}`;
+}
+
+export function jobGroupKey(job: Job): string {
+  const input = job.input as { topic?: string };
+  return groupKey(job.domain, input.topic ?? '');
+}
+
+/** The stage label for a card: the verb the step is doing. */
+export const JOB_STAGE: Record<JobKind, string> = {
+  subtopics: 'Map',
+  items: 'Research',
+  gaps: 'Review',
+  'gap-fill': 'Expand',
+};
+
+/** Later stages supersede earlier ones: an 'items' job's input carries the subtopics
+ *  it was researched against, and a 'gap-fill' job's input carries the gaps it filled,
+ *  so the later job is self-sufficient to resume from and the earlier one is just
+ *  history. (Curate.tsx / DatasetView.tsx delete the earlier row outright once the
+ *  later step's result is saved.) */
+const STAGE_RANK: Record<JobKind, number> = { subtopics: 0, gaps: 0, items: 1, 'gap-fill': 1 };
+
+/**
+ * The one job that represents a dataset right now, out of every row keyed to it:
+ * anything still running wins (it's the live thing), else the most advanced stage,
+ * newest first within a stage. `null` when the dataset has no job at all.
+ */
+export function currentJob(jobsForKey: Job[]): Job | null {
+  if (!jobsForKey.length) return null;
+  return [...jobsForKey].sort((a, b) => {
+    const ar = a.status === 'running' ? 1 : 0;
+    const br = b.status === 'running' ? 1 : 0;
+    if (ar !== br) return br - ar;
+    if (STAGE_RANK[a.kind] !== STAGE_RANK[b.kind]) return STAGE_RANK[b.kind] - STAGE_RANK[a.kind];
+    return b.createdAt < a.createdAt ? -1 : b.createdAt > a.createdAt ? 1 : 0;
+  })[0];
+}
+
+/** Every job for one dataset. */
+export function jobsFor(all: Job[], key: string): Job[] {
+  return all.filter((j) => jobGroupKey(j) === key);
+}
+
+/** Where "View" lands for a job: 'subtopics' and 'items' are both steps of the same
+ *  "new dataset" flow (Curate.tsx), which resumes either kind via its `?job=` param on
+ *  the field's own research URL — the other kinds amend an existing, already-saved
+ *  dataset, so they land on that dataset's own page instead. */
+export function jobReviewPath(job: Job): string {
+  const input = job.input as { topic?: string };
+  const slug = slugifyTopic(input.topic ?? '');
+  return job.kind === 'items' || job.kind === 'subtopics'
+    ? `/${job.domain}/${slug}/new?job=${job.id}`
+    : `/${job.domain}/${slug}?job=${job.id}`;
 }

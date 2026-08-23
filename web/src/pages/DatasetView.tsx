@@ -23,7 +23,7 @@ import {
 } from '../lib/data';
 import { useRanker } from '../lib/ranker';
 import { dismissTask, finishTask, runTracked, startTask, updateTask } from '../lib/tasks';
-import { refreshJobs } from '../lib/jobs';
+import { currentJob, groupKey, jobsFor, refreshJobs, useJobs } from '../lib/jobs';
 import { eraOf, eraGroupsOf, decadesInRange, itemsInGroup } from '../lib/format';
 import { physicalImageQuery } from '../lib/image';
 import { ItemCard, Chip } from '../components/ItemCard';
@@ -53,6 +53,10 @@ export function DatasetView() {
   // background, so returning to it costs nothing (lib/store.ts).
   const { data: ds, error: loadError, set: setDs } = useDataset(slug || null);
   const [mode, setMode] = useState<Mode>('browse');
+  // The shared job cache (lib/jobs.ts): read here so opening a dataset shows whatever
+  // review or expansion is current for it — running or finished — without a detour
+  // through the notification column's button (see the auto-resume effect below).
+  const { jobs, loaded: jobsLoaded } = useJobs();
 
   const [gaps, setGaps] = useState<CoverageGap[] | null>(null);
   const [loadingGaps, setLoadingGaps] = useState(false);
@@ -70,6 +74,18 @@ export function DatasetView() {
   // to be confused with GapPanel's own gap-fill job). Superseded, not deleted, by a
   // fresh sweep: the old row's gaps are already replaced by the new ones on screen.
   const gapsJobIdRef = useRef<string | null>(null);
+  // Every job id this page is already showing — started live here (its id arrives on
+  // the first progress line), or resumed — so the auto-resume below never fetches a
+  // job that's already on screen. A Set, not the two single refs, because GapPanel's
+  // gap-fill job lives in its own ref and reports up through `trackJob`.
+  const trackedJobsRef = useRef(new Set<string>());
+  // Which dataset the auto-resume has already run for: once per dataset, the first
+  // time the job list is known. Keyed by slug because this route component is
+  // reused across datasets rather than remounted.
+  const autoResumedForRef = useRef<string | null>(null);
+  function trackJob(id: string) {
+    trackedJobsRef.current.add(id);
+  }
 
   // The single active filter lives in the URL (?sub=… or ?era=start-end), so it's
   // shareable and the back button steps through filter states. The Filters subpage
@@ -118,7 +134,34 @@ export function DatasetView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ds, searchParams]);
 
+  // Opening the dataset shows its current state, the same as the notification
+  // column's button would: the newest running job, else the most advanced finished one
+  // (lib/jobs.ts's `currentJob`) — a gap review, or an expansion waiting to be
+  // accepted. Consistent across every way in: the gutter's link, the shelf, the
+  // address bar, the back button. Skipped when a `?job=` / `?expand=` query is already
+  // driving this page, and for any job this page itself started or already resumed.
+  useEffect(() => {
+    if (!ds || !jobsLoaded || autoResumedForRef.current === slug) return;
+    if (searchParams.get('job') || searchParams.get('expand')) return;
+    autoResumedForRef.current = slug;
+    if (loadingGaps || resumingJob) return;
+    const job = currentJob(jobsFor(jobs, groupKey(ds.domain, ds.topic)));
+    if (!job || trackedJobsRef.current.has(job.id)) return;
+    void resumeJobById(job.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ds, jobsLoaded, jobs, searchParams]);
+
+  // Moving to another dataset within this same mounted route: the previous field's
+  // gaps and proposal must not carry over onto the new one's page.
+  useEffect(() => {
+    setGaps(null);
+    setGapError('');
+    setResumeJob(null);
+    gapsJobIdRef.current = null;
+  }, [slug]);
+
   async function resumeJobById(id: string) {
+    trackJob(id);
     setResumingJob(true);
     setGapError('');
     try {
@@ -164,7 +207,12 @@ export function DatasetView() {
     // gutter from here on, with a "View"/"Retry" action a transient task never has —
     // so this one is dismissed the moment the call settles rather than left lingering
     // beside it, dead-ended on its last progress line with only a bare ✕.
-    const taskId = startTask(`Review ${ds.topic} for gaps`);
+    // Titled and grouped by the dataset (lib/tasks.ts), so the gutter shows one card —
+    // "Engines · Review" — whichever step of this dataset's pipeline is running. The
+    // previous sweep's job is noted before the call so it can be superseded once the
+    // new one is named (the progress callback overwrites the ref).
+    const previousSweep = gapsJobIdRef.current;
+    const taskId = startTask(ds.topic, { group: groupKey(ds.domain, ds.topic), stage: 'Review' });
     try {
       const res = await api.findGaps(
         {
@@ -177,7 +225,18 @@ export function DatasetView() {
           // the Filters screen and the gap-fill call already speak in.
           eraGroups: ds.eraGroups ?? [],
         },
-        (line, jobId) => updateTask(taskId, line, jobId),
+        (line, jobId) => {
+          // The job's id arrives on the first progress line: note it straight away
+          // (so the auto-resume above knows it's on screen) and pull the new row into
+          // the shared cache now, so the gutter — and any other tab — sees it running
+          // from the start rather than only once the call ends.
+          if (jobId && gapsJobIdRef.current !== jobId) {
+            gapsJobIdRef.current = jobId;
+            trackJob(jobId);
+            refreshJobs();
+          }
+          updateTask(taskId, line, jobId);
+        },
       );
       finishTask(taskId, true);
       setGaps(res.gaps);
@@ -185,8 +244,8 @@ export function DatasetView() {
       if (res.jobId) {
         // Superseding whatever sweep was tracked before — its gaps are already
         // replaced by this one, so nothing is lost by forgetting it.
-        if (gapsJobIdRef.current && gapsJobIdRef.current !== res.jobId) {
-          api.deleteJob(gapsJobIdRef.current).catch(() => {});
+        if (previousSweep && previousSweep !== res.jobId) {
+          api.deleteJob(previousSweep).catch(() => {});
         }
         gapsJobIdRef.current = res.jobId;
       }
@@ -325,6 +384,17 @@ export function DatasetView() {
           gapError={gapError}
           resumeJob={resumeJob}
           resumingJob={resumingJob}
+          trackJob={trackJob}
+          onAccepted={() => {
+            // The review is consumed once its additions are in: drop the sweep's row
+            // too, so the dataset's notification card clears rather than falling back
+            // to a stale "Review · View →" for gaps that have just been filled.
+            if (gapsJobIdRef.current) {
+              api.deleteJob(gapsJobIdRef.current).catch(() => {});
+              gapsJobIdRef.current = null;
+              refreshJobs();
+            }
+          }}
           onChanged={setDs}
         />
       )}
@@ -345,6 +415,8 @@ function Browse({
   gapError,
   resumeJob,
   resumingJob,
+  trackJob,
+  onAccepted,
   onChanged,
 }: {
   ds: Dataset;
@@ -354,6 +426,8 @@ function Browse({
   gapError: string;
   resumeJob: Job | null;
   resumingJob: boolean;
+  trackJob: (id: string) => void;
+  onAccepted: () => void;
   onChanged: (ds: Dataset) => void;
 }) {
   // Inline editing: `editing` holds a working copy of the item being edited; `picker`
@@ -393,6 +467,8 @@ function Browse({
         suggestedCount={gapSuggestedCount}
         gapError={gapError}
         resumeJob={resumeJob}
+        trackJob={trackJob}
+        onAccepted={onAccepted}
         onChanged={onChanged}
       />
 
@@ -512,6 +588,8 @@ function GapPanel({
   suggestedCount,
   gapError,
   resumeJob,
+  trackJob,
+  onAccepted,
   onChanged,
 }: {
   ds: Dataset;
@@ -519,6 +597,11 @@ function GapPanel({
   suggestedCount: number;
   gapError: string;
   resumeJob: Job | null;
+  /** Reports the durable job this panel is showing up to DatasetView, which keeps the
+   *  page-wide set used to decide what (not) to auto-resume on open. */
+  trackJob: (id: string) => void;
+  /** Fired once researched additions have been saved into the dataset. */
+  onAccepted: () => void;
   onChanged: (ds: Dataset) => void;
 }) {
   const [count, setCount] = useState(suggestedCount);
@@ -568,7 +651,8 @@ function GapPanel({
     setPending(null);
     // See the matching comment in whatsMissing() above — a plain task, dismissed once
     // the durable job (refreshJobs() below) is what's left representing this call.
-    const taskId = startTask(`Expand ${ds.topic} dataset`);
+    const previousJob = jobIdRef.current;
+    const taskId = startTask(ds.topic, { group: groupKey(ds.domain, ds.topic), stage: 'Expand' });
     try {
       const res = await api.fillGaps(
         {
@@ -584,7 +668,15 @@ function GapPanel({
           // era of the field and an era-shaped gap can be filled by name.
           eraGroups: ds.eraGroups ?? [],
         },
-        (line, jobId) => updateTask(taskId, line, jobId),
+        (line, jobId) => {
+          // See whatsMissing(): note the id at once, and surface the row right away.
+          if (jobId && jobIdRef.current !== jobId) {
+            jobIdRef.current = jobId;
+            trackJob(jobId);
+            refreshJobs();
+          }
+          updateTask(taskId, line, jobId);
+        },
       );
       finishTask(taskId, true);
       setPending(res.items);
@@ -597,8 +689,8 @@ function GapPanel({
         // Superseding whatever was tracked before (a resumed job re-run, or a second
         // live research() before the first was acted on) — its proposal is already
         // replaced by this one, so nothing is lost by forgetting it.
-        if (jobIdRef.current && jobIdRef.current !== res.jobId) {
-          api.deleteJob(jobIdRef.current).catch(() => {});
+        if (previousJob && previousJob !== res.jobId) {
+          api.deleteJob(previousJob).catch(() => {});
         }
         jobIdRef.current = res.jobId;
       }
@@ -630,11 +722,14 @@ function GapPanel({
     try {
       // Proposed items carry no id/createdAt; the server's PUT handler mints those
       // (toItem). The cast mirrors the curate expansion path's existingItems handling.
-      const updated = await runTracked(`Save additions to ${ds.topic}`, () =>
-        saveDataset(ds.id, { items: [...ds.items, ...(pending as unknown as Item[])] }),
+      const updated = await runTracked(
+        ds.topic,
+        () => saveDataset(ds.id, { items: [...ds.items, ...(pending as unknown as Item[])] }),
+        { group: groupKey(ds.domain, ds.topic), stage: 'Save' },
       );
       onChanged(updated);
       forgetJob();
+      onAccepted();
       // Clear the sub-flow; keep the gaps visible so the user can sweep again or add more.
       setPending(null);
       setNote('');

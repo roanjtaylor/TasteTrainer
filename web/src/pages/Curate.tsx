@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { useNavigate, Navigate, Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   singleWordTopic,
@@ -13,7 +13,7 @@ import { createDataset, saveDataset, useDatasetList } from '../lib/data';
 import { useDomain } from '../lib/domain';
 import { physicalImageQuery } from '../lib/image';
 import { dismissTask, finishTask, runTracked, startTask, updateTask } from '../lib/tasks';
-import { refreshJobs } from '../lib/jobs';
+import { currentJob, groupKey, jobsFor, refreshJobs, useJobs } from '../lib/jobs';
 import { CaptureBadge, SourceTag } from '../components/CaptureBadge';
 import { CandidateStrip } from '../components/CandidateStrip';
 import { ImagePicker } from '../components/ImagePicker';
@@ -41,6 +41,10 @@ function Curate() {
   const navigate = useNavigate();
   const domain = useDomain();
   const { slug: routeSlug } = useParams();
+  // The shared job cache (lib/jobs.ts): read here so opening this field's URL shows
+  // whatever step of its research is current — running or finished — without a
+  // detour through the notification column's button.
+  const { jobs, loaded: jobsLoaded } = useJobs();
 
   // Arriving from the field map's "Curate this →" carries the proposed field in the
   // URL, so a gap you just read about becomes a dataset without retyping it.
@@ -89,6 +93,10 @@ function Curate() {
   // which would otherwise fire initialise() twice and create two mapping jobs for one
   // handoff.
   const autostartedRef = useRef(false);
+  // Auto-resume runs once per mount, the first time the job list is known; and the
+  // job a `?job=` link is already resuming, so the two paths never fetch it twice.
+  const autoResumedRef = useRef(false);
+  const resumedJobIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const jobId = params.get('job');
@@ -116,7 +124,25 @@ function Curate() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Opening this field's own URL shows its current state, the same as the notification
+  // column's button would: the newest running job, else the most advanced finished one
+  // (lib/jobs.ts's `currentJob`). Consistent across every way in — the gutter's link,
+  // the address bar, the back button. Skipped when a `?job=` / `?autostart=` query is
+  // already driving this page, or when the job is one THIS page started (its id is
+  // already in a ref) — the live stream is showing it.
+  useEffect(() => {
+    if (!domain || !routeSlug || !jobsLoaded || autoResumedRef.current) return;
+    if (params.get('job') || params.get('autostart')) return;
+    autoResumedRef.current = true;
+    if (busy || resumedJobIdRef.current || subtopics.length || items.length) return;
+    const job = currentJob(jobsFor(jobs, `${domain}/${routeSlug}`));
+    if (!job || job.id === mapJobIdRef.current || job.id === jobIdRef.current) return;
+    void resumeJob(job.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobsLoaded, jobs]);
+
   async function resumeJob(id: string) {
+    resumedJobIdRef.current = id;
     setResuming(true);
     setResumeError('');
     try {
@@ -182,7 +208,10 @@ function Curate() {
     setBusy(label);
     setError('');
     try {
-      return await runTracked(taskTitle, (onProgress) => fn(onProgress));
+      return await runTracked(taskTitle, (onProgress) => fn(onProgress), {
+        group: groupKey(dom, topic.trim()),
+        stage: label.replace(/\u2026$/, ''),
+      });
     } catch (e: any) {
       setError(e?.message ?? 'Something went wrong');
     } finally {
@@ -201,16 +230,29 @@ function Curate() {
    */
   async function runJob<T>(
     label: string,
-    taskTitle: string,
+    stage: string,
+    ref: MutableRefObject<string | null>,
     fn: (onProgress: (line: string, jobId?: string) => void) => Promise<T>,
   ): Promise<T | undefined> {
     setBusy(label);
     setError('');
-    const id = startTask(taskTitle);
+    // Titled and grouped by the dataset, so the gutter shows "Engines · Research"
+    // with the live line under it — one card for the whole field, whichever step runs.
+    const id = startTask(topic.trim(), { group: groupKey(dom, topic.trim()), stage });
     try {
       // `jobId` arrives on the first progress line: pairing the transient card with
-      // the durable job keeps the gutter to one card per operation while it runs.
-      const result = await fn((line, jobId) => updateTask(id, line, jobId));
+      // the durable job keeps the gutter to one card per operation while it runs, and
+      // recording it in `ref` straight away is what tells the auto-resume effect above
+      // that this job is already on screen. `refreshJobs()` then pulls the new row
+      // into the shared cache now, rather than after the call ends — so a second tab,
+      // or the dataset's own page, sees it running immediately.
+      const result = await fn((line, jobId) => {
+        if (jobId && ref.current !== jobId) {
+          ref.current = jobId;
+          refreshJobs();
+        }
+        updateTask(id, line, jobId);
+      });
       finishTask(id, true);
       return result;
     } catch (e: any) {
@@ -240,7 +282,10 @@ function Curate() {
       );
       return;
     }
-    const res = await runJob('Mapping the field…', `Map the ${topic.trim()} field`, (onProgress) =>
+    // Re-mapping supersedes the previous map job: remember it so the old row can be
+    // deleted once the new one is named (the progress callback overwrites the ref).
+    const previousMapJob = mapJobIdRef.current;
+    const res = await runJob('Mapping the field…', 'Map', mapJobIdRef, (onProgress) =>
       api.proposeSubtopics(topic.trim(), description.trim(), dom, onProgress),
     );
     // Unconditional, not just on success — see the matching comment in generate()
@@ -259,17 +304,21 @@ function Curate() {
       // spread-across-eras behaviour, which is what it always did.
       setEraGroups(res.eraGroups ?? []);
       const jobId = res.jobId ?? null;
-      if (mapJobIdRef.current && jobId && mapJobIdRef.current !== jobId) {
-        api.deleteJob(mapJobIdRef.current).catch(() => {});
+      if (previousMapJob && jobId && previousMapJob !== jobId) {
+        api.deleteJob(previousMapJob).catch(() => {});
       }
       if (jobId) mapJobIdRef.current = jobId;
     }
   }
 
   async function generate(more = false) {
+    // Same supersede bookkeeping as initialise(): the ref is overwritten by the
+    // progress callback, so the previous job's id is taken before the call starts.
+    const previousJob = jobIdRef.current;
     const res = await runJob(
       more ? 'Finding more…' : 'Researching the best…',
-      more ? `Find more for ${topic.trim()}` : `Research the ${topic.trim()} dataset`,
+      'Research',
+      jobIdRef,
       async (onProgress) => {
         const res = await api.generateItems(
           {
@@ -300,8 +349,8 @@ function Curate() {
       // Superseding whatever job was tracked before — its proposal is already folded
       // into `items` above (or was this same job, resumed then immediately re-run),
       // so nothing is lost by forgetting it.
-      if (jobIdRef.current && jobIdRef.current !== res.jobId) {
-        api.deleteJob(jobIdRef.current).catch(() => {});
+      if (previousJob && previousJob !== res.jobId) {
+        api.deleteJob(previousJob).catch(() => {});
       }
       jobIdRef.current = res.jobId;
     }
@@ -312,7 +361,7 @@ function Curate() {
       setError('A one-line description is required before saving.');
       return;
     }
-    const ds = await run('Saving…', `Save ${topic.trim()} dataset`, async () => {
+    const ds = await run('Saving…', topic.trim(), async () => {
       const created = await createDataset({
         topic: topic.trim(),
         description: description.trim(),

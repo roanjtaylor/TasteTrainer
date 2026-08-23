@@ -17,6 +17,21 @@ export interface Task {
    *  server has told us its id — so the notification gutter shows ONE card for the
    *  operation, not this transient one beside the durable one. */
   jobId?: string;
+  /** Which dataset this task is a step of — `groupKey`-shaped (lib/jobs.ts:
+   *  "physical/engines"). The gutter folds every task and job sharing a key into ONE
+   *  card titled with the dataset's name, so the map → research → save (or review →
+   *  expand → accept) chain reads as one dataset moving through stages, not as a
+   *  fresh notification per step. Ungrouped tasks (a map redraw, a save) stay
+   *  standalone cards titled by `title`. */
+  group?: string;
+  /** The stage label shown under the dataset name on a grouped card: "Map",
+   *  "Research", "Review", "Expand". */
+  stage?: string;
+}
+
+export interface TaskOptions {
+  group?: string;
+  stage?: string;
 }
 
 let tasks: Task[] = [];
@@ -33,9 +48,9 @@ function setTasks(next: Task[]): void {
 }
 
 /** Start tracking a task; returns an id to report progress/completion against. */
-export function startTask(title: string): string {
+export function startTask(title: string, opts: TaskOptions = {}): string {
   const id = `t${++counter}`;
-  setTasks([...tasks, { id, title, detail: '', status: 'running' }]);
+  setTasks([...tasks, { id, title, detail: '', status: 'running', ...opts }]);
   return id;
 }
 
@@ -65,8 +80,9 @@ export function dismissTask(id: string): void {
 export async function runTracked<T>(
   title: string,
   fn: (onProgress: (detail: string, jobId?: string) => void) => Promise<T>,
+  opts: TaskOptions = {},
 ): Promise<T> {
-  const id = startTask(title);
+  const id = startTask(title, opts);
   try {
     const result = await fn((detail, jobId) => updateTask(id, detail, jobId));
     finishTask(id, true);
