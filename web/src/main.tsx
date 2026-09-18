@@ -5,6 +5,7 @@ import './index.css';
 import { Nav } from './components/Nav';
 import { TaskNotifications } from './components/TaskNotifications';
 import { BrainButton } from './components/BrainPanel';
+import { EmbedTesterButton } from './components/EmbedTesterButton';
 import { AuthProvider, PersonalGate } from './lib/auth';
 import { NavActionsProvider } from './lib/navActions';
 import { DomainSelect } from './pages/DomainSelect';
@@ -50,6 +51,11 @@ function AppShell() {
             notification rail shares this margin and stops below it (`xl:top-14`). */}
         <div className="fixed right-3 top-3 z-40 hidden xl:block">
           <BrainButton className="flex border border-[var(--color-line)] bg-[var(--color-card)]/90 shadow-sm backdrop-blur" />
+        </div>
+        {/* Bottom-left of the cog above — same fixed corner, one row down and shifted
+            left so it reads as the cog's neighbour rather than competing with it. */}
+        <div className="fixed right-14 top-14 z-40 hidden xl:block">
+          <EmbedTesterButton className="flex border border-[var(--color-line)] bg-[var(--color-card)]/90 shadow-sm backdrop-blur" />
         </div>
         <Nav />
         {/* Below `lg` this is a plain `mx-auto max-w-6xl` block, unchanged from

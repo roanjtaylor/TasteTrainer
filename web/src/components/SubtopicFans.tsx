@@ -72,7 +72,7 @@ function Fan({ items }: { items: Item[] }) {
               zIndex: i,
             }}
           >
-            <Photo src={it.image} alt={it.name} />
+            <Photo src={it.image} alt={it.name} sizes="176px" />
           </div>
         );
       })}

@@ -59,7 +59,7 @@ export function EraTimeline({
             {/* Pinned key work — what this period actually looks like. */}
             <div className="h-28 w-full overflow-hidden rounded-lg bg-[var(--color-wall-soft)]">
               {b.keyWork ? (
-                <Photo src={b.keyWork.image} alt={b.keyWork.name} />
+                <Photo src={b.keyWork.image} alt={b.keyWork.name} sizes="250px" />
               ) : (
                 <div className="flex h-full items-center justify-center text-xs text-[var(--color-muted)]">
                   no work yet

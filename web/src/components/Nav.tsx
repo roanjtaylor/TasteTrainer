@@ -5,6 +5,7 @@ import { useDatasetList } from '../lib/data';
 import { useAuth } from '../lib/auth';
 import { NavActionsSlot } from '../lib/navActions';
 import { BrainButton } from './BrainPanel';
+import { EmbedTesterButton } from './EmbedTesterButton';
 
 // Centred pill-style top nav — a floating rounded bar (6-ui.md), not a full-width
 // banner. It sits at the top of the page and scrolls away with it: the one thing worth
@@ -103,9 +104,12 @@ export function Nav() {
             </button>
           </>
         )}
-        {/* The settings cog's narrow-window home. At `xl`+ it moves out to the window's
-            right margin (main.tsx); below that there's no margin, and a fixed button
-            would sit on top of the nav actions to the right of this pill. */}
+        {/* The settings cog's narrow-window home, and the embed tester just to its
+            left (its own fixed home sits bottom-left of the cog above `xl` — see
+            main.tsx). At `xl`+ both move out to the window's right margin; below
+            that there's no margin, and fixed buttons would sit on top of the nav
+            actions to the right of this pill. */}
+        <EmbedTesterButton className="flex hover:bg-[var(--color-wall-soft)] xl:hidden" />
         <BrainButton className="flex hover:bg-[var(--color-wall-soft)] xl:hidden" />
         </nav>
         {/* The page owning the current route portals its own action buttons in here
