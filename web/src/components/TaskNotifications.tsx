@@ -79,9 +79,10 @@ export function TaskNotifications({ variant }: { variant: 'overlay' | 'rail' }) 
   // are equal-width (so the content stays centred) and deliberately narrow, and the
   // gutters either side of this track are already halved there, so the cards' width
   // IS the column's; a cap here would just hand that width back to blank margin.
-  // Titles `truncate`, so a narrow track shows their first words.
+  // Titles `truncate`, so a narrow track shows their first words. From `xl` it sticks
+  // lower, clearing the settings cog that sits fixed in this margin's top corner.
   return (
-    <div className="pointer-events-none sticky top-3 z-30 hidden w-full flex-col gap-2 self-start lg:flex">
+    <div className="pointer-events-none sticky top-3 z-30 xl:top-14 hidden w-full flex-col gap-2 self-start lg:flex">
       {body}
     </div>
   );

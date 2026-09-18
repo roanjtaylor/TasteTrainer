@@ -30,6 +30,8 @@ import { jobsRouter } from './routes/jobs.ts';
 import { imagesRouter } from './routes/images.ts';
 import { mapRouter } from './routes/map.ts';
 import { filesRouter } from './routes/files.ts';
+import { embedRouter } from './routes/embed.ts';
+import { brainRouter } from './routes/brain.ts';
 
 const app = express();
 
@@ -67,6 +69,9 @@ app.get('/api/health', (_req, res) => res.json({ ok: true }));
 // 9-personal-and-auth.md). Registered after the health check and before every
 // router, so `req.user` is available wherever a route needs it.
 app.use('/api', attachUser);
+// Public embed widget (no auth, personal domain excluded — routes/embed.ts). Mounted
+// ahead of /api/datasets purely for readability; the two prefixes don't overlap.
+app.use('/api/embed', embedRouter);
 app.use('/api/datasets', datasetsRouter);
 // More specific prefix first — Express matches middleware in registration order, and
 // /api/curation would otherwise swallow every /api/curation/jobs request itself.
@@ -74,6 +79,8 @@ app.use('/api/curation/jobs', jobsRouter);
 app.use('/api/curation', curationRouter);
 app.use('/api/images', imagesRouter);
 app.use('/api/map', mapRouter);
+// The settings cog: the Claude setup itself, read-only (routes/brain.ts).
+app.use('/api/brain', brainRouter);
 // Uploads only ever serve the personal world, so this is the one router behind the
 // wall outright rather than checked per-dataset.
 app.use('/api/files', requireAuth, filesRouter);

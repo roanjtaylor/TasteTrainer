@@ -6,6 +6,7 @@ import type {
   Dataset,
   Domain,
   EraGroup,
+  FillMode,
   Item,
   Job,
   ProposedItem,
@@ -24,6 +25,7 @@ import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
 import { BackToTop } from '../components/BackToTop';
 import { PersonalFieldEditor } from '../components/PersonalFieldEditor';
+import { ReviewDialog } from '../components/ReviewDialog';
 import { ReviewCard } from './Curate';
 import { NavActions } from '../lib/navActions';
 
@@ -33,6 +35,9 @@ type ActiveFilter =
   | { kind: 'subtopic'; name: string }
   | { kind: 'era'; group: EraGroup }
   | null;
+
+/** A freeform ask from the review dialog, on its way to GapPanel's research call. */
+type DirectRequest = { prompt: string; count: number; nonce: number };
 
 // The Dataset view (6-ui.md): browse the items and pick a scope — all one screen.
 export function DatasetView() {
@@ -50,6 +55,13 @@ export function DatasetView() {
   const [loadingGaps, setLoadingGaps] = useState(false);
   const [gapSuggestedCount, setGapSuggestedCount] = useState(8);
   const [gapError, setGapError] = useState('');
+
+  // "Review" opens a choice of mode (components/ReviewDialog.tsx) rather than starting
+  // a sweep outright. A direct request skips the sweep entirely: it's handed to
+  // GapPanel, which owns the research call either mode ends in. `nonce` makes asking
+  // the same thing twice a new request rather than a no-op.
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [directRequest, setDirectRequest] = useState<DirectRequest | null>(null);
 
   // Resuming a durable gap-fill job (lib/jobs.ts) landed on from the notification
   // gutter's "View" link — `?job=<id>` carries research that already finished (or is still running)
@@ -145,6 +157,8 @@ export function DatasetView() {
     setGaps(null);
     setGapError('');
     setResumeJob(null);
+    setDirectRequest(null);
+    setReviewOpen(false);
     gapsJobIdRef.current = null;
   }, [slug]);
 
@@ -171,8 +185,11 @@ export function DatasetView() {
       }
       // 'gap-fill' — the sweep's gaps travelled in as its input, the proposal it built
       // is handed to GapPanel via resumeJob.
-      const input = job.input as { gaps?: CoverageGap[]; count?: number };
-      setGaps(input.gaps ?? []);
+      // A direct request had no sweep behind it: leave `gaps` null so the panel shows
+      // the request it came from (read off the job by GapPanel) rather than an empty
+      // gap list claiming "good coverage" that nothing ever measured.
+      const input = job.input as { gaps?: CoverageGap[]; count?: number; mode?: FillMode };
+      setGaps(input.mode === 'direct' ? null : (input.gaps ?? []));
       setGapSuggestedCount(input.count ?? 8);
       setResumeJob(job);
     } catch (e: any) {
@@ -182,9 +199,10 @@ export function DatasetView() {
     }
   }
 
-  async function whatsMissing() {
+  async function whatsMissing(focus = '') {
     if (!ds) return;
     setLoadingGaps(true);
+    setDirectRequest(null);
     setGaps(null);
     setGapError('');
     // A plain task, not `runTracked` — this call also creates a durable job row
@@ -210,6 +228,7 @@ export function DatasetView() {
           // Named periods go in so an era-shaped gap comes back named, matching what
           // the Filters screen and the gap-fill call already speak in.
           eraGroups: ds.eraGroups ?? [],
+          focus,
         },
         (line, jobId) => {
           // The job's id arrives on the first progress line: note it straight away
@@ -322,7 +341,7 @@ export function DatasetView() {
             in it is whatever you say does (9-personal-and-auth.md). */}
         {ds.domain !== 'personal' && (
           <button
-            onClick={whatsMissing}
+            onClick={() => setReviewOpen(true)}
             disabled={loadingGaps || !ds}
             className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)] disabled:opacity-40"
           >
@@ -357,6 +376,7 @@ export function DatasetView() {
         gapError={gapError}
         resumeJob={resumeJob}
         resumingJob={resumingJob}
+        directRequest={directRequest}
         trackJob={trackJob}
         onAccepted={() => {
           // The review is consumed once its additions are in: drop the sweep's row
@@ -370,6 +390,27 @@ export function DatasetView() {
         }}
         onChanged={setDs}
       />
+
+      {reviewOpen && (
+        <ReviewDialog
+          topic={ds.topic}
+          onCancel={() => setReviewOpen(false)}
+          onStart={(choice) => {
+            setReviewOpen(false);
+            if (choice.mode === 'sweep') {
+              void whatsMissing(choice.focus);
+              return;
+            }
+            // The sweep's list (if one is on screen) belongs to a different question;
+            // showing it above a direct request would read as though the request had
+            // been researched against those gaps, which it isn't.
+            setGaps(null);
+            setGapError('');
+            setResumeJob(null);
+            setDirectRequest({ prompt: choice.prompt, count: choice.count, nonce: Date.now() });
+          }}
+        />
+      )}
 
       <BackToTop />
     </div>
@@ -386,6 +427,7 @@ function Browse({
   gapError,
   resumeJob,
   resumingJob,
+  directRequest,
   trackJob,
   onAccepted,
   onChanged,
@@ -400,6 +442,7 @@ function Browse({
   gapError: string;
   resumeJob: Job | null;
   resumingJob: boolean;
+  directRequest: DirectRequest | null;
   trackJob: (id: string) => void;
   onAccepted: () => void;
   onChanged: (ds: Dataset) => void;
@@ -524,6 +567,7 @@ function Browse({
         suggestedCount={gapSuggestedCount}
         gapError={gapError}
         resumeJob={resumeJob}
+        directRequest={directRequest}
         trackJob={trackJob}
         onAccepted={onAccepted}
         onChanged={onChanged}
@@ -712,6 +756,7 @@ function GapPanel({
   suggestedCount,
   gapError,
   resumeJob,
+  directRequest,
   trackJob,
   onAccepted,
   onChanged,
@@ -721,6 +766,8 @@ function GapPanel({
   suggestedCount: number;
   gapError: string;
   resumeJob: Job | null;
+  /** A freeform ask from the review dialog — researched as soon as it arrives. */
+  directRequest: DirectRequest | null;
   /** Reports the durable job this panel is showing up to DatasetView, which keeps the
    *  page-wide set used to decide what (not) to auto-resume on open. */
   trackJob: (id: string) => void;
@@ -740,9 +787,28 @@ function GapPanel({
   const [pickerIndex, setPickerIndex] = useState<number | null>(null);
   const [savingAdd, setSavingAdd] = useState(false);
   const [error, setError] = useState('');
+  // Which question this panel is answering: 'gaps' shows the sweep's list with the
+  // text box as an optional steer; 'direct' has no list, and the text box IS the brief.
+  const [mode, setMode] = useState<FillMode>('gaps');
 
   // Sync count when a new gap analysis completes with a fresh suggestion.
   useEffect(() => { setCount(suggestedCount); }, [suggestedCount]);
+
+  // A sweep landing (live or resumed) puts the panel back in gaps mode.
+  useEffect(() => { if (gaps) setMode('gaps'); }, [gaps]);
+
+  // Another dataset on this same mounted route: nothing from the last one carries
+  // over. Declared before the resume effect below so that, when both fire together,
+  // the resumed job's state is what's left standing.
+  useEffect(() => {
+    setMode('gaps');
+    setPending(null);
+    setNote('');
+    setFeedback('');
+    setError('');
+    setCorrections({ duplicates: 0, unsetSubtopics: 0 });
+    jobIdRef.current = null;
+  }, [ds.id]);
 
   // The durable job (lib/jobs.ts) this review grid came from, live or resumed — a ref
   // since nothing on screen needs to re-render off it. addToDataset()/Discard delete
@@ -766,9 +832,39 @@ function GapPanel({
       unsetSubtopics: result.unsetSubtopics ?? 0,
     });
     jobIdRef.current = resumeJob.id;
+    // A resumed direct request restores the request itself, so the panel can show what
+    // was asked and the box is ready to refine and re-run.
+    const input = resumeJob.input as { mode?: FillMode; feedback?: string; count?: number };
+    if (input.mode === 'direct') {
+      setMode('direct');
+      setFeedback(input.feedback ?? '');
+      setCount(input.count ?? 8);
+    } else {
+      setMode('gaps');
+    }
   }, [resumeJob]);
 
-  async function research() {
+  // A direct request from the review dialog: adopt it and research straight away —
+  // the dialog's button was the go-ahead, so a second "Research" press here would
+  // just be the instant-kickoff problem in reverse. Keyed on the nonce, so asking the
+  // same thing twice is two requests.
+  useEffect(() => {
+    if (!directRequest) return;
+    setMode('direct');
+    setFeedback(directRequest.prompt);
+    setCount(directRequest.count);
+    void research({ mode: 'direct', feedback: directRequest.prompt, count: directRequest.count });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [directRequest?.nonce]);
+
+  // `run` carries the values for a call made in the same tick they were set (the
+  // direct-request effect above), where the state they'd otherwise be read from
+  // hasn't updated yet.
+  async function research(run: { mode: FillMode; feedback: string; count: number } = { mode, feedback, count }) {
+    if (run.mode === 'direct' && !run.feedback.trim()) {
+      setError('Write what you’d like Claude to research first.');
+      return;
+    }
     setResearching(true);
     setError('');
     setNote('');
@@ -784,9 +880,11 @@ function GapPanel({
           description: ds.description,
           subtopics: ds.subtopics,
           items: ds.items,
-          gaps: gaps ?? [],
-          count: Math.max(1, Math.min(50, count || 8)),
-          feedback,
+          // A direct request is researched on its own terms, not against a sweep.
+          gaps: run.mode === 'direct' ? [] : (gaps ?? []),
+          count: Math.max(1, Math.min(50, run.count || 8)),
+          feedback: run.feedback,
+          mode: run.mode,
           domain: ds.domain,
           // Named periods as context, so an added item's year lands inside a real
           // era of the field and an era-shaped gap can be filled by name.
@@ -868,46 +966,66 @@ function GapPanel({
 
   const busy = researching || savingAdd;
 
-  if (!gaps && !gapError) return null;
+  const direct = mode === 'direct';
+
+  if (!gaps && !gapError && !direct) return null;
 
   return (
     <div className="space-y-4">
       {gapError && <p className="text-sm text-[var(--color-accent)]">{gapError}</p>}
 
-      {gaps && (
+      {(gaps || direct) && (
         <div className="space-y-4 rounded-xl border border-[var(--color-accent)]/40 bg-[var(--color-card)] p-4">
-          <div>
-            <h3 className="serif text-lg">Coverage gaps</h3>
-            {gaps.length === 0 ? (
-              <p className="text-sm text-[var(--color-muted)]">No obvious gaps — good coverage.</p>
-            ) : (
-              <ul className="mt-2 space-y-1.5 text-sm">
-                {gaps.map((g, i) => (
-                  <li key={i}>
-                    <span className="text-[var(--color-accent)]">{g.axis}:</span> {g.detail}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+          {direct ? (
+            <div>
+              <h3 className="serif text-lg">Your request</h3>
+              <p className="text-sm text-[var(--color-muted)]">
+                Researched as asked — no sweep. Reword it and run again to refine.
+              </p>
+            </div>
+          ) : (
+            <div>
+              <h3 className="serif text-lg">Coverage gaps</h3>
+              {gaps && gaps.length === 0 ? (
+                <p className="text-sm text-[var(--color-muted)]">No obvious gaps — good coverage.</p>
+              ) : (
+                <ul className="mt-2 space-y-1.5 text-sm">
+                  {(gaps ?? []).map((g, i) => (
+                    <li key={i}>
+                      <span className="text-[var(--color-accent)]">{g.axis}:</span> {g.detail}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
 
           {/* Research & add the missing items. */}
-          <div className="space-y-3 border-t border-[var(--color-line)] pt-4">
+          <div className={`space-y-3 ${direct ? '' : 'border-t border-[var(--color-line)] pt-4'}`}>
             <label className="block">
-              <span className="text-sm text-[var(--color-muted)]">
-                Your steer <span className="text-[var(--color-muted)]">(optional)</span>
-              </span>
+              {!direct && (
+                <span className="text-sm text-[var(--color-muted)]">
+                  Your steer <span className="text-[var(--color-muted)]">(optional)</span>
+                </span>
+              )}
               <textarea
                 className="mt-1 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-2 text-sm"
-                rows={2}
+                rows={direct ? 3 : 2}
                 value={feedback}
                 onChange={(e) => setFeedback(e.target.value)}
-                placeholder="e.g. What about the Mona Lisa and other da Vinci works? — weighed against the curation rules, then added or answered."
+                aria-label={direct ? 'Your request' : undefined}
+                placeholder={
+                  direct
+                    ? 'What should Claude research for this dataset?'
+                    : 'e.g. What about the Mona Lisa and other da Vinci works? — weighed against the curation rules, then added or answered.'
+                }
               />
             </label>
             <div className="flex flex-wrap items-end gap-3">
               <label className="block">
-                <span className="text-sm text-[var(--color-muted)]">How many to add</span>
+                <span className="text-sm text-[var(--color-muted)]">
+                  {direct ? 'Up to how many' : 'How many to add'}
+                </span>
                 <input
                   type="number"
                   min={1}
@@ -918,16 +1036,18 @@ function GapPanel({
                 />
               </label>
               <button
-                onClick={research}
-                disabled={busy}
+                onClick={() => research()}
+                disabled={busy || (direct && !feedback.trim())}
                 className="rounded-full bg-[var(--color-accent)] px-5 py-2 text-sm text-white disabled:opacity-40"
               >
                 {researching ? 'Researching…' : `Research ${count} to add →`}
               </button>
             </div>
             <p className="text-xs text-[var(--color-muted)]">
-              Claude sized this to the gaps — adjust if you like. Researched items are shown for
-              review before anything is saved.
+              {direct
+                ? 'Claude follows the request, and returns fewer than asked rather than padding. '
+                : 'Claude sized this to the gaps — adjust if you like. '}
+              Researched items are shown for review before anything is saved.
             </p>
           </div>
         </div>

@@ -24,14 +24,17 @@ const claudeDispatcher = new Agent({
   headersTimeout: CLAUDE_TIMEOUT_MS,
   bodyTimeout: CLAUDE_TIMEOUT_MS,
 });
+import { recordRun } from './brain.ts';
 import { singleWordTopic } from '../../../shared/types.ts';
 import type {
   BoundaryIssue,
+  BrainCallId,
   BoundaryKind,
   CoverageGap,
   Domain,
   EraGroup,
   FieldMapReview,
+  FillMode,
   FieldSummary,
   Item,
   MapAxis,
@@ -73,7 +76,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RULES_PATH = path.join(__dirname, '..', 'prompts', 'curation-rules.md');
 
 /** Loaded fresh each call so edits to the rules file take effect without a restart. */
-async function loadRules(): Promise<string> {
+export async function loadRules(): Promise<string> {
   return fs.readFile(RULES_PATH, 'utf8');
 }
 
@@ -99,6 +102,9 @@ function extractJson(text: string): any {
 export type ProgressFn = (line: string) => void;
 
 interface RunOpts {
+  /** Which catalogued call this is (services/brain.ts). Required, so a prompt can't be
+   *  added here without also being described where the settings cog can show it. */
+  call: BrainCallId;
   onProgress?: ProgressFn;
   /**
    * Track live progress by counting completed JSON objects in the stream.
@@ -139,11 +145,43 @@ class JsonParseError extends Error {}
  * failure, or the model reporting its own error are not retried here — those aren't
  * fixed by asking the exact same question again.
  */
-async function runJson(system: string, prompt: string, opts: RunOpts = {}): Promise<any> {
+async function runJson(system: string, prompt: string, opts: RunOpts): Promise<any> {
+  // Every call is logged for the settings cog (services/brain.ts): the exact prompt,
+  // how long it took, and how it ended — the measured half of "how does this work".
+  const began = Date.now();
+  let retried = false;
+  const log = (error: string | null) =>
+    recordRun(opts.call, {
+      at: new Date(began).toISOString(),
+      durationMs: Date.now() - began,
+      ok: error === null,
+      error,
+      retried,
+      systemChars: system.length,
+      promptChars: prompt.length,
+      prompt,
+    });
+  try {
+    const json = await runJsonWithRetry(system, prompt, opts, () => { retried = true; });
+    log(null);
+    return json;
+  } catch (err: any) {
+    log(err?.message ?? 'Unknown error');
+    throw err;
+  }
+}
+
+async function runJsonWithRetry(
+  system: string,
+  prompt: string,
+  opts: RunOpts,
+  onRetry: () => void,
+): Promise<any> {
   try {
     return await runJsonOnce(system, prompt, opts);
   } catch (err) {
     if (!(err instanceof JsonParseError)) throw err;
+    onRetry();
     opts.onProgress?.("Claude's answer wasn't valid JSON — retrying once…");
     try {
       return await runJsonOnce(system, prompt, opts);
@@ -158,7 +196,7 @@ async function runJson(system: string, prompt: string, opts: RunOpts = {}): Prom
   }
 }
 
-async function runJsonOnce(system: string, prompt: string, opts: RunOpts = {}): Promise<any> {
+async function runJsonOnce(system: string, prompt: string, opts: RunOpts): Promise<any> {
   const { onProgress, count, timeoutMs = CLAUDE_TIMEOUT_MS } = opts;
 
   // Say which knob is missing rather than letting the Space answer for us. Without
@@ -333,6 +371,15 @@ async function runJsonOnce(system: string, prompt: string, opts: RunOpts = {}): 
 
 const JSON_ONLY = 'Respond with valid JSON only — no markdown, no code fences, no prose.';
 
+/** How every call's system prompt is put together, as shown by the settings cog
+ *  (routes/brain.ts). Kept beside JSON_ONLY so the description can't outlive the thing
+ *  it describes: every `system` string below is exactly this, with the rulebook inlined. */
+export const SYSTEM_TEMPLATE = `You are the curation engine for TasteTrainer.
+
+<the whole rulebook below>
+
+${JSON_ONLY}`;
+
 export async function proposeSubtopics(
   topic: string,
   description: string,
@@ -342,7 +389,7 @@ export async function proposeSubtopics(
   const rules = await loadRules();
   const system = `You are the curation engine for TasteTrainer.\n\n${rules}\n\n${JSON_ONLY}`;
   const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\n\nPropose the canonical SUBTOPICS for this field — its core themes/areas, the MINIMUM set of distinct categories that together cover the WHOLE field (see the subtopic-count rule). Use as few or as many as the field genuinely needs — do NOT aim for a fixed number; merge near-duplicates and split conflated themes.\n\nAlso suggest how many DEFINING ITEMS best represent this field as a whole — a single integer "suggestedCount" sized to the field's real breadth (typically 12–30; fewer for a narrow field, more for a sprawling one), enough for representative coverage without padding.\n\nReturn JSON of shape: { "subtopics": [ { "name": string, "description": string } ], "suggestedCount": number }`;
-  const json = await runJson(system, prompt, { onProgress, count: { key: 'name', noun: 'themes' } });
+  const json = await runJson(system, prompt, { call: 'subtopics', onProgress, count: { key: 'name', noun: 'themes' } });
   const subtopics = (json.subtopics ?? []) as Subtopic[];
   const raw = Number(json.suggestedCount);
   const suggestedCount = Number.isFinite(raw) ? Math.max(1, Math.min(50, Math.round(raw))) : 12;
@@ -379,6 +426,7 @@ export async function proposePeriods(args: {
   const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\n\n${spanLine}\n\nPropose the canonical ERA-PERIODS for this field — the named time divisions a knowledgeable person uses to structure its history (e.g. art movements for paintings, design eras for product fields). Use as few or as many as the field genuinely needs; do NOT aim for a fixed number.\n\nRules:\n- Periods must be CONTIGUOUS and NON-OVERLAPPING (each period's "start" equals the previous period's "end").\n- "start" is inclusive, "end" is exclusive, both whole years.\n- Order from earliest to latest.\n\nReturn JSON of shape: { "eraGroups": [ { "label": string, "start": number, "end": number } ] }`;
 
   const json = await runJson(system, prompt, {
+    call: 'periods',
     onProgress,
     count: { key: 'label', noun: 'periods' },
   });
@@ -495,6 +543,7 @@ export async function generateItems(args: {
   const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\n\nCanonical subtopics (each item's "subtopic" MUST be exactly one of these names):\n${subtopicList}\n\nPropose ${count} defining items for this field. Spread them across the field's brands/makers, movements, eras and regions (breadth first), countering popularity bias.${eraQuotaLine(eraGroups, count)}${existingBlock}\n\nFill EVERY field. Return JSON of shape:\n{ "items": [ { "name": string, "description": string, "year": number|null, "brand": string, "creator": string, "definingFact": string, ${itemShapeLine(domain)} } ] }`;
 
   const json = await runJson(system, prompt, {
+    call: 'items',
     onProgress,
     count: { key: 'name', total: count, noun: 'items' },
   });
@@ -509,8 +558,10 @@ export async function findGaps(args: {
   items: Item[];
   domain: Domain;
   eraGroups?: EraGroup[];
+  /** An optional area the user asked the sweep to read more closely. */
+  focus?: string;
 }, onProgress?: ProgressFn): Promise<{ gaps: CoverageGap[]; suggestedCount: number }> {
-  const { topic, description, subtopics, items, domain, eraGroups = [] } = args;
+  const { topic, description, subtopics, items, domain, eraGroups = [], focus = '' } = args;
   const rules = await loadRules();
   const system = `You are the curation engine for TasteTrainer.\n\n${rules}\n\n${JSON_ONLY}`;
 
@@ -533,11 +584,19 @@ export async function findGaps(args: {
     ? `\nNamed periods: ${eraGroups.map((g) => `${g.label} (${g.start}–${g.end - 1})`).join('; ')}`
     : '';
 
+  // A focus narrows where the sweep reads hardest, never where it looks at all: the
+  // whole point of this mode is what the user does NOT know to ask about, and a focus
+  // that replaced the sweep would turn it back into the direct-request mode (fillGaps).
+  const focusBlock = focus.trim()
+    ? `\n\nThe user asked this sweep to look particularly at:\n"""\n${focus.trim()}\n"""\nGive that area a closer reading and report what is thin there — but still sweep the WHOLE field. Do not let the focus crowd out gaps elsewhere; the gaps the user didn't think to mention are the ones this review exists to find.`
+    : '';
+
   const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\nSubtopics: ${subtopics
     .map((s) => s.name)
-    .join(', ')}${periodLine}\n\nCurrent items (${items.length}), each with its defining fact where one is recorded:\n${inventory || '(none yet)'}\n\nDo a breadth-first sweep of the WHOLE field and report what is thin or missing — brands/makers, movements, eras, regions, or subtopics that a representative set of this field should include but this set under-covers. Be concrete.\n\nJudge coverage by what each item CONTRIBUTES, not by the count: entries whose defining facts say the same thing cover one position between them, however different their names, and a period with items in it can still be thin if nothing in it represents what that period is known for.${eraGroups.length ? ' Where a gap is a period, name it by the period label above.' : ''}\n\nAlso suggest how many NEW items it would take to meaningfully close these gaps — a single integer "suggestedCount" sized to the breadth of what's missing (enough for representative coverage of the gaps without padding; 0 if coverage is already good).\n\nReturn JSON of shape: { "gaps": [ { "axis": string, "detail": string } ], "suggestedCount": number }`;
+    .join(', ')}${periodLine}\n\nCurrent items (${items.length}), each with its defining fact where one is recorded:\n${inventory || '(none yet)'}\n\nDo a breadth-first sweep of the WHOLE field and report what is thin or missing — brands/makers, movements, eras, regions, or subtopics that a representative set of this field should include but this set under-covers. Be concrete.\n\nJudge coverage by what each item CONTRIBUTES, not by the count: entries whose defining facts say the same thing cover one position between them, however different their names, and a period with items in it can still be thin if nothing in it represents what that period is known for.${eraGroups.length ? ' Where a gap is a period, name it by the period label above.' : ''}${focusBlock}\n\nAlso suggest how many NEW items it would take to meaningfully close these gaps — a single integer "suggestedCount" sized to the breadth of what's missing (enough for representative coverage of the gaps without padding; 0 if coverage is already good).\n\nReturn JSON of shape: { "gaps": [ { "axis": string, "detail": string } ], "suggestedCount": number }`;
 
   const json = await runJson(system, prompt, {
+    call: 'gaps',
     onProgress,
     count: { key: 'axis', noun: 'gaps' },
     // No per-call budget: this runs as a durable job (routes/curation.ts's /gaps), so
@@ -693,6 +752,7 @@ export async function reviewFieldMap(args: {
   const prompt = `${domainLine(domain)}\n\nThis is a WORLD-LEVEL review (see the field-map rule). Below is every field the user has built in this world, each with its description, item count, dated year span, and subtopic names. The items themselves are deliberately not included.\n\nFields built so far:\n${inventory}\n\nReview this collection AS A MAP OF THE WHOLE WORLD. Be concise everywhere below — this is a scan of the shelf, not an essay; short, direct sentences over paragraphs:\n1. "mapSummary" — 2-3 sentences on how this world genuinely divides into fields, and what a complete map of it would look like.\n2. "missingFields" — fields of this world with no dataset yet. Give each a "topic" (a SINGLE WORD — datasets are named one word, e.g. "Watches" not "Wrist watches"), a one-sentence "description" ready to start a new dataset with, and a one-sentence "why" it matters. Favour the ones the user is least likely to have thought of.\n3. "boundaryIssues" — existing fields drawn wrong: "kind" is exactly one of "merge", "split", or "rename"; "fields" lists the existing topic name(s) involved, EXACTLY as written above; "proposal" is the concrete change in one sentence; "why" is the reason in one sentence. Return an empty array if the boundaries are sound. Before anything else, check EVERY field above against the app's own established rules — most concretely, the single-word naming rule from (2): any existing field whose name above is not one word (e.g. "Clocks & Timekeeping Instruments") is a rule violation and MUST be raised here as a "rename", even if nothing else about the field looks wrong. Do not rely on taste alone for this check — it is mechanical.\n4. "thinFields" — existing fields that look under-built or skewed, judged only from the counts, spans and subtopics above. "topic" must match an existing field name exactly. "detail" is one sentence, leading with the item count (e.g. "12 items across 6 subtopics..."). Empty array if none.${mapBlock}\n\nReturn JSON of shape: { "mapSummary": string, "missingFields": [ { "topic": string, "description": string, "why": string } ], "boundaryIssues": [ { "kind": string, "fields": [string], "proposal": string, "why": string } ], "thinFields": [ { "topic": string, "detail": string } ], "axes": { "x": { "label": string, "low": string, "high": string }, "y": { "label": string, "low": string, "high": string } }, "regions": [ { "name": string, "description": string, "x": number, "y": number } ], "assignments": [ { "field": string, "region": string } ], "suggestions": [ ... ] }`;
 
   const json = await runJson(system, prompt, {
+    call: 'field-map',
     onProgress,
     count: { key: 'topic', noun: 'fields' },
     // This is the largest single response the app asks for and it grows with the
@@ -825,6 +885,7 @@ export async function planBoundaryFix(args: {
       }));
 
   let shapeJson = await runJson(system, shapePrompt, {
+    call: 'boundary-shape',
     onProgress,
     count: { key: 'sourceTopic', noun: 'fields' },
   });
@@ -838,6 +899,7 @@ export async function planBoundaryFix(args: {
     onProgress?.('First pass didn’t split the field — asking again…');
     const retryPrompt = `${shapePrompt}\n\nYour previous answer returned ${resultFields.length} field(s) for ${fields.length} given — the same as (or fewer than) what you started with, which means nothing was actually split out. Try again: the JSON must include at least one field with "sourceTopic": "" for the carved-out material, alongside the field(s) it came from.`;
     const retryJson = await runJson(system, retryPrompt, {
+      call: 'boundary-shape',
       onProgress,
       count: { key: 'sourceTopic', noun: 'fields' },
     });
@@ -878,6 +940,7 @@ export async function planBoundaryFix(args: {
         const classifyPrompt = `${domainLine(domain)}\n\nThese fields are the result of a boundary fix (kind: "${kind}"): ${proposal}\n\nResulting fields to classify items into:\n${targetBlock}\n\nFor EACH of these items, decide which resulting field (by its EXACT "topic" name above) it belongs in:\n${itemBlock}\n\nReturn JSON of shape: { "assignments": [ { "id": string, "topic": string } ] } — one entry per item id above, every id accounted for exactly once.`;
 
         const json = await runJson(system, classifyPrompt, {
+          call: 'boundary-classify',
           onProgress: onProgress
             ? (line) => onProgress(`Classifying items… batch ${idx + 1}/${chunks.length} — ${line}`)
             : undefined,
@@ -938,17 +1001,48 @@ export async function fillGaps(args: {
   feedback: string;
   domain: Domain;
   eraGroups?: EraGroup[];
+  /**
+   * How `feedback` is read. 'gaps' (the default) is the sweep's follow-up: the reported
+   * gaps are the brief and the user's words are a steer, weighed against the rules.
+   * 'direct' is the freeform review mode: there are no gaps, and the user's words ARE
+   * the brief — the same posture as asking Claude for something in a chat.
+   */
+  mode?: FillMode;
 }, onProgress?: ProgressFn): Promise<{ items: ProposedItem[]; note: string }> {
-  const { topic, description, subtopics, existingItems, gaps, count, feedback, domain, eraGroups = [] } = args;
+  const { topic, description, subtopics, existingItems, gaps, count, feedback, domain, eraGroups = [], mode = 'gaps' } = args;
   const rules = await loadRules();
   const system = `You are the curation engine for TasteTrainer.\n\n${rules}\n\n${JSON_ONLY}`;
 
   const subtopicList = subtopics.map((s) => `- ${s.name}: ${s.description}`).join('\n');
+  // Years go in alongside the names: an era-shaped gap ("the 1930s are thin") or
+  // request ("more pre-war work") can't be filled sensibly by a model that can't see
+  // when the existing items date from.
   const existingBlock = existingItems.length
     ? existingItems
-        .map((i) => `- ${i.name}${i.brand ? ` (${i.brand})` : ''} [${i.subtopic}]`)
+        .map((i) => `- ${i.name}${i.brand ? ` (${i.brand})` : ''} [${i.subtopic}, ${i.year ?? '?'}]`)
         .join('\n')
     : '(none yet)';
+
+  if (mode === 'direct') {
+    // The direct request deliberately inverts the steer's "hypothesis, NOT an order"
+    // framing below. That framing is right when a sweep has already said what the field
+    // needs and the user is nudging it; it is wrong when the user has skipped the sweep
+    // precisely because they know what they want — there it made Claude argue with the
+    // request instead of researching it. The rules still govern HOW items are chosen
+    // inside the brief (defining over famous, spread within its range); they no longer
+    // get a vote on WHETHER to follow it.
+    const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\n\nCanonical subtopics (each item's "subtopic" MUST be exactly one of these names — choose the closest):\n${subtopicList}\n\nItems already in the set — do NOT repeat these:\n${existingBlock}\n\nThe user has asked directly for this:\n"""\n${feedback.trim()}\n"""\nThis is a DIRECT REQUEST — it is the brief for this batch. Follow it: its subject, scope and emphasis decide what you research, even where that deepens one corner of the field rather than widening overall coverage. The breadth-first and anti-bias rules govern HOW you choose within the brief — pick the genuinely defining work over the merely famous, and cover the brief's own range of makers, eras and regions — not WHETHER to follow it. Leave a requested thing out only when it does not exist or cannot be verified, is already in the set, or falls outside this field, and say so in your "note".\n\nPropose up to ${count} NEW items that best answer the request. If the brief has fewer real candidates than ${count}, return fewer rather than padding.${eraReferenceLine(eraGroups)} Fill EVERY field.\n\nReturn JSON of shape:\n{ "items": [ { "name": string, "description": string, "year": number|null, "brand": string, "creator": string, "definingFact": string, ${itemShapeLine(domain)} } ], "note": string }\n\nThe "note" is a short, plain-language reply (2–5 sentences) to the user's request: what you added and why, anything they asked for that you left out and the reason, and — if you noticed one while researching — a neighbouring area they didn't ask about but may want next.`;
+
+    const json = await runJson(system, prompt, {
+      call: 'direct-request',
+      onProgress,
+      count: { key: 'name', total: count, noun: 'items' },
+    });
+    const items = (json.items ?? []) as Omit<ProposedItem, 'image'>[];
+    const note = typeof json.note === 'string' ? json.note : '';
+    return { items: items.map((it) => ({ ...it, image: '' })), note };
+  }
+
   const gapBlock = gaps.length
     ? gaps.map((g) => `- ${g.axis}: ${g.detail}`).join('\n')
     : '(no specific gaps were reported — use your own breadth-first judgement)';
@@ -959,6 +1053,7 @@ export async function fillGaps(args: {
   const prompt = `${domainLine(domain)}\n\nMacro topic: "${topic}"\nField description: "${description}"\n\nCanonical subtopics (each item's "subtopic" MUST be exactly one of these names):\n${subtopicList}\n\nItems already in the set — do NOT repeat these:\n${existingBlock}\n\nReported coverage gaps to close (breadth first):\n${gapBlock}${feedbackBlock}\n\nPropose ${count} NEW defining items that best close these gaps and widen the field's coverage, countering popularity bias.${eraReferenceLine(eraGroups)} Fill EVERY field.\n\nReturn JSON of shape:\n{ "items": [ { "name": string, "description": string, "year": number|null, "brand": string, "creator": string, "definingFact": string, ${itemShapeLine(domain)} } ], "note": string }\n\nThe "note" is a short, plain-language explanation (2–5 sentences) of how you handled the gaps and the user's feedback: what you added and why, and for any user request you did NOT include, a clear reason why.`;
 
   const json = await runJson(system, prompt, {
+    call: 'gap-fill',
     onProgress,
     count: { key: 'name', total: count, noun: 'items' },
   });

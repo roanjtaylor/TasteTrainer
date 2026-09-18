@@ -4,6 +4,7 @@ import { useDomain } from '../lib/domain';
 import { useDatasetList } from '../lib/data';
 import { useAuth } from '../lib/auth';
 import { NavActionsSlot } from '../lib/navActions';
+import { BrainButton } from './BrainPanel';
 
 // Centred pill-style top nav — a floating rounded bar (6-ui.md), not a full-width
 // banner. It sits at the top of the page and scrolls away with it: the one thing worth
@@ -102,6 +103,10 @@ export function Nav() {
             </button>
           </>
         )}
+        {/* The settings cog's narrow-window home. At `xl`+ it moves out to the window's
+            right margin (main.tsx); below that there's no margin, and a fixed button
+            would sit on top of the nav actions to the right of this pill. */}
+        <BrainButton className="flex hover:bg-[var(--color-wall-soft)] xl:hidden" />
         </nav>
         {/* The page owning the current route portals its own action buttons in here
             (lib/navActions.tsx), so they sit inline with the bar instead of on a row

@@ -322,6 +322,13 @@ export interface CoverageGap {
   detail: string;
 }
 
+/**
+ * How an expansion reads the user's words. 'gaps' follows a sweep: the reported gaps
+ * are the brief, and the user's text is a steer weighed against the curation rules.
+ * 'direct' is the freeform review mode: no sweep, and the user's text IS the brief.
+ */
+export type FillMode = 'gaps' | 'direct';
+
 // ---- The field map: one level ABOVE a dataset (8-field-map.md) ----
 //
 // "What's missing?" audits the inside of one field. This audits the SHELF: given
@@ -480,6 +487,32 @@ export function mapSlug(name: string): string {
   return slugifyTopic(name) || 'unnamed';
 }
 
+// ---- Public embed (iframe widget) ----
+//
+// A stripped-down, unauthenticated view of a dataset for embedding elsewhere as an
+// iframe — a shuffleable picture viewer. Deliberately thin: only what the widget
+// draws, never the curation-side fields (capture, candidates, etc.), so a site
+// embedding it can't scrape more than the picture + caption it shows.
+
+/** One picture in an embed widget. */
+export interface EmbedItem {
+  id: string;
+  name: string;
+  image: string;
+  year: number | null;
+  brand: string;
+}
+
+/** What GET /api/embed/:id returns. Never issued for the personal domain — the
+ *  server 404s that id rather than saying "this one's private" (9-personal-and-auth.md:
+ *  no confirming even the existence of a personal dataset to an unauthenticated caller). */
+export interface EmbedDataset {
+  id: string;
+  topic: string;
+  description: string;
+  items: EmbedItem[];
+}
+
 // ---- Background jobs ----
 //
 // A curation call that streams its progress and result over SSE (server/src/routes/
@@ -513,4 +546,77 @@ export interface Job {
   error: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// ---- The brain: how this app prompts Claude, as data ----
+// Served by GET /api/brain and drawn by the settings cog (web/components/BrainPanel.tsx).
+// The point is legibility: every Claude call the app makes, what goes into it, what
+// comes back, and what the code checks afterwards — so the setup can be read from the
+// top down, and a change to it can be judged against what it was before.
+
+/** One Claude call the app makes. The catalogue lives beside the code that makes the
+ *  calls (server/src/services/brain.ts), and `runJson` refuses a call that isn't in
+ *  it, so this list cannot silently fall behind the prompts. */
+export type BrainCallId =
+  | 'subtopics'
+  | 'periods'
+  | 'items'
+  | 'gaps'
+  | 'gap-fill'
+  | 'direct-request'
+  | 'field-map'
+  | 'boundary-shape'
+  | 'boundary-classify';
+
+/** The most recent real run of a call, held in server memory only — it resets when
+ *  the server restarts, and says so in the UI rather than pretending to be history. */
+export interface BrainRun {
+  at: string;
+  durationMs: number;
+  ok: boolean;
+  error: string | null;
+  /** True when Claude's first answer wasn't valid JSON and the call was re-asked. */
+  retried: boolean;
+  systemChars: number;
+  promptChars: number;
+  /** The exact task prompt that was sent (the system prompt is the rulebook, shown
+   *  separately). */
+  prompt: string;
+}
+
+export interface BrainCall {
+  id: BrainCallId;
+  name: string;
+  /** Which level of the product the call works at. */
+  level: 'field' | 'world';
+  /** Where in the UI it's fired from. */
+  trigger: string;
+  /** What the call is for, in one or two sentences. */
+  purpose: string;
+  /** What the prompt is assembled from. */
+  inputs: string[];
+  /** The JSON shape asked for. */
+  output: string;
+  /** Sections of the rulebook this call leans on most (it is sent all of them). */
+  rules: string[];
+  /** What the code enforces around the model's answer, rather than trusting it. */
+  guardrails: string[];
+  /** Whether the result survives the browser closing (a durable `Job`). */
+  durable: boolean;
+  lastRun: BrainRun | null;
+}
+
+export interface BrainSetup {
+  model: string;
+  timeoutMs: number;
+  /** Whether this server has the proxy secret — without it every call below fails. */
+  proxyConfigured: boolean;
+  /** How every call's system prompt is assembled. */
+  systemTemplate: string;
+  /** The editable rulebook, verbatim (server/src/prompts/curation-rules.md). */
+  rules: string;
+  rulesPath: string;
+  calls: BrainCall[];
+  /** When this server process started — the horizon of every `lastRun`. */
+  serverStartedAt: string;
 }

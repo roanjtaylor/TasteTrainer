@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import './index.css';
 import { Nav } from './components/Nav';
 import { TaskNotifications } from './components/TaskNotifications';
+import { BrainButton } from './components/BrainPanel';
 import { AuthProvider, PersonalGate } from './lib/auth';
 import { NavActionsProvider } from './lib/navActions';
 import { DomainSelect } from './pages/DomainSelect';
@@ -13,17 +14,42 @@ import { DatasetView } from './pages/DatasetView';
 import { WorldReview } from './pages/WorldReview';
 import { FilterPicker } from './pages/FilterPicker';
 import { LegacyDatasetRedirect, LegacyMapRedirect } from './pages/LegacyRedirect';
+import { Embed } from './pages/Embed';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    {/* Tracks the session app-wide (lib/auth.tsx), but doesn't block rendering — only
-        the personal world (PersonalGate, below) is ever gated on being signed in. */}
+    <BrowserRouter>
+      <Routes>
+        {/* No Nav, no auth provider, no layout grid — this is what gets iframed on
+            someone else's site, so it has to be nothing but the picture. The nice
+            /:domain/:slug form (mirroring the app's own dataset URLs) is the one to
+            hand out; the bare /:datasetId form is kept for anything already using a
+            raw id — Embed.tsx resolves either, since the server looks datasets up
+            by slug (unique across the whole shelf) just as happily as by id. */}
+        <Route path="/embed/:domain/:slug" element={<Embed />} />
+        <Route path="/embed/:datasetId" element={<Embed />} />
+        <Route path="*" element={<AppShell />} />
+      </Routes>
+    </BrowserRouter>
+  </React.StrictMode>,
+);
+
+function AppShell() {
+  return (
+    // Tracks the session app-wide (lib/auth.tsx), but doesn't block rendering — only
+    // the personal world (PersonalGate, below) is ever gated on being signed in.
     <AuthProvider>
       <NavActionsProvider>
-      <BrowserRouter>
         {/* Below `lg` there's no reliable margin for the gutter column below to sit
             in, so the queue falls back to a small floating box here. */}
         <TaskNotifications variant="overlay" />
+        {/* The settings cog: top-right of the window, in the right margin — how this app
+            prompts Claude (components/BrainPanel.tsx). Only from `xl`, where the margin
+            is wide enough to clear the nav's own actions; Nav carries it below that. The
+            notification rail shares this margin and stops below it (`xl:top-14`). */}
+        <div className="fixed right-3 top-3 z-40 hidden xl:block">
+          <BrainButton className="flex border border-[var(--color-line)] bg-[var(--color-card)]/90 shadow-sm backdrop-blur" />
+        </div>
         <Nav />
         {/* Below `lg` this is a plain `mx-auto max-w-6xl` block, unchanged from
             before. At `lg`+ it becomes a 3-column grid, and — this is the part that
@@ -96,8 +122,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <TaskNotifications variant="rail" />
           </div>
         </div>
-      </BrowserRouter>
       </NavActionsProvider>
     </AuthProvider>
-  </React.StrictMode>,
-);
+  );
+}

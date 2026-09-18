@@ -32,6 +32,7 @@ import type {
   Domain,
   EraGroup,
   FieldSummary,
+  FillMode,
   Item,
   Job,
   ProposedItem,
@@ -655,13 +656,14 @@ curationRouter.post('/re-resolve', async (req, res) => {
 
 // "What's missing?" — breadth-first coverage sweep.
 curationRouter.post('/gaps', async (req, res) => {
-  const { topic, description, subtopics, items, domain, eraGroups } = req.body as {
+  const { topic, description, subtopics, items, domain, eraGroups, focus } = req.body as {
     topic: string;
     description: string;
     subtopics: Subtopic[];
     items: Item[];
     domain: Domain;
     eraGroups?: EraGroup[];
+    focus?: string;
   };
   if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
   const dom: Domain = normalizeDomain(domain);
@@ -685,6 +687,7 @@ curationRouter.post('/gaps', async (req, res) => {
         items: items ?? [],
         domain: dom,
         eraGroups: eraGroups ?? [],
+        focus: focus ?? '',
       },
       (line) => send('progress', { line }),
     );
@@ -699,8 +702,9 @@ curationRouter.post('/gaps', async (req, res) => {
 // user's own feedback, then fetch a Wikimedia lead image for each (same as /items).
 // Returns the proposed items plus a `note` explaining how the feedback was handled.
 curationRouter.post('/gap-fill', async (req, res) => {
-  const { topic, description, subtopics, items, gaps, count, feedback, domain, eraGroups } =
+  const { topic, description, subtopics, items, gaps, count, feedback, domain, eraGroups, mode } =
     req.body as {
+      mode?: FillMode;
       topic: string;
       description: string;
       subtopics: Subtopic[];
@@ -712,6 +716,11 @@ curationRouter.post('/gap-fill', async (req, res) => {
       eraGroups?: EraGroup[];
     };
   if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
+  // A direct request with nothing in it has no brief at all — refused here rather than
+  // spending a Claude call on "propose N items about nothing in particular".
+  if (mode === 'direct' && !feedback?.trim()) {
+    return res.status(400).json({ error: 'a request is required' });
+  }
   const dom: Domain = normalizeDomain(domain);
 
   // The other durable call — see the comment on /items above.
@@ -731,6 +740,7 @@ curationRouter.post('/gap-fill', async (req, res) => {
         gaps: gaps ?? [],
         count: Math.max(1, Math.min(50, Number(count) || 8)),
         feedback: feedback ?? '',
+        mode: mode === 'direct' ? 'direct' : 'gaps',
         domain: dom,
         eraGroups: eraGroups ?? [],
       },

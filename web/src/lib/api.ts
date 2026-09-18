@@ -1,12 +1,15 @@
 import type {
   BoundaryFixResult,
+  BrainSetup,
   BoundaryKind,
   CoverageGap,
   Dataset,
   DatasetSummary,
   Domain,
+  EmbedDataset,
   EraGroup,
   FieldMapReview,
+  FillMode,
   ImageCandidate,
   ImageKind,
   Item,
@@ -133,6 +136,10 @@ export const api = {
   updateDataset: (id: string, body: Partial<Dataset>) =>
     http<Dataset>(`/api/datasets/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteDataset: (id: string) => http<void>(`/api/datasets/${id}`, { method: 'DELETE' }),
+  // Public embed widget (no auth — server/src/routes/embed.ts). Same `http()` helper
+  // as everything else; it's harmless that this also sends an auth header when one
+  // exists, the endpoint just ignores it.
+  getEmbed: (id: string) => http<EmbedDataset>(`/api/embed/${id}`),
 
   // Curation — these stream live progress (onProgress) and resolve with the result.
   // "Map the field": subtopics AND the era-periods that steer research, in one durable
@@ -206,6 +213,8 @@ export const api = {
       // The field's named periods, so a reported gap can be phrased as "the Post-War
       // period is thin" rather than a bare year range.
       eraGroups?: EraGroup[];
+      // An area to read more closely — the sweep still covers the whole field.
+      focus?: string;
     },
     onProgress?: OnProgress,
     // See generateItems' jobId above.
@@ -223,6 +232,8 @@ export const api = {
       gaps: CoverageGap[];
       count: number;
       feedback: string;
+      // 'direct' makes `feedback` the brief itself rather than a steer on the gaps.
+      mode?: FillMode;
       domain: Domain;
       eraGroups?: EraGroup[];
     },
@@ -300,4 +311,8 @@ export const api = {
     http<Job[]>(`/api/curation/jobs${domain ? `?domain=${domain}` : ''}`),
   getJob: (id: string) => http<Job>(`/api/curation/jobs/${id}`),
   deleteJob: (id: string) => http<void>(`/api/curation/jobs/${id}`, { method: 'DELETE' }),
+
+  // The settings cog (components/BrainPanel.tsx): how the server prompts Claude —
+  // model, rulebook, every call and its last real run. Read-only.
+  getBrain: () => http<BrainSetup>('/api/brain'),
 };

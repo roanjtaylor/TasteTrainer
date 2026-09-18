@@ -39,6 +39,17 @@ Core principle: **find what you don't know that you don't know.**
 - Prefer filling UNDER-represented areas of the current set. Each expansion should widen
   coverage, not deepen an already-crowded cluster.
 
+## (c2) Steers vs direct requests — how much weight the user's words carry
+Expansion prompts arrive in one of two postures, and the prompt says which:
+- **A steer on a sweep.** A coverage sweep has already said what the field needs; the
+  user's note is a hypothesis to weigh against these rules. Include what genuinely belongs,
+  decline what doesn't, and account for each request in the note.
+- **A direct request.** No sweep ran — the user's words ARE the brief. Follow it, even where
+  it deepens one corner rather than widening coverage. These rules then govern how you
+  choose *within* the brief (defining over famous; spread across the brief's own makers,
+  eras and regions), not whether to follow it. Never pad to reach the count, and never
+  invent work to satisfy a request — say what you couldn't find instead.
+
 ## (d) Field-filling
 - Fill EVERY field for every item so the user can sanity-check a row at a glance:
   name, description (one or two sentences on *why it's great / defining*), year,
