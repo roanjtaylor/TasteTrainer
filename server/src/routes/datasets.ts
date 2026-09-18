@@ -9,6 +9,7 @@ import {
 } from '../storage.ts';
 import { absorbGhost } from '../services/worldMap.ts';
 import { canonicalSubtopic } from '../services/itemHygiene.ts';
+import { removeFiles, storagePathsIn } from '../services/personalFiles.ts';
 import { newId, now } from '../util.ts';
 import { normalizeDomain, optionalDomain, slugifyTopic } from '../../../shared/types.ts';
 import type { Dataset, Domain, EraGroup, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
@@ -62,11 +63,18 @@ datasetsRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
   try {
     // optionalDomain accepts the legacy hardware/software spellings too, so a client
     // that hasn't reloaded since the rename still gets the right shelf.
-    const summaries = await listDatasets(optionalDomain(req.query.domain));
+    const domain = optionalDomain(req.query.domain);
+    if (domain === 'personal' && !req.user) {
+      return res.status(401).json({ error: 'Sign in to access your personal world.' });
+    }
+    const summaries = await listDatasets(domain);
+    // No domain filter reads across every world — an unsigned-in visitor must not see
+    // even the existence of personal datasets in that combined list.
+    const visible = req.user ? summaries : summaries.filter((d) => d.domain !== 'personal');
     // Set only once the read succeeded — a header applied before the await would
     // still be attached if it threw, telling the browser to cache a 500.
     cacheable(res, 30);
-    res.json(summaries);
+    res.json(visible);
   } catch (err) { next(err); }
 });
 
@@ -74,6 +82,9 @@ datasetsRouter.get('/:id', async (req: Request, res: Response, next: NextFunctio
   try {
     const ds = await getDataset(req.params.id);
     if (!ds) return res.status(404).json({ error: 'Dataset not found' });
+    if (ds.domain === 'personal' && !req.user) {
+      return res.status(401).json({ error: 'Sign in to access your personal world.' });
+    }
     cacheable(res, 30);
     res.json(ds);
   } catch (err) { next(err); }
@@ -91,6 +102,9 @@ datasetsRouter.post('/', async (req: Request, res: Response, next: NextFunction)
     };
     if (!topic?.trim() || !description?.trim()) {
       return res.status(400).json({ error: 'topic and description are required' });
+    }
+    if (normalizeDomain(domain) === 'personal' && !req.user) {
+      return res.status(401).json({ error: 'Sign in to access your personal world.' });
     }
     // Names are unique across the shelf (the `slug` column's unique constraint —
     // global, not per world). Say so in words, with where the existing one lives,
@@ -136,6 +150,9 @@ datasetsRouter.put('/:id', async (req: Request, res: Response, next: NextFunctio
   try {
     const existing = await getDataset(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Dataset not found' });
+    if (existing.domain === 'personal' && !req.user) {
+      return res.status(401).json({ error: 'Sign in to access your personal world.' });
+    }
     const body = req.body as Partial<Dataset>;
     // Items are canonicalised against the subtopic list they are being saved WITH, so
     // a PUT that renames the subtopics and rewrites the items in one go agrees with
@@ -151,16 +168,25 @@ datasetsRouter.put('/:id', async (req: Request, res: Response, next: NextFunctio
     };
     // A topic edit is also a rename of the dataset's URL, so hand the old slug over
     // for invalidation (storage.saveDataset).
-    res.json(await saveDataset(ds, slugifyTopic(existing.topic)));
+    const saved = await saveDataset(ds, slugifyTopic(existing.topic));
+    // An uploaded file belongs to exactly one item, so once a save leaves nothing
+    // pointing at it — the item was deleted, or its image swapped — it is unreachable
+    // and would otherwise sit in the private bucket forever. After the save, never
+    // before: a failed save must not have already destroyed the pictures.
+    const kept = new Set(storagePathsIn(saved));
+    await removeFiles(storagePathsIn(existing).filter((path) => !kept.has(path)));
+    res.json(saved);
   } catch (err) { next(err); }
 });
 
 datasetsRouter.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // Resolve first: the param may be a slug, and everything downstream of a delete
-    // (rankings, results) is keyed by the dataset's id.
+    // Resolve first: the param may be a slug.
     const existing = await getDataset(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Dataset not found' });
+    if (existing.domain === 'personal' && !req.user) {
+      return res.status(401).json({ error: 'Sign in to access your personal world.' });
+    }
     await deleteDataset(existing.id, slugifyTopic(existing.topic));
     res.status(204).end();
   } catch (err) { next(err); }

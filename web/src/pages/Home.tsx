@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
-import { slugifyTopic, type DatasetSummary } from '../../../shared/types';
+import { isCuratedDomain, slugifyTopic, type DatasetSummary } from '../../../shared/types';
 import { useDomain } from '../lib/domain';
 import { prefetchDataset, useDatasetList, useWorldMap } from '../lib/data';
 import { cardsFor } from '../lib/mapLayout';
@@ -20,7 +20,10 @@ import { NavActions } from '../lib/navActions';
 export function Home() {
   const domain = useDomain();
   const { data: datasets, loading, error } = useDatasetList(domain);
-  const { data: map } = useWorldMap(domain);
+  // The personal world is never reviewed by Claude (9-personal-and-auth.md), so it has
+  // no map to fetch and none of the review's entry points — it is always the plain grid.
+  const curated = !!domain && isCuratedDomain(domain);
+  const { data: map } = useWorldMap(curated ? domain : null);
 
   const [narrow, setNarrow] = useState(
     () => typeof window !== 'undefined' && window.innerWidth < 700,
@@ -61,7 +64,19 @@ export function Home() {
     // already says where you are, and the map wants the height more than this screen
     // wanted a heading of its own.
     <div>
-      {!loading && !error && (datasets?.length ?? 0) > 0 && (
+      {!curated && (
+        // The researched worlds start a field from the map's gaps or the review; here
+        // there is neither, so the shelf itself needs the way in.
+        <NavActions>
+          <Link
+            to={`/${domain}/new`}
+            className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
+          >
+            + New dataset
+          </Link>
+        </NavActions>
+      )}
+      {curated && !loading && !error && (datasets?.length ?? 0) > 0 && (
         <NavActions>
           <Link
             to={`/${domain}/review`}
@@ -80,8 +95,9 @@ export function Home() {
         <div className="rounded-xl border border-dashed border-[var(--color-line)] p-12 text-center">
           <p className="text-[var(--color-muted)]">No datasets yet.</p>
           <p className="mx-auto mt-1 max-w-md text-sm text-[var(--color-muted)]">
-            Name a field yourself, or let Claude map this world first and pick from the fields
-            it finds.
+            {curated
+              ? 'Name a field yourself, or let Claude map this world first and pick from the fields it finds.'
+              : 'Start a collection of your own — books, films, albums, family memories — and fill it with your files. Everything here stays private to you.'}
           </p>
           <div className="mt-4 flex justify-center gap-2">
             <Link
@@ -90,12 +106,14 @@ export function Home() {
             >
               + New dataset
             </Link>
-            <Link
-              to={`/${domain}/review`}
-              className="rounded-full border border-[var(--color-line)] px-5 py-2 text-sm"
-            >
-              Map this world →
-            </Link>
+            {curated && (
+              <Link
+                to={`/${domain}/review`}
+                className="rounded-full border border-[var(--color-line)] px-5 py-2 text-sm"
+              >
+                Map this world →
+              </Link>
+            )}
           </div>
         </div>
       ) : showMap ? (
@@ -106,7 +124,7 @@ export function Home() {
         )
       ) : (
         <>
-          {!hasMap && (
+          {curated && !hasMap && (
             <p className="mb-4 text-sm text-[var(--color-muted)]">
               This world has no map yet.{' '}
               <Link to={`/${domain}/review`} className="text-[var(--color-accent)] underline">

@@ -1,20 +1,9 @@
-import { createClient } from '@supabase/supabase-js';
-import { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } from './config.ts';
+import { supabase } from './supabase.ts';
 import { now } from './util.ts';
+import { removeFiles, storagePathsIn, toServedImages, toStoredImages } from './services/personalFiles.ts';
 import { cached, invalidate, invalidatePrefix, keys, put } from './cache.ts';
-import { normalizeDomain, rankerKeyOf, singleWordTopic, slugifyTopic } from '../../shared/types.ts';
-import type {
-  Dataset,
-  DatasetSummary,
-  Domain,
-  Job,
-  Ranker,
-  RankerSummary,
-  ResultsFile,
-  WorldMap,
-} from '../../shared/types.ts';
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+import { normalizeDomain, singleWordTopic, slugifyTopic } from '../../shared/types.ts';
+import type { Dataset, DatasetSummary, Domain, Job, WorldMap } from '../../shared/types.ts';
 
 /**
  * "That table isn't there" — i.e. a migration hasn't been applied yet.
@@ -96,7 +85,10 @@ async function readDatasetBy(column: 'id' | 'slug', value: string): Promise<Data
     .eq(column, value)
     .maybeSingle();
   if (error) throw new Error(error.message);
-  return data?.data ? withDomain(data.data as Dataset) : null;
+  // Private files are stored as permanent references and served as signed links
+  // (services/personalFiles.ts). Converting here — the one read path — is what lets
+  // every caller downstream, comparison routes included, treat `image` as a URL.
+  return data?.data ? toServedImages(withDomain(data.data as Dataset)) : null;
 }
 
 /**
@@ -104,16 +96,20 @@ async function readDatasetBy(column: 'id' | 'slug', value: string): Promise<Data
  * save — pass it on a rename so the old address stops serving the old name from cache
  * (a renamed dataset's link changes, and the stale entry would outlive the rename).
  */
-export async function saveDataset(ds: Dataset, previousSlug?: string): Promise<Dataset> {
-  ds.updatedAt = now();
-  ds.domain = normalizeDomain(ds.domain);
-  ds.topic = singleWordTopic(ds.topic);
-  const slug = slugifyTopic(ds.topic);
+export async function saveDataset(input: Dataset, previousSlug?: string): Promise<Dataset> {
+  input.updatedAt = now();
+  input.domain = normalizeDomain(input.domain);
+  input.topic = singleWordTopic(input.topic);
+  const slug = slugifyTopic(input.topic);
+  // The mirror of readDatasetBy: the client sends back the signed links it was served,
+  // and a signed link must never reach the database — it expires.
+  const stored = toStoredImages(input);
   const { error } = await supabase
     .from('taste_datasets')
-    .upsert({ id: ds.id, slug, data: ds, updated_at: ds.updatedAt });
+    .upsert({ id: stored.id, slug, data: stored, updated_at: stored.updatedAt });
   if (error) throw new Error(error.message);
   if (previousSlug && previousSlug !== slug) invalidate(keys.dataset(previousSlug));
+  const ds = await toServedImages(stored);
   // Seed rather than clear: the client almost always re-reads what it just wrote.
   // Both addresses, since either may be the one it reads back through.
   put(keys.dataset(ds.id), ds);
@@ -123,24 +119,16 @@ export async function saveDataset(ds: Dataset, previousSlug?: string): Promise<D
 }
 
 export async function deleteDataset(id: string, slug?: string): Promise<void> {
-  // Rankings first, then the legacy single-blob results, then the dataset itself —
-  // so a failure part-way never leaves scores pointing at a dataset that's gone.
-  const { error: rankErr } = await supabase.from('taste_rankings').delete().eq('dataset_id', id);
-  if (rankErr && !missingRelation(rankErr)) throw new Error(rankErr.message);
-
-  const { error: resError } = await supabase
-    .from('taste_comparison_results')
-    .delete()
-    .eq('dataset_id', id);
-  if (resError) throw new Error(resError.message);
+  // Read before the row goes: once it's deleted nothing records which files were its.
+  const doomed = await getDataset(id);
 
   const { error } = await supabase.from('taste_datasets').delete().eq('id', id);
   if (error) throw new Error(error.message);
+  if (doomed) await removeFiles(storagePathsIn(doomed));
 
   invalidate(keys.dataset(id));
   if (slug) invalidate(keys.dataset(slug));
   invalidatePrefix(keys.datasetListPrefix);
-  invalidatePrefix(keys.rankersPrefix(id));
 }
 
 // ---- World maps (one row per domain) ----
@@ -179,99 +167,6 @@ export async function saveWorldMap(map: WorldMap): Promise<WorldMap> {
   // Seed rather than clear: dragging a card writes and then immediately re-reads.
   put(keys.worldMap(map.domain), map);
   return map;
-}
-
-// ---- Rankings (one row per person, per dataset) ----
-//
-// Arcade model: a name owns a set of scores. Storing one row per (dataset, ranker)
-// rather than one blob per dataset means a vote reads and writes only the voting
-// person's ratings, so a dataset ranked by ten people costs the same per vote as one
-// ranked by one — which a shared blob would not have managed.
-
-const MIGRATION_HINT =
-  'The taste_rankings table is missing. Run supabase/migrations/002_physical_digital_and_rankings.sql in the Supabase SQL editor.';
-
-function emptyFor(datasetId: string, ranker: Ranker): ResultsFile {
-  return { datasetId, ranker, ratings: {}, comparisons: 0, updatedAt: now() };
-}
-
-/** One person's ratings for a dataset. Never null — an unknown name is simply a
- *  fresh scorecard, which is exactly what "type your name and start" should mean. */
-export async function getRanking(datasetId: string, ranker: Ranker): Promise<ResultsFile> {
-  const key = rankerKeyOf(ranker.name) || ranker.key;
-  return cached(keys.ranking(datasetId, key), async () => {
-    const { data, error } = await supabase
-      .from('taste_rankings')
-      .select('data')
-      .eq('dataset_id', datasetId)
-      .eq('ranker_key', key)
-      .maybeSingle();
-    if (missingRelation(error)) throw new Error(MIGRATION_HINT);
-    if (error) throw new Error(error.message);
-    const stored = data?.data as ResultsFile | undefined;
-    if (!stored) return emptyFor(datasetId, { key, name: ranker.name });
-    // Trust the stored display name — it's whoever claimed the plate first.
-    return { ...stored, datasetId, ranker: stored.ranker ?? { key, name: ranker.name } };
-  });
-}
-
-export async function saveRanking(results: ResultsFile): Promise<ResultsFile> {
-  const ranker = results.ranker;
-  if (!ranker) throw new Error('A ranking must belong to a named ranker.');
-  results.updatedAt = now();
-
-  const { error } = await supabase.from('taste_rankings').upsert({
-    dataset_id: results.datasetId,
-    ranker_key: ranker.key,
-    ranker_name: ranker.name,
-    data: results,
-    updated_at: results.updatedAt,
-  });
-  if (missingRelation(error)) throw new Error(MIGRATION_HINT);
-  if (error) throw new Error(error.message);
-
-  put(keys.ranking(results.datasetId, ranker.key), results);
-  // The name list and the pooled view both change on a first-ever vote, so drop them.
-  invalidate(keys.rankerList(results.datasetId));
-  invalidate(keys.allRankings(results.datasetId));
-  return results;
-}
-
-/** Everyone who has ranked this dataset — the cabinet's list of name plates. Reads
- *  the summaries view so the counts come back already computed, never as ratings
- *  blobs this would then have to count in JS. */
-export async function listRankers(datasetId: string): Promise<RankerSummary[]> {
-  return cached(keys.rankerList(datasetId), async () => {
-    const { data, error } = await supabase
-      .from('taste_ranker_summaries')
-      .select('ranker_key, ranker_name, comparisons, items_judged, updated_at')
-      .eq('dataset_id', datasetId)
-      .order('comparisons', { ascending: false });
-    if (missingRelation(error)) return [];
-    if (error) throw new Error(error.message);
-
-    return (data ?? []).map((row: any) => ({
-      key: row.ranker_key,
-      name: row.ranker_name,
-      comparisons: Number(row.comparisons) || 0,
-      itemsJudged: Number(row.items_judged) || 0,
-      updatedAt: row.updated_at ?? '',
-    }));
-  });
-}
-
-/** Every person's ratings for a dataset — the input to the pooled leaderboard.
- *  Only read when the pooled view is actually being shown. */
-export async function getAllRankings(datasetId: string): Promise<ResultsFile[]> {
-  return cached(keys.allRankings(datasetId), async () => {
-    const { data, error } = await supabase
-      .from('taste_rankings')
-      .select('data')
-      .eq('dataset_id', datasetId);
-    if (missingRelation(error)) return [];
-    if (error) throw new Error(error.message);
-    return (data ?? []).map((row: any) => row.data as ResultsFile).filter(Boolean);
-  });
 }
 
 // ---- Background jobs (one row per long curation call — see shared/types.ts) ----

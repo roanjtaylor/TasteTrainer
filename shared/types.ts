@@ -10,7 +10,25 @@
  * is not "hardware" and a motion graphic is not "software", but both sit cleanly on
  * the physical/digital line. Renamed from 'hardware'|'software' on 2026-07-28.
  */
-export type Domain = 'physical' | 'digital';
+export type Domain = 'physical' | 'digital' | 'personal';
+
+/**
+ * Every world, in the order the gate shows them. `personal` (9-personal-and-auth.md) is
+ * the subjective third: not "the best work humanity has made" but the work that made
+ * YOU — your books, films, music, family memories. Built by hand from your own files
+ * rather than researched by Claude, then browsed and ranked exactly like the other two.
+ */
+export const DOMAINS: readonly Domain[] = ['physical', 'digital', 'personal'];
+
+function isDomain(value: string): value is Domain {
+  return (DOMAINS as readonly string[]).includes(value);
+}
+
+/** The worlds Claude researches. The personal world is hand-built: nothing in it is
+ *  knowable from outside your own life, so there is nothing for a model to curate. */
+export function isCuratedDomain(domain: Domain): boolean {
+  return domain !== 'personal';
+}
 
 /** The pre-rename values, still present in rows written before 2026-07-28. */
 const LEGACY_DOMAINS: Record<string, Domain> = { hardware: 'physical', software: 'digital' };
@@ -23,7 +41,7 @@ const LEGACY_DOMAINS: Record<string, Domain> = { hardware: 'physical', software:
  */
 export function normalizeDomain(raw: unknown): Domain {
   const value = String(raw ?? '').toLowerCase();
-  if (value === 'physical' || value === 'digital') return value;
+  if (isDomain(value)) return value;
   return LEGACY_DOMAINS[value] ?? 'physical';
 }
 
@@ -31,7 +49,7 @@ export function normalizeDomain(raw: unknown): Domain {
 export function optionalDomain(raw: unknown): Domain | undefined {
   const value = String(raw ?? '').toLowerCase();
   if (!value) return undefined;
-  if (value === 'physical' || value === 'digital') return value;
+  if (isDomain(value)) return value;
   return LEGACY_DOMAINS[value];
 }
 
@@ -46,6 +64,11 @@ export const DOMAIN_LABELS: Record<Domain, { title: string; short: string; tagli
     title: 'Digital world',
     short: 'Digital',
     tagline: 'Things on a screen — websites, apps, product UI, graphics.',
+  },
+  personal: {
+    title: 'Personal world',
+    short: 'Personal',
+    tagline: 'Things that are yours — books, films, music, family memories.',
   },
 };
 
@@ -199,7 +222,7 @@ export interface Item {
 /** A dataset = a macro topic (the field you're cataloguing). One JSON file per dataset. */
 export interface Dataset {
   id: string;
-  /** Which world this field belongs to — physical or digital (7-software-design.md). */
+  /** Which world this field belongs to (7-software-design.md, 9-personal-and-auth.md). */
   domain: Domain;
   /** The macro topic name, e.g. "Watches". */
   topic: string;
@@ -227,71 +250,6 @@ export interface DatasetSummary {
   itemCount: number;
   subtopicCount: number;
   updatedAt: string;
-}
-
-/** Per-item Elo state within a dataset (5-comparison.md). */
-export interface EloEntry {
-  itemId: string;
-  rating: number;
-  wins: number;
-  losses: number;
-  /** Total comparisons this item has appeared in. */
-  games: number;
-}
-
-/**
- * Who is doing the ranking. Arcade-cabinet identity: you type a name, that name owns
- * your scores — no account, no password, no login round-trip. `key` is the normalised
- * form used for storage/equality (so "Roan" and "roan " are the same player);
- * `name` is what gets displayed, spelled the way it was first entered.
- */
-export interface Ranker {
-  key: string;
-  name: string;
-}
-
-/** Longest name the cabinet accepts. Long enough to be a real name, short enough to fit a row. */
-export const RANKER_NAME_MAX = 16;
-
-/** The storage/equality form of a ranker name. Shared so web and server agree exactly. */
-export function rankerKeyOf(name: string): string {
-  return name.trim().toLowerCase().replace(/\s+/g, ' ').slice(0, RANKER_NAME_MAX);
-}
-
-/** Trim/collapse a typed name for display. Returns "" when nothing usable was typed. */
-export function cleanRankerName(name: string): string {
-  return name.trim().replace(/\s+/g, ' ').slice(0, RANKER_NAME_MAX);
-}
-
-/** One person's comparison outcomes for one dataset. */
-export interface ResultsFile {
-  datasetId: string;
-  /** Whose ranking this is. Absent on rows written before per-person rankings existed. */
-  ranker?: Ranker;
-  ratings: Record<string, EloEntry>;
-  /** Total comparisons recorded across the whole dataset. */
-  comparisons: number;
-  updatedAt: string;
-}
-
-/** A person who has ranked a dataset — the cabinet's high-score name plate. */
-export interface RankerSummary extends Ranker {
-  /** How many 1v1 choices this person has made in this dataset. */
-  comparisons: number;
-  /** How many distinct items they've actually judged. */
-  itemsJudged: number;
-  updatedAt: string;
-}
-
-/** The pseudo-ranker key meaning "everyone's rankings, pooled". */
-export const EVERYONE = 'everyone';
-
-/** One row of a leaderboard. `rankerCount` is only set on the pooled view. */
-export interface LeaderboardRow {
-  item: Item;
-  entry: EloEntry;
-  /** Pooled view only: how many people have judged this item. */
-  rankerCount?: number;
 }
 
 // ---- Curation request/response payloads (server <-> web) ----

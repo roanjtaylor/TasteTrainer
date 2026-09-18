@@ -1,14 +1,6 @@
 import { slugifyTopic } from '../../../shared/types';
-import type {
-  BoundaryFixResult,
-  Dataset,
-  DatasetSummary,
-  Domain,
-  Ranker,
-  WorldMap,
-} from '../../../shared/types';
+import type { BoundaryFixResult, Dataset, DatasetSummary, Domain, WorldMap } from '../../../shared/types';
 import { api } from './api';
-import type { ScopeQuery } from './api';
 import { cacheKeys, drop, prefetch, useCached, write, type CachedResource } from './store';
 
 // The read/write seam between the API and the client cache (lib/store.ts).
@@ -82,29 +74,6 @@ export function publishWorldMap(domain: Domain, map: WorldMap | null): void {
   write(cacheKeys.worldMap(domain), map);
 }
 
-/** Everyone who has ranked a dataset. */
-export function useRankers(datasetId: string | null) {
-  return useCached(
-    datasetId ? cacheKeys.rankers(datasetId) : null,
-    () => api.listRankers(datasetId as string).then((r) => r.rankers),
-    { maxAgeMs: 15_000 },
-  );
-}
-
-/**
- * A leaderboard for one (dataset, ranker, scope). Cached so flipping between name
- * tabs is instant after the first look, with a short freshness window because votes
- * land continuously while a session is running.
- */
-export function useLeaderboard(datasetId: string | null, ranker: string, scope: ScopeQuery) {
-  const scopeKey = JSON.stringify(scope);
-  return useCached(
-    datasetId ? cacheKeys.leaderboard(datasetId, ranker, scopeKey) : null,
-    () => api.getLeaderboard(datasetId as string, ranker, scope),
-    { maxAgeMs: 10_000 },
-  );
-}
-
 // ---- Mutations ----
 
 /** Save a dataset and publish the returned state, so every screen showing it updates
@@ -116,8 +85,6 @@ export async function saveDataset(idOrSlug: string, body: Partial<Dataset>): Pro
   drop(cacheKeys.dataset(idOrSlug));
   publish(updated);
   drop(cacheKeys.datasetListPrefix, { prefix: true });
-  // Item membership may have changed, which changes what any board can contain.
-  drop(cacheKeys.leaderboardPrefix(updated.id), { prefix: true });
   return updated;
 }
 
@@ -135,8 +102,6 @@ export async function deleteDataset(id: string, topic: string): Promise<void> {
   drop(cacheKeys.dataset(id));
   drop(cacheKeys.dataset(slugifyTopic(topic)));
   drop(cacheKeys.datasetListPrefix, { prefix: true });
-  drop(cacheKeys.leaderboardPrefix(id), { prefix: true });
-  drop(cacheKeys.rankers(id));
 }
 
 /**
@@ -151,23 +116,9 @@ export async function deleteDataset(id: string, topic: string): Promise<void> {
 export function publishBoundaryFix(result: BoundaryFixResult): void {
   for (const ds of result.updated) {
     publish(ds);
-    drop(cacheKeys.leaderboardPrefix(ds.id), { prefix: true });
   }
   for (const topic of result.deletedTopics) {
     drop(cacheKeys.dataset(slugifyTopic(topic)));
   }
   drop(cacheKeys.datasetListPrefix, { prefix: true });
-}
-
-/** Record one choice. Every board for this dataset is now stale, including the
- *  pooled one and the list of who has ranked it (this may be a first vote). */
-export async function vote(
-  datasetId: string,
-  ranker: Ranker,
-  winnerId: string,
-  loserId: string,
-): Promise<void> {
-  await api.vote(datasetId, ranker, winnerId, loserId);
-  drop(cacheKeys.leaderboardPrefix(datasetId), { prefix: true });
-  drop(cacheKeys.rankers(datasetId));
 }

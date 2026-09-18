@@ -19,6 +19,7 @@ import { CandidateStrip } from '../components/CandidateStrip';
 import { ImagePicker } from '../components/ImagePicker';
 import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
+import { PersonalNew } from './PersonalNew';
 
 // Route element for both "/:domain/new" (no field chosen yet) and "/:domain/:slug/new"
 // (a field's own dedicated research URL — see initialise() below for how a session
@@ -31,6 +32,9 @@ import { ItemFields } from '../components/ItemFields';
 // underlying calls always ran fine in parallel, only the one shared page didn't.
 export function CurateRoute() {
   const { domain, slug } = useParams();
+  // The personal world has no research to run (9-personal-and-auth.md): its "new" is a
+  // short hand-filled form, not this Claude-driven flow.
+  if (domain === 'personal') return <PersonalNew />;
   return <Curate key={`${domain}/${slug ?? ''}`} />;
 }
 
@@ -71,9 +75,10 @@ function Curate() {
   // research is spent on it — and offers the existing dataset instead.
   const physicalList = useDatasetList('physical');
   const digitalList = useDatasetList('digital');
+  const personalList = useDatasetList('personal');
   const topicSlug = slugifyTopic(topic.trim());
   const existing = topicSlug
-    ? [...(physicalList.data ?? []), ...(digitalList.data ?? [])].find(
+    ? [...(physicalList.data ?? []), ...(digitalList.data ?? []), ...(personalList.data ?? [])].find(
         (d) => slugifyTopic(d.topic) === topicSlug,
       )
     : undefined;

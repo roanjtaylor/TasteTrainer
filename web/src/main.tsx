@@ -4,7 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import './index.css';
 import { Nav } from './components/Nav';
 import { TaskNotifications } from './components/TaskNotifications';
-import { RankerProvider } from './lib/ranker';
+import { AuthProvider, PersonalGate } from './lib/auth';
 import { NavActionsProvider } from './lib/navActions';
 import { DomainSelect } from './pages/DomainSelect';
 import { Home } from './pages/Home';
@@ -16,7 +16,9 @@ import { LegacyDatasetRedirect, LegacyMapRedirect } from './pages/LegacyRedirect
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <RankerProvider>
+    {/* Tracks the session app-wide (lib/auth.tsx), but doesn't block rendering — only
+        the personal world (PersonalGate, below) is ever gated on being signed in. */}
+    <AuthProvider>
       <NavActionsProvider>
       <BrowserRouter>
         {/* Below `lg` there's no reliable margin for the gutter column below to sit
@@ -61,30 +63,34 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
                 ":domain" is validated by lib/domain (anything else redirects to the
                 gate), and the static "new" segment outranks ":slug" in React Router's
                 route ranking, so /physical/new is always the curate screen. */}
-            <Routes>
-              <Route path="/" element={<DomainSelect />} />
-              {/* Pre-rename addresses, kept alive for links already out there. */}
-              <Route path="/datasets" element={<Navigate to="/" replace />} />
-              <Route path="/new" element={<Navigate to="/" replace />} />
-              <Route path="/dataset/:id" element={<LegacyDatasetRedirect />} />
-              <Route path="/dataset/:id/filters" element={<LegacyDatasetRedirect />} />
-              <Route path="/:domain" element={<Home />} />
-              {/* Bare "new" (no field chosen yet) and a per-field "<slug>/new" (once one
-                  has). CurateRoute keys the actual page by domain+slug, so a session
-                  researching one field and a session starting another are always
-                  separate component instances — never the same mounted page silently
-                  swapping which field's research a still-running call writes into. See
-                  Curate.tsx for why that used to happen on the single shared /new URL. */}
-              <Route path="/:domain/new" element={<CurateRoute />} />
-              <Route path="/:domain/:slug/new" element={<CurateRoute />} />
-              {/* Static segments outrank ":slug", so these always win over a field
-                  name. The world's MAP lives on the shelf itself (/physical); this is
-                  the review that draws and amends it. */}
-              <Route path="/:domain/review" element={<WorldReview />} />
-              <Route path="/:domain/map" element={<LegacyMapRedirect />} />
-              <Route path="/:domain/:slug" element={<DatasetView />} />
-              <Route path="/:domain/:slug/filters" element={<FilterPicker />} />
-            </Routes>
+            {/* Gates only the personal world (/personal/...) behind a sign-in screen —
+                every other route renders straight through (lib/auth.tsx). */}
+            <PersonalGate>
+              <Routes>
+                <Route path="/" element={<DomainSelect />} />
+                {/* Pre-rename addresses, kept alive for links already out there. */}
+                <Route path="/datasets" element={<Navigate to="/" replace />} />
+                <Route path="/new" element={<Navigate to="/" replace />} />
+                <Route path="/dataset/:id" element={<LegacyDatasetRedirect />} />
+                <Route path="/dataset/:id/filters" element={<LegacyDatasetRedirect />} />
+                <Route path="/:domain" element={<Home />} />
+                {/* Bare "new" (no field chosen yet) and a per-field "<slug>/new" (once one
+                    has). CurateRoute keys the actual page by domain+slug, so a session
+                    researching one field and a session starting another are always
+                    separate component instances — never the same mounted page silently
+                    swapping which field's research a still-running call writes into. See
+                    Curate.tsx for why that used to happen on the single shared /new URL. */}
+                <Route path="/:domain/new" element={<CurateRoute />} />
+                <Route path="/:domain/:slug/new" element={<CurateRoute />} />
+                {/* Static segments outrank ":slug", so these always win over a field
+                    name. The world's MAP lives on the shelf itself (/physical); this is
+                    the review that draws and amends it. */}
+                <Route path="/:domain/review" element={<WorldReview />} />
+                <Route path="/:domain/map" element={<LegacyMapRedirect />} />
+                <Route path="/:domain/:slug" element={<DatasetView />} />
+                <Route path="/:domain/:slug/filters" element={<FilterPicker />} />
+              </Routes>
+            </PersonalGate>
           </main>
           <div className="hidden lg:flex">
             <TaskNotifications variant="rail" />
@@ -92,6 +98,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         </div>
       </BrowserRouter>
       </NavActionsProvider>
-    </RankerProvider>
+    </AuthProvider>
   </React.StrictMode>,
 );

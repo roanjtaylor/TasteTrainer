@@ -2,7 +2,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { DOMAIN_LABELS, slugifyTopic } from '../../../shared/types';
 import { useDomain } from '../lib/domain';
 import { useDatasetList } from '../lib/data';
-import { useRanker } from '../lib/ranker';
+import { useAuth } from '../lib/auth';
 import { NavActionsSlot } from '../lib/navActions';
 
 // Centred pill-style top nav — a floating rounded bar (6-ui.md), not a full-width
@@ -18,7 +18,7 @@ import { NavActionsSlot } from '../lib/navActions';
 export function Nav() {
   const { pathname } = useLocation();
   const domain = useDomain();
-  const { ranker, release } = useRanker();
+  const { email, signOut } = useAuth();
   // Only to turn a slug in the URL back into the field's real name. Cached and
   // usually already warm, since you nearly always arrive at a field from the shelf.
   const { data: datasets } = useDatasetList(domain);
@@ -86,16 +86,19 @@ export function Nav() {
             here, but it counted finished-but-undismissed jobs too and read as a
             confusing backlog rather than activity. */}
 
-        {/* Whose scores the next vote lands on. Click to hand the cabinet over. */}
-        {ranker && (
+        {/* The account, last and quiet: shown only once there's a session to sign out
+            of — most of a visit (the physical and digital worlds) never creates one.
+            Inside the pill rather than in the empty left track, which is where
+            DatasetView pins the field's title. */}
+        {email && (
           <>
             <span className="mx-1 h-5 w-px shrink-0 bg-[var(--color-line)]" />
             <button
-              onClick={release}
-              title="Rank as someone else"
-              className="shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-xs uppercase tracking-wider text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
+              onClick={signOut}
+              title={`Signed in as ${email}`}
+              className="shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-xs text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)] hover:text-[var(--color-ink)]"
             >
-              {ranker.name}
+              Sign out
             </button>
           </>
         )}

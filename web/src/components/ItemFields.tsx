@@ -17,6 +17,28 @@ export interface EditableItem {
 // edited so the look and behaviour stay consistent. `domain` adds a url field for
 // digital-world items (7-software-design.md) — the address the screenshot pipeline
 // captures — hidden in the physical world, where it has no meaning.
+//
+// The personal world (9-personal-and-auth.md) keeps the SAME fields and only rewords
+// the prompts: a book has an author and a publisher where a watch has a designer and a
+// brand, and "why it's great" is the wrong question to ask of a family photo. Same
+// shape underneath is what lets personal datasets be browsed and filtered by code
+// that never learns they're different.
+const PROMPTS = {
+  default: {
+    url: 'url (e.g. https://stripe.com)',
+    brand: 'brand',
+    creator: 'creator',
+    description: "why it's great",
+    definingFact: 'defining fact',
+  },
+  personal: {
+    url: 'link (optional — where it lives: Spotify, Letterboxd, Goodreads…)',
+    brand: 'publisher / studio / label',
+    creator: 'author / director / artist',
+    description: 'why it matters to you',
+    definingFact: 'a memory or note',
+  },
+};
 export function ItemFields({
   item,
   subtopics,
@@ -28,6 +50,7 @@ export function ItemFields({
   domain?: Domain;
   onChange: (change: Partial<EditableItem>) => void;
 }) {
+  const prompts = domain === 'personal' ? PROMPTS.personal : PROMPTS.default;
   const field =
     'w-full rounded border border-[var(--color-line)] bg-[var(--color-wall)] px-2 py-1 text-sm';
   return (
@@ -38,11 +61,11 @@ export function ItemFields({
         placeholder="name"
         onChange={(e) => onChange({ name: e.target.value })}
       />
-      {domain === 'digital' && (
+      {(domain === 'digital' || domain === 'personal') && (
         <input
           className={field}
           value={item.url ?? ''}
-          placeholder="url (e.g. https://stripe.com)"
+          placeholder={prompts.url}
           onChange={(e) => onChange({ url: e.target.value })}
         />
       )}
@@ -71,13 +94,13 @@ export function ItemFields({
         <input
           className={field}
           value={item.brand}
-          placeholder="brand"
+          placeholder={prompts.brand}
           onChange={(e) => onChange({ brand: e.target.value })}
         />
         <input
           className={field}
           value={item.creator}
-          placeholder="creator"
+          placeholder={prompts.creator}
           onChange={(e) => onChange({ creator: e.target.value })}
         />
       </div>
@@ -85,14 +108,14 @@ export function ItemFields({
         className={field}
         rows={2}
         value={item.description}
-        placeholder="why it's great"
+        placeholder={prompts.description}
         onChange={(e) => onChange({ description: e.target.value })}
       />
       <textarea
         className={field}
         rows={2}
         value={item.definingFact}
-        placeholder="defining fact"
+        placeholder={prompts.definingFact}
         onChange={(e) => onChange({ definingFact: e.target.value })}
       />
     </div>

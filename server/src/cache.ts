@@ -1,11 +1,10 @@
 // A small in-process cache in front of Supabase.
 //
 // Why it exists: every screen in the app reads the same handful of rows over and
-// over — the shelf re-lists datasets, the dataset view and the filters subpage both
-// fetch the same dataset, and a ranking session reads the same results row once per
-// vote. Without a cache each of those is a fresh Supabase round trip, which costs
-// both latency (the slow first paint) and egress quota. With it, a warm server
-// answers most GETs without touching the database at all.
+// over — the shelf re-lists datasets, and the dataset view and the filters subpage
+// both fetch the same dataset. Without a cache each of those is a fresh Supabase
+// round trip, which costs both latency (the slow first paint) and egress quota. With
+// it, a warm server answers most GETs without touching the database at all.
 //
 // Deliberately not an LRU or an external cache: the working set is a few dozen small
 // rows, one server process serves them, and writes go through this module's own
@@ -78,8 +77,4 @@ export const keys = {
   datasetListPrefix: 'datasets:list:',
   dataset: (id: string) => `datasets:one:${id}`,
   worldMap: (domain: string) => `worldmap:${domain}`,
-  rankersPrefix: (datasetId: string) => `rankings:${datasetId}:`,
-  rankerList: (datasetId: string) => `rankings:${datasetId}:list`,
-  ranking: (datasetId: string, rankerKey: string) => `rankings:${datasetId}:one:${rankerKey}`,
-  allRankings: (datasetId: string) => `rankings:${datasetId}:all`,
 };

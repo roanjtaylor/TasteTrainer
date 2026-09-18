@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
-import { EVERYONE, slugifyTopic } from '../../../shared/types';
+import { slugifyTopic } from '../../../shared/types';
 import type {
   CoverageGap,
   Dataset,
@@ -8,34 +8,24 @@ import type {
   EraGroup,
   Item,
   Job,
-  LeaderboardRow,
   ProposedItem,
-  RankerSummary,
   Subtopic,
 } from '../../../shared/types';
-import { api, type Progress, type ScopeQuery } from '../lib/api';
-import {
-  saveDataset,
-  useDataset,
-  useLeaderboard,
-  useRankers,
-  vote as castVote,
-} from '../lib/data';
-import { useRanker } from '../lib/ranker';
+import { api } from '../lib/api';
+import { saveDataset, useDataset } from '../lib/data';
 import { dismissTask, finishTask, runTracked, startTask, updateTask } from '../lib/tasks';
 import { currentJob, groupKey, jobsFor, refreshJobs, useJobs } from '../lib/jobs';
-import { eraOf, eraGroupsOf, decadesInRange, itemsInGroup } from '../lib/format';
+import { eraGroupsOf, itemsInGroup } from '../lib/format';
 import { physicalImageQuery } from '../lib/image';
-import { ItemCard, Chip } from '../components/ItemCard';
+import { IMAGE_ACCEPT, nameFromFile, uploadImage } from '../lib/files';
+import { ItemCard } from '../components/ItemCard';
 import { ImagePicker } from '../components/ImagePicker';
-import { NameEntry, RankerBadge } from '../components/NameEntry';
 import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
 import { BackToTop } from '../components/BackToTop';
+import { PersonalFieldEditor } from '../components/PersonalFieldEditor';
 import { ReviewCard } from './Curate';
 import { NavActions } from '../lib/navActions';
-
-type Mode = 'browse' | 'rank' | 'leaderboard';
 
 // The single active filter — one axis at a time (a subtopic OR an era-group), or none.
 // Derived from the URL so it's shareable and back-button friendly.
@@ -44,15 +34,13 @@ type ActiveFilter =
   | { kind: 'era'; group: EraGroup }
   | null;
 
-// The Dataset view (6-ui.md): browse the items, pick a scope, run the 1v1
-// forced choice, and see the leaderboard — all one screen.
+// The Dataset view (6-ui.md): browse the items and pick a scope — all one screen.
 export function DatasetView() {
   // /physical/ships — the world and the field, both readable in the address bar.
   const { domain = '', slug = '' } = useParams();
   // Cached read: a dataset seen before paints immediately and corrects itself in the
   // background, so returning to it costs nothing (lib/store.ts).
   const { data: ds, error: loadError, set: setDs } = useDataset(slug || null);
-  const [mode, setMode] = useState<Mode>('browse');
   // The shared job cache (lib/jobs.ts): read here so opening a dataset shows whatever
   // review or expansion is current for it — running or finished — without a detour
   // through the notification column's button (see the auto-resume effect below).
@@ -174,7 +162,6 @@ export function DatasetView() {
         setGapError(`Resumed job failed: ${job.error ?? 'unknown error'}`);
         return;
       }
-      setMode('browse');
       if (job.kind === 'gaps') {
         const result = job.result as { gaps: CoverageGap[]; suggestedCount: number };
         setGaps(result.gaps ?? []);
@@ -197,7 +184,6 @@ export function DatasetView() {
 
   async function whatsMissing() {
     if (!ds) return;
-    setMode('browse');
     setLoadingGaps(true);
     setGaps(null);
     setGapError('');
@@ -283,13 +269,6 @@ export function DatasetView() {
     return null;
   }, [searchParams, groups]);
 
-  const scope: ScopeQuery = useMemo(() => {
-    if (!filter) return {};
-    if (filter.kind === 'subtopic') return { subtopics: [filter.name] };
-    // An era-group maps to the decade strings the backend scope filters on.
-    return { eras: decadesInRange(filter.group.start, filter.group.end) };
-  }, [filter]);
-
   const pool = useMemo(() => {
     if (!ds) return [];
     if (!filter) {
@@ -338,24 +317,18 @@ export function DatasetView() {
         >
           Filters
         </Link>
-        <select
-          value={mode}
-          onChange={(e) => setMode(e.target.value as Mode)}
-          className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm capitalize text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
-        >
-          {(['browse', 'rank', 'leaderboard'] as Mode[]).map((m) => (
-            <option key={m} value={m} className="capitalize">
-              {m}
-            </option>
-          ))}
-        </select>
-        <button
-          onClick={whatsMissing}
-          disabled={loadingGaps || !ds}
-          className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)] disabled:opacity-40"
-        >
-          {loadingGaps ? 'Sweeping…' : 'Review'}
-        </button>
+        {/* "What's missing?" asks Claude to audit a field against the world's record of
+            it. A personal collection has no such record to be short of — what belongs
+            in it is whatever you say does (9-personal-and-auth.md). */}
+        {ds.domain !== 'personal' && (
+          <button
+            onClick={whatsMissing}
+            disabled={loadingGaps || !ds}
+            className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)] disabled:opacity-40"
+          >
+            {loadingGaps ? 'Sweeping…' : 'Review'}
+          </button>
+        )}
       </NavActions>
 
       {/* Active-filter read: a pill with × to clear. The count it used to sit beside now
@@ -375,31 +348,28 @@ export function DatasetView() {
         </div>
       )}
 
-      {mode === 'browse' && (
-        <Browse
-          ds={ds}
-          pool={pool}
-          gaps={gaps}
-          gapSuggestedCount={gapSuggestedCount}
-          gapError={gapError}
-          resumeJob={resumeJob}
-          resumingJob={resumingJob}
-          trackJob={trackJob}
-          onAccepted={() => {
-            // The review is consumed once its additions are in: drop the sweep's row
-            // too, so the dataset's notification card clears rather than falling back
-            // to a stale "Review · View →" for gaps that have just been filled.
-            if (gapsJobIdRef.current) {
-              api.deleteJob(gapsJobIdRef.current).catch(() => {});
-              gapsJobIdRef.current = null;
-              refreshJobs();
-            }
-          }}
-          onChanged={setDs}
-        />
-      )}
-      {mode === 'rank' && <Rank datasetId={ds.id} scope={scope} poolSize={pool.length} />}
-      {mode === 'leaderboard' && <Leaderboard datasetId={ds.id} scope={scope} />}
+      <Browse
+        ds={ds}
+        pool={pool}
+        defaultSubtopic={filter?.kind === 'subtopic' ? filter.name : ''}
+        gaps={gaps}
+        gapSuggestedCount={gapSuggestedCount}
+        gapError={gapError}
+        resumeJob={resumeJob}
+        resumingJob={resumingJob}
+        trackJob={trackJob}
+        onAccepted={() => {
+          // The review is consumed once its additions are in: drop the sweep's row
+          // too, so the dataset's notification card clears rather than falling back
+          // to a stale "Review · View →" for gaps that have just been filled.
+          if (gapsJobIdRef.current) {
+            api.deleteJob(gapsJobIdRef.current).catch(() => {});
+            gapsJobIdRef.current = null;
+            refreshJobs();
+          }
+        }}
+        onChanged={setDs}
+      />
 
       <BackToTop />
     </div>
@@ -410,6 +380,7 @@ export function DatasetView() {
 function Browse({
   ds,
   pool,
+  defaultSubtopic,
   gaps,
   gapSuggestedCount,
   gapError,
@@ -421,6 +392,9 @@ function Browse({
 }: {
   ds: Dataset;
   pool: Item[];
+  /** The subtopic filter in force, if any — what a newly added item is filed under, so
+   *  adding while looking at "Novels" doesn't make the new book vanish from view. */
+  defaultSubtopic: string;
   gaps: CoverageGap[] | null;
   gapSuggestedCount: number;
   gapError: string;
@@ -436,17 +410,100 @@ function Browse({
   const [picker, setPicker] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // The personal world is built by hand (9-personal-and-auth.md), so its browse view
+  // doubles as the builder: add one item, drop in a batch of files, delete, and edit
+  // the dataset's own shape. None of it shows in the researched worlds.
+  const personal = ds.domain === 'personal';
+  const [editingField, setEditingField] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  // A draft from "+ Add item" isn't in the dataset until it's saved — so it isn't in
+  // `pool` either, and is drawn ahead of the grid instead (see `isNew` below).
+  const isNew = !!editing && !ds.items.some((i) => i.id === editing.id);
+
+  function blankItem(change: Partial<Item> = {}): Item {
+    return {
+      // Minted here rather than left to the server (which would, routes/datasets.ts):
+      // the editor finds its item by id, and a draft needs one before its first save.
+      id: crypto.randomUUID(),
+      name: '',
+      description: '',
+      image: '',
+      year: null,
+      brand: '',
+      creator: '',
+      definingFact: '',
+      subtopic: defaultSubtopic,
+      createdAt: new Date().toISOString(),
+      ...change,
+    };
+  }
+
   async function saveEdit() {
     if (!editing) return;
     setSaving(true);
     try {
       const updated = await saveDataset(ds.id, {
-        items: ds.items.map((i) => (i.id === editing.id ? editing : i)),
+        items: isNew
+          ? [...ds.items, editing]
+          : ds.items.map((i) => (i.id === editing.id ? editing : i)),
       });
       onChanged(updated);
       setEditing(null);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function deleteEditing() {
+    if (!editing) return;
+    setSaving(true);
+    try {
+      // The server removes the item's uploaded file along with it (routes/datasets.ts).
+      const updated = await saveDataset(ds.id, {
+        items: ds.items.filter((i) => i.id !== editing.id),
+      });
+      onChanged(updated);
+      setEditing(null);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /**
+   * Drop in a batch of files: each becomes an item named after its file, saved in one
+   * write. Everything else about it — year, who made it, why it matters — is filled in
+   * afterwards by clicking the card, because making you complete a form per photo
+   * before you can see any of them is how a 200-photo import never gets finished.
+   */
+  async function uploadFiles(files: File[]) {
+    if (!files.length) return;
+    setUploadError('');
+    try {
+      const updated = await runTracked(
+        ds.topic,
+        async (onProgress) => {
+          const added: Item[] = [];
+          const failed: string[] = [];
+          // One at a time: a phone-sized photo is several megabytes, and a batch sent
+          // in parallel mostly just contends with itself for the same uplink.
+          for (const [i, file] of files.entries()) {
+            onProgress(`Uploading ${i + 1} of ${files.length} — ${file.name}`);
+            try {
+              added.push(blankItem({ name: nameFromFile(file), image: await uploadImage(file) }));
+            } catch (e: any) {
+              failed.push(e?.message ?? file.name);
+            }
+          }
+          if (failed.length) setUploadError(`Couldn’t upload: ${failed.join('; ')}`);
+          if (!added.length) return null;
+          onProgress(`Saving ${added.length} item${added.length === 1 ? '' : 's'}…`);
+          return saveDataset(ds.id, { items: [...ds.items, ...added] });
+        },
+        { group: groupKey(ds.domain, ds.topic), stage: 'Upload' },
+      );
+      if (updated) onChanged(updated);
+    } catch (e: any) {
+      setUploadError(e?.message ?? 'Upload failed');
     }
   }
 
@@ -472,10 +529,63 @@ function Browse({
         onChanged={onChanged}
       />
 
-      {pool.length === 0 ? (
-        <p className="text-[var(--color-muted)]">No items in this scope.</p>
+      {personal && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setEditing(blankItem())}
+            disabled={!!editing}
+            className="rounded-full bg-[var(--color-ink)] px-4 py-1.5 text-sm text-[var(--color-wall)] disabled:opacity-40"
+          >
+            + Add item
+          </button>
+          <label className="cursor-pointer rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm hover:bg-[var(--color-wall-soft)]">
+            Upload files
+            <input
+              type="file"
+              multiple
+              accept={IMAGE_ACCEPT}
+              className="hidden"
+              onChange={(e) => {
+                uploadFiles([...(e.target.files ?? [])]);
+                // Reset, or choosing the same file twice in a row fires no change event.
+                e.target.value = '';
+              }}
+            />
+          </label>
+          <button
+            onClick={() => setEditingField((v) => !v)}
+            className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
+          >
+            Edit dataset
+          </button>
+          {uploadError && <span className="text-sm text-[var(--color-accent)]">{uploadError}</span>}
+        </div>
+      )}
+      {personal && editingField && (
+        <PersonalFieldEditor ds={ds} onChanged={onChanged} onClose={() => setEditingField(false)} />
+      )}
+
+      {pool.length === 0 && !isNew ? (
+        <p className="text-[var(--color-muted)]">
+          {personal && ds.items.length === 0
+            ? 'Nothing here yet — add an item, or upload a batch of files to start the collection.'
+            : 'No items in this scope.'}
+        </p>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {isNew && editing && (
+            <ItemEditorCard
+              key={editing.id}
+              draft={editing}
+              subtopics={ds.subtopics}
+              domain={ds.domain}
+              saving={saving}
+              onChange={(c) => setEditing((e) => (e ? { ...e, ...c } : e))}
+              onSwapImage={() => setPicker(true)}
+              onSave={saveEdit}
+              onCancel={() => setEditing(null)}
+            />
+          )}
           {pool.map((item) =>
             editing?.id === item.id ? (
               <ItemEditorCard
@@ -488,6 +598,7 @@ function Browse({
                 onSwapImage={() => setPicker(true)}
                 onSave={saveEdit}
                 onCancel={() => setEditing(null)}
+                onDelete={personal ? deleteEditing : undefined}
               />
             ) : (
               <div key={item.id} className="relative">
@@ -514,6 +625,7 @@ function Browse({
                 }
               : { kind: 'search', query: physicalImageQuery(editing) }
           }
+          allowUpload={personal}
           onPick={(url) => {
             // Hand-picked, so the recorded capture no longer describes this image.
             setEditing((e) => (e ? { ...e, image: url, capture: undefined } : e));
@@ -537,6 +649,7 @@ function ItemEditorCard({
   onSwapImage,
   onSave,
   onCancel,
+  onDelete,
 }: {
   draft: Item;
   subtopics: Subtopic[];
@@ -546,6 +659,8 @@ function ItemEditorCard({
   onSwapImage: () => void;
   onSave: () => void;
   onCancel: () => void;
+  /** Personal world only, and only for an item that's already saved. */
+  onDelete?: () => void;
 }) {
   return (
     <div className="space-y-2 rounded-xl border border-[var(--color-accent)] bg-[var(--color-card)] p-3">
@@ -574,6 +689,15 @@ function ItemEditorCard({
         >
           Cancel
         </button>
+        {onDelete && (
+          <button
+            onClick={onDelete}
+            disabled={saving}
+            className="ml-auto text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] disabled:opacity-40"
+          >
+            Delete
+          </button>
+        )}
       </div>
     </div>
   );
@@ -932,296 +1056,4 @@ function CorrectionLine({ duplicates, unfiled }: { duplicates: number; unfiled: 
     parts.push(`${unfiled} need${unfiled === 1 ? 's' : ''} a subtopic before adding`);
   }
   return <p className="mt-0.5 text-sm text-[var(--color-muted)]">{parts.join(' · ')}</p>;
-}
-
-// ---- Rank (1v1 forced choice) ----
-// Every choice is filed under a name (lib/ranker.tsx), so this asks for one before
-// letting anyone start — otherwise the votes would have nowhere to go.
-function Rank({
-  datasetId,
-  scope,
-  poolSize,
-}: {
-  datasetId: string;
-  scope: ScopeQuery;
-  poolSize: number;
-}) {
-  const { ranker } = useRanker();
-  const [pair, setPair] = useState<{ a: Item; b: Item } | null>(null);
-  const [progress, setProgress] = useState<Progress | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  const scopeKey = JSON.stringify(scope);
-
-  const next = useCallback(async () => {
-    if (!ranker) return;
-    setLoading(true);
-    try {
-      const res = await api.getPair(datasetId, ranker, scope);
-      setPair(res.pair);
-      setProgress(res.progress);
-      setError('');
-    } catch (e: any) {
-      setError(e?.message ?? 'Could not load the next pair');
-    } finally {
-      setLoading(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [datasetId, scopeKey, ranker?.key]);
-
-  useEffect(() => {
-    next();
-  }, [next]);
-
-  const choose = useCallback(
-    async (winner: Item, loser: Item) => {
-      if (!ranker || loading) return;
-      setLoading(true);
-      try {
-        await castVote(datasetId, ranker, winner.id, loser.id);
-      } catch (e: any) {
-        setError(e?.message ?? 'Could not record that choice');
-        setLoading(false);
-        return;
-      }
-      next();
-    },
-    [datasetId, next, ranker, loading],
-  );
-
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (!pair) return;
-      if (e.key === 'ArrowLeft') choose(pair.a, pair.b);
-      if (e.key === 'ArrowRight') choose(pair.b, pair.a);
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [pair, choose]);
-
-  if (poolSize < 2) {
-    return <p className="text-[var(--color-muted)]">Need at least 2 items in scope to rank.</p>;
-  }
-
-  if (!ranker) return <NameEntry />;
-
-  return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <RankerBadge />
-        {error && <span className="text-sm text-[var(--color-accent)]">{error}</span>}
-      </div>
-
-      {progress && (
-        <div>
-          <div className="flex justify-between text-sm text-[var(--color-muted)]">
-            <span>
-              {progress.complete ? 'Ranking ready — keep going if you like' : 'Which is better?'}
-            </span>
-            <span>
-              {progress.done} / {progress.target}
-            </span>
-          </div>
-          <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--color-wall-soft)]">
-            <div
-              className="h-full bg-[var(--color-accent)] transition-all"
-              style={{ width: `${Math.min(100, (progress.done / progress.target) * 100)}%` }}
-            />
-          </div>
-        </div>
-      )}
-
-      {pair && (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <Contender item={pair.a} hint="←" onClick={() => choose(pair.a, pair.b)} dim={loading} />
-          <Contender item={pair.b} hint="→" onClick={() => choose(pair.b, pair.a)} dim={loading} />
-        </div>
-      )}
-      <p className="text-center text-xs text-[var(--color-muted)]">
-        Click the one you prefer, or use ← / →
-      </p>
-    </div>
-  );
-}
-
-function Contender({
-  item,
-  hint,
-  onClick,
-  dim,
-}: {
-  item: Item;
-  hint: string;
-  onClick: () => void;
-  dim: boolean;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={dim}
-      className="group overflow-hidden rounded-2xl border border-[var(--color-line)] bg-[var(--color-card)] text-left transition-transform hover:-translate-y-0.5 hover:border-[var(--color-accent)]"
-    >
-      <div className="aspect-[4/3] w-full bg-[var(--color-wall-soft)]">
-        <Photo src={item.image} alt={item.name} />
-      </div>
-      <div className="p-4">
-        <div className="flex items-baseline justify-between">
-          <h3 className="serif text-xl">{item.name}</h3>
-          <span className="text-[var(--color-muted)]">{hint}</span>
-        </div>
-        <p className="text-sm text-[var(--color-muted)]">
-          {[item.brand, item.year].filter(Boolean).join(' · ')}
-        </p>
-        <p className="mt-1 text-sm">{item.description}</p>
-      </div>
-    </button>
-  );
-}
-
-// ---- Leaderboard ----
-//
-// One board per person, plus a pooled one. The name tabs are the whole point: taste
-// is personal, so a single merged ranking would flatten exactly the disagreement
-// that's interesting to look at. "Everyone" still exists because the consensus is
-// worth seeing — it just isn't the only view any more.
-function Leaderboard({ datasetId, scope }: { datasetId: string; scope: ScopeQuery }) {
-  const { ranker } = useRanker();
-  const { data: rankers } = useRankers(datasetId);
-  // Default to your own board when you have one — that's the one you came to see.
-  const [selected, setSelected] = useState<string | null>(null);
-
-  const known = rankers ?? [];
-  const hasOwnBoard = !!ranker && known.some((r) => r.key === ranker.key);
-  const active = selected ?? (hasOwnBoard ? (ranker as { key: string }).key : EVERYONE);
-
-  const { data, loading } = useLeaderboard(datasetId, active, scope);
-  const rows = data?.leaderboard ?? [];
-  const pooled = active === EVERYONE;
-
-  return (
-    <div className="space-y-4">
-      <RankerTabs
-        rankers={known}
-        active={active}
-        youKey={ranker?.key}
-        onSelect={setSelected}
-        totalPeople={known.length}
-      />
-
-      {loading ? (
-        <p className="text-[var(--color-muted)]">Loading…</p>
-      ) : rows.length === 0 ? (
-        <p className="text-[var(--color-muted)]">No items in this scope.</p>
-      ) : (
-        <>
-          {pooled && known.length === 0 && (
-            <p className="text-sm text-[var(--color-muted)]">
-              Nobody has ranked this field yet — open <strong>Rank</strong>, enter a name, and this
-              board fills in.
-            </p>
-          )}
-          <ol className="space-y-2">
-            {rows.map((row, i) => (
-              <BoardRow key={row.item.id} row={row} place={i + 1} pooled={pooled} />
-            ))}
-          </ol>
-        </>
-      )}
-    </div>
-  );
-}
-
-/** The row of name plates: pooled view first, then everyone who has ranked this field. */
-function RankerTabs({
-  rankers,
-  active,
-  youKey,
-  onSelect,
-  totalPeople,
-}: {
-  rankers: RankerSummary[];
-  active: string;
-  youKey?: string;
-  onSelect: (key: string) => void;
-  totalPeople: number;
-}) {
-  const tab = (key: string, label: string, sub: string, isYou = false) => (
-    <button
-      key={key}
-      onClick={() => onSelect(key)}
-      className={`shrink-0 rounded-xl border px-4 py-2 text-left transition-colors ${
-        active === key
-          ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-white'
-          : 'border-[var(--color-line)] bg-[var(--color-card)] hover:border-[var(--color-accent)]'
-      }`}
-    >
-      <span className="block text-sm font-medium">
-        {label}
-        {isYou && <span className="ml-1.5 text-xs opacity-70">(you)</span>}
-      </span>
-      <span className={`block text-xs ${active === key ? 'text-white/75' : 'text-[var(--color-muted)]'}`}>
-        {sub}
-      </span>
-    </button>
-  );
-
-  return (
-    <div className="flex gap-2 overflow-x-auto pb-1">
-      {tab(
-        EVERYONE,
-        'Everyone',
-        totalPeople === 1 ? '1 person' : `${totalPeople} people`,
-      )}
-      {rankers.map((r) =>
-        tab(
-          r.key,
-          r.name,
-          `${r.comparisons} ${r.comparisons === 1 ? 'choice' : 'choices'}`,
-          r.key === youKey,
-        ),
-      )}
-    </div>
-  );
-}
-
-/** Top three get the arcade treatment; everything below is a plain numbered row. */
-const PODIUM = ['🥇', '🥈', '🥉'];
-
-function BoardRow({ row, place, pooled }: { row: LeaderboardRow; place: number; pooled: boolean }) {
-  const medal = PODIUM[place - 1];
-  const { entry, item } = row;
-  const unjudged = entry.games === 0;
-
-  return (
-    <li
-      className={`flex items-center gap-4 rounded-xl border bg-[var(--color-card)] p-3 ${
-        medal ? 'border-[var(--color-accent)]/50' : 'border-[var(--color-line)]'
-      } ${unjudged ? 'opacity-60' : ''}`}
-    >
-      <span className="serif w-8 shrink-0 text-center text-2xl text-[var(--color-muted)]">
-        {medal ?? place}
-      </span>
-      <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-[var(--color-wall-soft)]">
-        <Photo src={item.image} alt={item.name} />
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="truncate font-medium">{item.name}</p>
-        <p className="truncate text-sm text-[var(--color-muted)]">
-          {[item.brand, item.year].filter(Boolean).join(' · ')}
-        </p>
-      </div>
-      {/* On the pooled board, how many people actually judged this — the honest read
-          on whether a high placing is a consensus or one person's single opinion. */}
-      {pooled && !unjudged && (
-        <Chip>
-          {row.rankerCount} {row.rankerCount === 1 ? 'voter' : 'voters'}
-        </Chip>
-      )}
-      <Chip>{eraOf(item.year)}</Chip>
-      <span className="serif w-16 shrink-0 text-right text-lg">
-        {unjudged ? '—' : entry.rating}
-      </span>
-    </li>
-  );
 }

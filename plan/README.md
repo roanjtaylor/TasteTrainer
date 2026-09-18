@@ -19,10 +19,11 @@ Numbered **1 → 6 by increasing concreteness** — from the abstract skeleton, 
 | [2-data.md](2-data.md) | What we store — the shape of a *dataset* and an *item* |
 | [3-curation.md](3-curation.md) | How a dataset gets *made* with AI — topic → research → review → save |
 | [4-images.md](4-images.md) | How each item gets a *real image* — Wikimedia + an alternative picker |
-| [5-comparison.md](5-comparison.md) | How taste gets *trained* — 1v1 forced choice → a ranking |
+| [5-comparison.md](5-comparison.md) | How taste gets *trained* — 1v1 forced choice → a ranking *(removed 2026-09-18 — see Update below; browsing carries the app now)* |
 | [6-ui.md](6-ui.md) | How you *use* it — the screen map, design language, and styling tooling that tie it all together |
 | [7-software-design.md](7-software-design.md) | The deferred second domain — training taste in the *digital world* (websites, apps, product UI) alongside the *physical world* |
 | [8-field-map.md](8-field-map.md) | The level *above* a dataset — auditing whether your set of fields is a good map of the world, finding the fields you don't know you're missing, and drawing the world as an actual 2D map |
+| [9-personal-and-auth.md](9-personal-and-auth.md) | The subjective third world — hand-built datasets of what's *yours* (books, films, music, memories) from your own private files — and the sign-in wall in front of it *(narrowed to just that world 2026-09-18 — see Update below)* |
 
 **UI lives in two places by design:** the *coherent whole* (screen map, visual language, styling) is owned by `6-ui.md`; *feature-specific interactions* stay in their feature doc (`3`–`5`), each flagged with a **UI →** pointer at the top. `2-data.md` has no UI of its own (it's the model the screens render).
 
@@ -58,3 +59,9 @@ changes, plus a docs realignment.
   meant to be regenerable into the software, so a stale one is worse than a missing one.
 
 - **Rankings are per-person.** `5-comparison.md`'s one-ranking-per-dataset model became one ranking per *(dataset, name)*: you type a name arcade-style before ranking — no account — and the leaderboard gains a tab per person plus a pooled "Everyone" view. Storage moved from a single `taste_comparison_results` blob to a `taste_rankings` row per person, so a vote's cost doesn't grow with the number of people ranking.
+
+**Update (2026-09-17):** **[9-personal-and-auth.md](9-personal-and-auth.md)** — a third, *subjective* world (`personal`: hand-built datasets of your own books, films, music and memories, from your own uploaded files) and a **sign-in wall** in front of the whole app. Amends `2-data.md` (`Domain` gains `personal`; same `Dataset`/`Item` shape), `4-images.md` (a second exception to link-don't-store: uploads live in a *private* bucket and are served as expiring signed URLs), `1-setup.md` (Supabase Auth; `ALLOWED_EMAILS` on the server, `VITE_SUPABASE_KEY` on the web) and `5-comparison.md` (the name plate stays, now *inside* the wall). Needs migration `005_personal_world.sql`.
+
+**Update (2026-09-18):** two changes, both narrowing scope rather than adding to it.
+- **`5-comparison.md`'s whole feature — 1v1 ranking, Elo, the leaderboard, the arcade name plate — is removed.** Browsing a dataset is the app's core value; the ranking half went unused and its own upkeep (per-person storage, a pooled "everyone" board) wasn't earning its place. `EloEntry`, `Ranker`, `ResultsFile`, `RankerSummary` and `LeaderboardRow` are gone from `2-data.md`'s shape; `taste_rankings` is unused but left in place in Supabase.
+- **The sign-in wall now covers only the personal world**, not the whole app (amends `9-personal-and-auth.md`). The physical and digital worlds are researched, public-domain knowledge — never sensitive — so they're open; only personal uploads (private files, family photos) are worth the friction of an account. The server enforces this per-request (`server/src/auth.ts` — `attachUser` decodes a token if one is sent, `requireAuth` is mounted only where personal content is at stake), and the client gates only routes under `/personal` (`PersonalGate`, `web/src/lib/auth.tsx`).

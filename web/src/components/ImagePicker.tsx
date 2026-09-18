@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
+import { IMAGE_ACCEPT, uploadImage } from '../lib/files';
 import type { ImageCandidate, ImageKind } from '../../../shared/types';
 import { sourceLabel } from './CaptureBadge';
 
@@ -27,10 +28,15 @@ interface ScreenshotTarget {
 //   exact site, this exact year"). Same grid/manual-paste UI either way.
 export function ImagePicker({
   target,
+  allowUpload = false,
   onPick,
   onClose,
 }: {
   target: SearchTarget | ScreenshotTarget;
+  /** Personal world only: offer "upload a file" beside search and paste. The file goes
+   *  to the private bucket (lib/files.ts), so it's withheld from the researched worlds,
+   *  whose images are public web addresses by design (2-data.md). */
+  allowUpload?: boolean;
   onPick: (url: string) => void;
   onClose: () => void;
 }) {
@@ -43,6 +49,20 @@ export function ImagePicker({
   const [images, setImages] = useState<ImageCandidate[]>([]);
   const [loading, setLoading] = useState(false);
   const [manual, setManual] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+
+  async function upload(file: File | undefined) {
+    if (!file) return;
+    setUploading(true);
+    setUploadError('');
+    try {
+      onPick(await uploadImage(file));
+    } catch (e: any) {
+      setUploadError(e?.message ?? 'Upload failed');
+      setUploading(false);
+    }
+  }
 
   const bare = (urls: string[]): ImageCandidate[] =>
     urls.map((url) => ({ url, source: 'ddg', confidence: 'medium' }));
@@ -188,7 +208,25 @@ export function ImagePicker({
           >
             Use URL
           </button>
+          {allowUpload && (
+            // A label, not a button: clicking it opens the hidden input's file dialog
+            // natively, with no ref or click() forwarding.
+            <label
+              className={`cursor-pointer rounded-lg bg-[var(--color-ink)] px-4 py-2 text-sm text-[var(--color-wall)] ${
+                uploading ? 'pointer-events-none opacity-40' : ''
+              }`}
+            >
+              {uploading ? 'Uploading…' : 'Upload a file'}
+              <input
+                type="file"
+                accept={IMAGE_ACCEPT}
+                className="hidden"
+                onChange={(e) => upload(e.target.files?.[0])}
+              />
+            </label>
+          )}
         </div>
+        {uploadError && <p className="mt-2 text-sm text-[var(--color-accent)]">{uploadError}</p>}
       </div>
     </div>
   );

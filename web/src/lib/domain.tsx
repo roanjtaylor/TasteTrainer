@@ -1,5 +1,5 @@
 import { useLocation } from 'react-router-dom';
-import type { Domain } from '../../../shared/types';
+import { DOMAINS, type Domain } from '../../../shared/types';
 
 // The active domain (7-software-design.md) is the first segment of the URL:
 // /physical, /physical/ships, /digital/new. Previously it was in-memory React state
@@ -8,12 +8,10 @@ import type { Domain } from '../../../shared/types';
 // refresh or a back button. The gate at "/" is still the way in, just no longer the
 // only thing that knows which world you're in.
 
-const DOMAINS: readonly string[] = ['physical', 'digital'];
-
 /** The world a path is in, or null for the landing gate / anything unrecognised. */
 export function domainOf(pathname: string): Domain | null {
   const first = pathname.split('/')[1] ?? '';
-  return DOMAINS.includes(first) ? (first as Domain) : null;
+  return (DOMAINS as readonly string[]).includes(first) ? (first as Domain) : null;
 }
 
 /** The world the current route is in. null means "not in a world" — pages redirect

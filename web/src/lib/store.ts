@@ -129,6 +129,12 @@ export function drop(key: string, { prefix = false } = {}): void {
   }
 }
 
+/** Forget everything — on sign-out (lib/auth.tsx), so the next person at this
+ *  browser isn't painted the last one's datasets out of localStorage. */
+export function clearAll(): void {
+  drop('', { prefix: true });
+}
+
 /**
  * Fetch through the cache. Concurrent callers for the same key share one request,
  * which is what keeps React's StrictMode double-effects (and two components wanting
@@ -273,7 +279,4 @@ export const cacheKeys = {
   datasetListPrefix: 'datasets:',
   dataset: (id: string) => `dataset:${id}`,
   worldMap: (domain: string) => `worldmap:${domain}`,
-  rankers: (id: string) => `rankers:${id}`,
-  leaderboard: (id: string, ranker: string, scope: string) => `board:${id}:${ranker}:${scope}`,
-  leaderboardPrefix: (id: string) => `board:${id}:`,
 };

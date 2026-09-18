@@ -22,13 +22,14 @@ import './env.ts';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import compression from 'compression';
-import { PORT } from './config.ts';
+import { ALLOWED_EMAILS, PORT } from './config.ts';
+import { attachUser, requireAuth } from './auth.ts';
 import { datasetsRouter } from './routes/datasets.ts';
 import { curationRouter } from './routes/curation.ts';
 import { jobsRouter } from './routes/jobs.ts';
 import { imagesRouter } from './routes/images.ts';
-import { comparisonRouter } from './routes/comparison.ts';
 import { mapRouter } from './routes/map.ts';
+import { filesRouter } from './routes/files.ts';
 
 const app = express();
 
@@ -61,14 +62,21 @@ app.use(express.json({ limit: '5mb' }));
 app.set('etag', 'strong');
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
+// Decodes a Bearer token into `req.user` when one is sent, but never rejects a
+// request outright — only the personal world is behind a real wall (auth.ts,
+// 9-personal-and-auth.md). Registered after the health check and before every
+// router, so `req.user` is available wherever a route needs it.
+app.use('/api', attachUser);
 app.use('/api/datasets', datasetsRouter);
 // More specific prefix first — Express matches middleware in registration order, and
 // /api/curation would otherwise swallow every /api/curation/jobs request itself.
 app.use('/api/curation/jobs', jobsRouter);
 app.use('/api/curation', curationRouter);
 app.use('/api/images', imagesRouter);
-app.use('/api/comparison', comparisonRouter);
 app.use('/api/map', mapRouter);
+// Uploads only ever serve the personal world, so this is the one router behind the
+// wall outright rather than checked per-dataset.
+app.use('/api/files', requireAuth, filesRouter);
 
 // Turn anything a route throws into JSON the client can display, not a bare 500.
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -83,6 +91,12 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 const server = app.listen(PORT, () => {
   // No "[server]" prefix — concurrently already labels each line.
   console.log(`listening on http://localhost:${PORT}`);
+  if (!ALLOWED_EMAILS.length) {
+    console.warn(
+      'ALLOWED_EMAILS is not set — ANY account in this Supabase project can sign in. ' +
+        'Set it to your email (comma-separated for several) to make this app yours alone.',
+    );
+  }
 });
 
 server.on('error', (err: NodeJS.ErrnoException) => {

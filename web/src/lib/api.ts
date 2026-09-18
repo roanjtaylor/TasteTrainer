@@ -11,21 +11,33 @@ import type {
   ImageKind,
   Item,
   Job,
-  LeaderboardRow,
-  Ranker,
-  RankerSummary,
   Subtopic,
   ProposedItem,
   WorldMap,
 } from '../../../shared/types';
+import { accessToken } from './supabase';
 
 // In dev the Vite proxy forwards /api to localhost:5174 (vite.config.ts).
 // In production VITE_API_BASE_URL points at the deployed backend on Render.
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 
+/**
+ * Every request carries the signed-in session's access token — the server refuses
+ * anything under /api without one (server/src/auth.ts). Read per request rather than
+ * held in a variable: supabase-js refreshes the token in the background roughly
+ * hourly, and a long-lived tab would otherwise go on sending the expired one.
+ */
+async function authHeaders(): Promise<Record<string, string>> {
+  const token = await accessToken();
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
 async function http<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(API_BASE + url, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders(),
     ...options,
   });
   if (!res.ok) {
@@ -57,7 +69,7 @@ export type OnProgress = (line: string, jobId?: string) => void;
 async function streamSSE<T>(url: string, body: unknown, onProgress?: OnProgress): Promise<T> {
   const res = await fetch(API_BASE + url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders(),
     body: JSON.stringify(body),
   });
   // Pre-stream failures (e.g. validation) come back as a normal JSON error, not SSE.
@@ -271,27 +283,16 @@ export const api = {
     return http<{ candidates: ImageCandidate[] }>(`/api/images/candidates?${p}`);
   },
 
-  // Comparison — every call is scoped to a ranker (a typed name), so each person
-  // builds their own ranking of the same dataset. `getLeaderboard` also accepts the
-  // pseudo-ranker "everyone" for the pooled view.
-  listRankers: (id: string) =>
-    http<{ rankers: RankerSummary[] }>(`/api/comparison/${id}/rankers`),
-  getPair: (id: string, ranker: Ranker, scope: ScopeQuery) =>
-    http<{ pair: { a: Item; b: Item } | null; progress: Progress }>(
-      `/api/comparison/${id}/pair?${scopeQuery(scope, ranker.name)}`,
-    ),
-  vote: (id: string, ranker: Ranker, winnerId: string, loserId: string) =>
-    http<{ ok: true; comparisons: number }>(`/api/comparison/${id}/vote`, {
+  // Your own files (personal world — lib/files.ts drives these as a pair around a
+  // direct browser→Storage upload). `createUpload` names the destination and returns a
+  // single-use token for it; `signFile` turns the uploaded path into a showable link.
+  createUpload: (contentType: string) =>
+    http<{ bucket: string; path: string; token: string }>('/api/files/uploads', {
       method: 'POST',
-      body: JSON.stringify({ ranker: ranker.name, winnerId, loserId }),
+      body: JSON.stringify({ contentType }),
     }),
-  getLeaderboard: (id: string, ranker: string, scope: ScopeQuery) =>
-    http<{
-      ranker: string;
-      rankerCount?: number;
-      leaderboard: LeaderboardRow[];
-      progress: Progress;
-    }>(`/api/comparison/${id}/leaderboard?${scopeQuery(scope, ranker)}`),
+  signFile: (path: string) =>
+    http<{ url: string }>('/api/files/signed', { method: 'POST', body: JSON.stringify({ path }) }),
 
   // Durable curation jobs (web/lib/jobs.ts) — what survives a refresh mid-Claude-call,
   // and what the resume banner reads. `domain` omitted lists across both worlds.
@@ -300,22 +301,3 @@ export const api = {
   getJob: (id: string) => http<Job>(`/api/curation/jobs/${id}`),
   deleteJob: (id: string) => http<void>(`/api/curation/jobs/${id}`, { method: 'DELETE' }),
 };
-
-export interface Progress {
-  done: number;
-  target: number;
-  complete: boolean;
-}
-
-export interface ScopeQuery {
-  subtopics?: string[];
-  eras?: string[];
-}
-
-function scopeQuery(scope: ScopeQuery, ranker?: string): string {
-  const params = new URLSearchParams();
-  if (scope.subtopics?.length) params.set('subtopics', scope.subtopics.join(','));
-  if (scope.eras?.length) params.set('eras', scope.eras.join(','));
-  if (ranker) params.set('ranker', ranker);
-  return params.toString();
-}
