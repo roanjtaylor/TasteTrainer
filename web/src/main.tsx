@@ -21,11 +21,12 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <BrowserRouter>
       <Routes>
         {/* No Nav, no auth provider, no layout grid — this is what gets iframed on
-            someone else's site, so it has to be nothing but the picture. The nice
-            /:domain/:slug form (mirroring the app's own dataset URLs) is the one to
-            hand out; the bare /:datasetId form is kept for anything already using a
-            raw id — Embed.tsx resolves either, since the server looks datasets up
-            by slug (unique across the whole shelf) just as happily as by id. */}
+            someone else's site, so it has to be nothing but the widget. The bare
+            /embed is the one to hand out: it's a self-contained pick-a-world ->
+            pick-a-dataset -> browse widget with no dataset-specific URL to build.
+            /embed/:domain/:slug and /embed/:datasetId are deep links straight into
+            the browse step for one fixed dataset, skipping the picker (Embed.tsx). */}
+        <Route path="/embed" element={<Embed />} />
         <Route path="/embed/:domain/:slug" element={<Embed />} />
         <Route path="/embed/:datasetId" element={<Embed />} />
         <Route path="*" element={<AppShell />} />
