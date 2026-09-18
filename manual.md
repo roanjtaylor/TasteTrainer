@@ -2,7 +2,7 @@
 
 A personal, local-first "bicycle for the mind": deliberately expose yourself to the best work in a field, and train your eye by browsing it.
 
-Built from the decision docs in [`/plan`](./plan) — that folder is the canonical spec; this app executes it.
+Built from the core idea in [`stevejobs.md`](./stevejobs.md) — that doc is the canonical spec; this app executes it.
 
 ## What it does
 
@@ -12,30 +12,29 @@ Every dataset belongs to one of three **worlds**, chosen on the landing screen:
 
 - **Physical** — work you can stand in front of or hold: watches, cars, chairs, paintings, buildings.
 - **Digital** — work that lives on a screen: websites, apps, product UI, graphics.
-- **Personal** — what's *yours*: books, films, music, family memories. The first two worlds are objective (the best of what exists, researched by Claude); this one is subjective and **built by hand** — name a collection, then add items or drop in a batch of your own image files. Uploaded files live in a **private** bucket and are only ever served as expiring signed links. Once built, a personal dataset is browsed and filtered exactly like the others — and, since it holds your own private material, it's the one world that requires signing in. See `plan/9-personal-and-auth.md`.
+- **Personal** — what's *yours*: books, films, music, family memories. The first two worlds are objective (the best of what exists, researched by Claude); this one is subjective and **built by hand** — name a collection, then add items or drop in a batch of your own image files. Uploaded files live in a **private** bucket and are only ever served as expiring signed links. Once built, a personal dataset is browsed and filtered exactly like the others — and, since it holds your own private material, it's the one world that requires signing in.
 
-(This split was previously called "hardware vs software", which mis-described half of what it held — a painting is not hardware. Renamed 2026-07-28; see `plan/7-software-design.md`.)
+(This split was previously called "hardware vs software", which mis-described half of what it held — a painting is not hardware. Renamed 2026-07-28.)
 
 Then (steps 0–1 are the researched worlds; the personal world skips straight to building and browsing):
 
 0. **Check this world** — before building anything, audit the shelf itself: Claude reads every field you have in a world and reports how that world really divides, which fields you have no dataset for, which boundaries are drawn wrong (merge/split/rename), and which fields are thin. Each missing field starts a dataset in one click. This is the level above "what's missing?", and it exists because a map built one topic at a time inherits the blind spots you had when you named the topics.
 0b. **The map** — that review also draws the world, and the world's shelf *is* that map. Fields sit in named regions on two meaningful axes (for objects, roughly *held → inhabited* across and *practical → expressive* up), sized by how deep they are, and fields you don't have yet appear as **dashed holes** where they belong. Drag cards anywhere and they stay put; **Tidy up** re-flows them. The map is stored, not regenerated — re-reviewing places new fields and proposes changes you accept, so it stays something you can learn rather than something that rearranges itself.
-1. **Curate** — name a field; Claude maps both of its axes (subtopics *and* named era-periods), then researches the defining work against an explicit per-era quota so the set can't cluster in one era. Countering popularity bias — see `plan/3-curation.md`. You review and edit before saving.
+1. **Curate** — name a field; Claude maps both of its axes (subtopics *and* named era-periods), then researches the defining work against an explicit per-era quota so the set can't cluster in one era, countering popularity bias. You review and edit before saving.
 2. **Browse** — explore a dataset as a gallery, filtered by one subtopic **or** one era-period. Ask "what's missing?" for the item-level coverage sweep.
 
 Datasets live in Supabase. Images are stored as **URLs only**, never downloaded — except files you upload into the personal world, which have no public URL to point at.
 
 ## Stack
 
-TypeScript everywhere. **Frontend:** React + Vite + Tailwind v4. **Backend:** Node + Express (run with `tsx`). Shared types in [`/shared`](./shared). See `plan/1-setup.md`.
+TypeScript everywhere. **Frontend:** React + Vite + Tailwind v4. **Backend:** Node + Express (run with `tsx`). Shared types in [`/shared`](./shared).
 
 ```
-shared/   shared TypeScript types (the data model)
-server/   Express API: storage, Claude curation, image sourcing
-web/      React app: domain gate, shelf, field map, Curate flow, Dataset view
-data/     legacy local JSON (pre-Supabase); git-ignored, read by nothing
-supabase/ SQL migrations — run these once each in the Supabase SQL editor
-plan/     the decision docs this app is built from
+shared/    shared TypeScript types (the data model)
+server/    Express API: storage, Claude curation, image sourcing
+web/       React app: domain gate, shelf, field map, Curate flow, Dataset view
+supabase/  SQL migrations — run these once each in the Supabase SQL editor
+stevejobs.md the core idea this app is built from
 ```
 
 ## Prerequisites
@@ -77,7 +76,7 @@ The AI's curation behaviour is **not a blackbox** — it lives in one editable f
 server/src/prompts/curation-rules.md
 ```
 
-Edit it to refine coverage, anti-bias, dedup, field-filling, or web-search policy. Changes take effect on the next call (the file is re-read each time) — no restart, no code change. See `plan/3-curation.md`.
+Edit it to refine coverage, anti-bias, dedup, field-filling, or web-search policy. Changes take effect on the next call (the file is re-read each time) — no restart, no code change.
 
 ## Database migrations
 
@@ -89,13 +88,13 @@ SQL lives in [`supabase/migrations`](./supabase/migrations); run each once in th
 - `004_jobs.sql` — durable rows for long curation calls, so research survives a closed tab.
 - `005_personal_world.sql` — teaches the shelf view the `personal` world. Until it's applied, personal datasets are listed on the *physical* shelf instead of their own.
 
-**002 is required.** It provides the summary view the shelf reads; the pre-002 whole-row fallback has been removed, so a missing view now surfaces as a real error rather than silently degrading. Stored domain values are still normalised on read, so rows written before the rename keep working.
+**002 and 007 are required.** 007 turns the shelf's summary fields into generated columns on `taste_datasets` itself (007 dropped the `taste_dataset_summaries` view 002 introduced); the pre-002 whole-row fallback has been removed, so a missing column now surfaces as a real error rather than silently degrading. Stored domain values are still normalised on read, so rows written before the rename keep working.
 
 ## Speed and database usage
 
 The app is read-heavy over data that barely changes, so caching is layered rather than added in one place:
 
-- **Summary views** — the shelf reads `taste_dataset_summaries` (topic, description, two counts) instead of downloading every dataset's full item list to count it in JS. This was the single largest source of egress.
+- **Summary columns** — the shelf reads generated columns on `taste_datasets` (topic, description, two counts, derived from `data` at write time) instead of downloading every dataset's full item list to count it in JS. This was the single largest source of egress.
 - **Server memory cache** (`server/src/cache.ts`) — a warm server answers repeat reads without touching Supabase at all, and de-duplicates concurrent misses into one query. Writes invalidate explicitly.
 - **HTTP caching** — GET responses carry `Cache-Control` plus an ETag, so a revalidation that finds nothing changed costs an empty 304 instead of the payload. Error responses are always `no-store`.
 - **gzip** — on by default for API responses (SSE excluded so live curation progress isn't buffered).
@@ -104,7 +103,7 @@ The app is read-heavy over data that barely changes, so caching is layered rathe
 
 ## Notes / known edges
 
-- The physical world's image **swap picker** scrapes an unofficial DuckDuckGo endpoint (chosen for cleaner results, no API key), falling back to the official Wikimedia Commons search API when that scrape breaks. If both come back empty, paste an image URL directly (`plan/4-images.md`).
+- The physical world's image **swap picker** scrapes an unofficial DuckDuckGo endpoint (chosen for cleaner results, no API key), falling back to the official Wikimedia Commons search API when that scrape breaks. If both come back empty, paste an image URL directly.
 - Digital-world screenshots are rendered by **our own headless Chromium** against the Wayback Machine, with every non-`archive.org` request blocked so an archived page can't re-hydrate from the live web. When no usable snapshot exists it falls back to a screenshot of the **live site** — which is not the design of that year, so the item is badged **not period-accurate** in the review grid and the gallery rather than passing silently. Swap the image to pick a nearer snapshot.
 - Personal uploads are **images only** for now (JPEG, PNG, WebP, GIF, AVIF; 25 MB each) — an item is shown by an `<img>`. A book, film or album is represented by its cover (upload it, paste a URL, or use the image search), with an optional link to where it lives.
 - UI is intentionally a **simple MVP** in the gallery aesthetic (warm beige, pill nav).

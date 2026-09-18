@@ -54,22 +54,10 @@ export function optionalDomain(raw: unknown): Domain | undefined {
 }
 
 /** The one place each world's user-facing wording lives. */
-export const DOMAIN_LABELS: Record<Domain, { title: string; short: string; tagline: string }> = {
-  physical: {
-    title: 'Physical world',
-    short: 'Physical',
-    tagline: 'Things you can touch — watches, cars, chairs, paintings, buildings.',
-  },
-  digital: {
-    title: 'Digital world',
-    short: 'Digital',
-    tagline: 'Things on a screen — websites, apps, product UI, graphics.',
-  },
-  personal: {
-    title: 'Personal world',
-    short: 'Personal',
-    tagline: 'Things that are yours — books, films, music, family memories.',
-  },
+export const DOMAIN_LABELS: Record<Domain, { title: string; short: string }> = {
+  physical: { title: 'Physical', short: 'Physical' },
+  digital: { title: 'Digital', short: 'Digital' },
+  personal: { title: 'Personal', short: 'Personal' },
 };
 
 /**

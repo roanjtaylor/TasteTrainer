@@ -1,6 +1,12 @@
 import { useNavigate } from 'react-router-dom';
 import { DOMAIN_LABELS, DOMAINS, type Domain } from '../../../shared/types';
 
+const DOMAIN_EXAMPLES: Record<Domain, string> = {
+  physical: 'Paintings, cars, watches',
+  digital: 'Websites, apps, browsers',
+  personal: 'Books, movies, family memories',
+};
+
 // The domain gate (7-software-design.md): the way in — choose which world of taste
 // you're training before seeing its fields. Each choice is a URL (/physical,
 // /digital), so a bookmark or a shared link can also skip straight past this.
@@ -29,34 +35,21 @@ export function DomainSelect() {
       </header>
       <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
         {DOMAINS.map((domain) => (
-          <DomainCard
-            key={domain}
-            title={DOMAIN_LABELS[domain].title}
-            tagline={DOMAIN_LABELS[domain].tagline}
-            onClick={() => choose(domain)}
-          />
+          <DomainCard key={domain} domain={domain} onClick={() => choose(domain)} />
         ))}
       </div>
     </div>
   );
 }
 
-function DomainCard({
-  title,
-  tagline,
-  onClick,
-}: {
-  title: string;
-  tagline: string;
-  onClick: () => void;
-}) {
+function DomainCard({ domain, onClick }: { domain: Domain; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
       className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-card)] p-10 text-center transition-colors hover:border-[var(--color-accent)] hover:bg-[var(--color-wall-soft)]"
     >
-      <h2 className="serif text-3xl">{title}</h2>
-      <p className="mt-3 text-sm text-[var(--color-muted)]">{tagline}</p>
+      <h2 className="serif text-3xl">{DOMAIN_LABELS[domain].title}</h2>
+      <p className="mt-3 text-sm italic text-[var(--color-muted)]">E.g. {DOMAIN_EXAMPLES[domain]}</p>
     </button>
   );
 }

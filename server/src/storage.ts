@@ -33,17 +33,16 @@ function withDomain(ds: Dataset): Dataset {
 // ---- Datasets ----
 
 /**
- * The shelf listing. Reads the `taste_dataset_summaries` view (migration 002), which
- * projects out just the handful of fields a shelf card shows and filters by domain in
- * Postgres — instead of downloading every dataset's full item list to count it in JS.
- *
- * The pre-002 whole-blob fallback was removed once 002 was applied everywhere: a
- * missing view now surfaces as a real error instead of silently degrading.
+ * The shelf listing. Reads the summary columns straight off `taste_datasets`
+ * (migration 007's generated columns — domain/topic/description/item_count/
+ * subtopic_count are derived from `data` at write time) instead of the whole jsonb
+ * blob, so this stays a few scalars per row rather than every item, description and
+ * image URL in the account.
  */
 export async function listDatasets(domain?: Domain): Promise<DatasetSummary[]> {
   return cached(keys.datasetList(domain), async () => {
     let query = supabase
-      .from('taste_dataset_summaries')
+      .from('taste_datasets')
       .select('id, domain, topic, description, item_count, subtopic_count, updated_at')
       .order('updated_at', { ascending: false });
     if (domain) query = query.eq('domain', domain);
