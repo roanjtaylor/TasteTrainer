@@ -5,7 +5,6 @@ import './index.css';
 import { Nav } from './components/Nav';
 import { TaskNotifications } from './components/TaskNotifications';
 import { AccountButton } from './components/AccountButton';
-import { BrainButton } from './components/BrainPanel';
 import { EmbedTesterButton } from './components/EmbedTesterButton';
 import { AuthProvider, PersonalGate } from './lib/auth';
 import { NavActionsProvider } from './lib/navActions';
@@ -15,8 +14,6 @@ import { DomainSelect } from './pages/DomainSelect';
 import { Home } from './pages/Home';
 import { CurateRoute } from './pages/Curate';
 import { DatasetView } from './pages/DatasetView';
-import { WorldReview } from './pages/WorldReview';
-import { FilterPicker } from './pages/FilterPicker';
 import { LegacyDatasetRedirect, LegacyMapRedirect } from './pages/LegacyRedirect';
 import { Embed } from './pages/Embed';
 
@@ -51,23 +48,16 @@ function AppShell() {
         {/* Below `lg` there's no reliable margin for the gutter column below to sit
             in, so the queue falls back to a small floating box here. */}
         <TaskNotifications variant="overlay" />
-        {/* The settings cog: top-right of the window, in the right margin — how this app
-            prompts Claude (components/BrainPanel.tsx). Only from `xl`, where the margin
-            is wide enough to clear the nav's own actions; Nav carries it below that. The
-            notification rail shares this margin and stops below it (`xl:top-14`). */}
-        {/* One shared container, not three separately-positioned ones: each button
-            used to sit in its own `fixed` wrapper `div`, which meant each also opened
-            its own stacking context — so the account menu's z-50 only out-ranked
-            content *inside its own wrapper*, not the embed-tester button sitting in
-            its neighbour, which painted over it regardless. A single row fixes both
-            the layout (three buttons in line, embed tester leftmost) and the
-            stacking (the account menu now out-ranks its literal siblings). The cog
-            stays flush with the container's own right edge, so it's still exactly
-            where BrainPanel's close button expects it (components/BrainPanel.tsx). */}
+        {/* Top-right of the window, in the right margin. Only from `xl`, where the margin
+            is wide enough to clear the nav's own actions; Nav carries these below that.
+            The notification rail shares this margin and stops below it (`xl:top-14`).
+            One shared container, not separately-positioned ones: each button in its own
+            `fixed` wrapper would open its own stacking context, so the account menu's
+            z-50 would only out-rank content inside its own wrapper and its neighbour
+            would paint over it. A single row fixes both the layout and the stacking. */}
         <div className="fixed right-3 top-3 z-40 hidden items-center gap-2 xl:flex">
           <EmbedTesterButton className="flex border border-[var(--color-line)] bg-[var(--color-card)]/90 shadow-sm backdrop-blur" />
           <AccountButton className="flex border border-[var(--color-line)] bg-[var(--color-card)]/90 shadow-sm backdrop-blur" />
-          <BrainButton className="flex border border-[var(--color-line)] bg-[var(--color-card)]/90 shadow-sm backdrop-blur" />
         </div>
         <Nav />
         {/* Below `lg` this is a plain `mx-auto max-w-6xl` block, unchanged from
@@ -117,7 +107,6 @@ function AppShell() {
                 <Route path="/datasets" element={<Navigate to="/" replace />} />
                 <Route path="/new" element={<Navigate to="/" replace />} />
                 <Route path="/dataset/:id" element={<LegacyDatasetRedirect />} />
-                <Route path="/dataset/:id/filters" element={<LegacyDatasetRedirect />} />
                 <Route path="/:domain" element={<Home />} />
                 {/* Bare "new" (no field chosen yet) and a per-field "<slug>/new" (once one
                     has). CurateRoute keys the actual page by domain+slug, so a session
@@ -128,12 +117,11 @@ function AppShell() {
                 <Route path="/:domain/new" element={<CurateRoute />} />
                 <Route path="/:domain/:slug/new" element={<CurateRoute />} />
                 {/* Static segments outrank ":slug", so these always win over a field
-                    name. The world's MAP lives on the shelf itself (/physical); this is
-                    the review that draws and amends it. */}
-                <Route path="/:domain/review" element={<WorldReview />} />
+                    name. The world's map lives on the shelf itself (/physical); both
+                    of these are retired addresses that now land there. */}
+                <Route path="/:domain/review" element={<LegacyMapRedirect />} />
                 <Route path="/:domain/map" element={<LegacyMapRedirect />} />
                 <Route path="/:domain/:slug" element={<DatasetView />} />
-                <Route path="/:domain/:slug/filters" element={<FilterPicker />} />
               </Routes>
             </PersonalGate>
           </main>

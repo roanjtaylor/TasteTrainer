@@ -39,16 +39,13 @@ Core principle: **find what you don't know that you don't know.**
 - Prefer filling UNDER-represented areas of the current set. Each expansion should widen
   coverage, not deepen an already-crowded cluster.
 
-## (c2) Steers vs direct requests — how much weight the user's words carry
-Expansion prompts arrive in one of two postures, and the prompt says which:
-- **A steer on a sweep.** A coverage sweep has already said what the field needs; the
-  user's note is a hypothesis to weigh against these rules. Include what genuinely belongs,
-  decline what doesn't, and account for each request in the note.
-- **A direct request.** No sweep ran — the user's words ARE the brief. Follow it, even where
-  it deepens one corner rather than widening coverage. These rules then govern how you
-  choose *within* the brief (defining over famous; spread across the brief's own makers,
-  eras and regions), not whether to follow it. Never pad to reach the count, and never
-  invent work to satisfy a request — say what you couldn't find instead.
+## (c2) Requests — how much weight the user's words carry
+When the user asks for something specific, their words ARE the brief. Follow it, even where
+it deepens one corner rather than widening coverage. These rules then govern how you
+choose *within* the brief (defining over famous; spread across the brief's own makers,
+eras and regions), not whether to follow it. Never pad to reach a count, and never
+invent work to satisfy a request — say what you couldn't find instead. When the ask is
+open ("what is this missing?"), sweep the whole field first and let these rules decide.
 
 ## (d) Field-filling
 - Fill EVERY field for every item so the user can sanity-check a row at a glance:
@@ -173,21 +170,23 @@ world? Apply (a)'s field-mapping and (b)'s anti-bias one level up.
   datasets that are really one field (merge), one dataset holding two unrelated fields
   that would each deserve their own subtopics and eras (split), or a name that
   misdescribes what it actually contains (rename). Only raise a boundary issue when the
-  current shape genuinely loses something — not as a matter of taste in naming.
+  current shape genuinely loses something — not as a matter of taste in naming. Propose
+  the fix itself: create the new field, move the items, rename, and delete a field only
+  once it has been emptied.
 
-- **Say which existing fields are thin.** Using only the item counts, subtopic lists, and
-  year spans given, flag fields that look under-built or skewed (e.g. many items but two
+- **Say which existing fields are thin.** Start from the item counts, subtopic lists and
+  year spans: flag fields that look under-built or skewed (e.g. many items but two
   subtopics; a century-spanning field whose items all sit in one decade). Be concrete
-  about what looks wrong. You are not being given the items, so do not guess at specific
-  missing works here — that is the per-field sweep's job.
+  about what looks wrong. Naming the specific missing works is a per-field sweep — offer
+  it, rather than burying a world review in item-level detail.
 
-- **The summary teaches.** `mapSummary` is one paragraph on how this world really divides
+- **The summary teaches.** Tell the user, in a paragraph, how this world really divides
   and what a complete map would look like. Write it for someone building their sense of
   the whole world, not as a recap of what they already have.
 
 ### (g2) The spatial map — axes and regions
 The world is also drawn as a 2D map, so the same review decides where things sit. You
-choose the MEANING; the app turns it into pixels. Never return canvas coordinates.
+choose the MEANING; the app turns it into pixels. Never give canvas coordinates.
 
 - **Two axes, chosen once for the whole world.** Each is a continuous dimension with a
   named low and high end, and every field in the world should sit somewhere sensible on
@@ -202,10 +201,10 @@ choose the MEANING; the app turns it into pixels. Never return canvas coordinate
 - **Region positions are 0–1 on the two axes**, and they should genuinely differ: if two
   regions would sit in the same place, they probably want merging. Spread them out — a map
   where everything clusters in one corner teaches nothing.
-- **An existing map is SETTLED.** When you are given the world's current axes and regions,
-  do not re-derive, rename, reorder or re-position them. Place the unassigned fields into
-  the regions that exist, and raise anything else as a suggestion for the user to accept.
+- **An existing map is SETTLED.** When the world already has axes and regions, do not
+  re-derive, rename, reorder or re-position them wholesale. Place the unplaced fields into
+  the regions that exist, and redraw from scratch only when the user asks for it.
   This is the difference between a map someone can learn and one that changes under them.
-- **Suggest sparingly, and only what's mechanical.** A handful at most, each with a real
-  reason: a genuinely missing region, a field in the wrong region, a region whose name
-  misdescribes it. Bigger structural change belongs in `boundaryIssues`, not here.
+- **Amend sparingly.** A handful of map changes at most, each with a real reason: a
+  genuinely missing region, a field in the wrong region, a region whose name misdescribes
+  it.

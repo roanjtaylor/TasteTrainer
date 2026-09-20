@@ -2,7 +2,9 @@
 // (plan/claude-agent.md). Claude works through tools; anything that would CHANGE data is
 // staged as a changeset the user reviews — the same "propose, show the diff, accept"
 // loop as Claude Code on a folder, with datasets in place of files.
-import type { Dataset, Domain, EraGroup, ImageKind, Item, ProposedItem, Subtopic } from './types.ts';
+import type {
+  Dataset, Domain, ImageKind, Item, MapAxis, MapRegion, MissingField, ProposedItem, Subtopic, WorldMap,
+} from './types.ts';
 
 // ---- What's on screen ----
 
@@ -14,8 +16,6 @@ export interface ChatView {
   datasetTopic?: string;
   itemId?: string;
   itemName?: string;
-  /** Filters in force on the dataset screen, in words ("Subtopic: Dive watches"). */
-  filters?: string[];
 }
 
 // ---- The transcript ----
@@ -209,7 +209,6 @@ export interface DatasetPatch {
   topic?: string;
   description?: string;
   subtopics?: Subtopic[];
-  eraGroups?: EraGroup[];
 }
 
 /** pending  — staged, awaiting the user
@@ -273,8 +272,55 @@ export type ChangeOp =
       topic: string;
       description: string;
       subtopics: Subtopic[];
-      eraGroups: EraGroup[];
+    })
+  /** Only ever an EMPTY dataset — a merge moves the items out first, in the same changeset. */
+  | (OpBase & { kind: 'dataset.delete'; datasetId: string; domain: Domain; topic: string })
+  // ---- The world map (types.ts's WorldMap). Same gate, same undo. ----
+  | (OpBase & {
+      kind: 'map.draw';
+      domain: Domain;
+      axes: { x: MapAxis; y: MapAxis };
+      regions: MapRegion[];
+      /** Dataset id -> region id. */
+      assignments: Record<string, string>;
+      /** Dataset id -> topic, for the diff. */
+      fieldNames: Record<string, string>;
+      /** True when this throws an existing map away rather than drawing the first one. */
+      replaces: boolean;
+    })
+  | (OpBase & {
+      kind: 'map.region';
+      domain: Domain;
+      action: 'add' | 'update' | 'remove';
+      region: MapRegion;
+      /** `update` only: the region as it was when staged. */
+      before?: MapRegion;
+    })
+  | (OpBase & {
+      kind: 'map.place';
+      domain: Domain;
+      /** A dataset id, or a proposed field's `ghost:` key. */
+      fieldId: string;
+      fieldName: string;
+      regionId: string;
+      regionName: string;
+      beforeRegionName?: string;
+    })
+  | (OpBase & {
+      kind: 'map.ghost';
+      domain: Domain;
+      action: 'add' | 'remove';
+      /** A field the world is missing, shown as a dashed hole in its region. */
+      field: MissingField;
+      regionId: string;
+      regionName: string;
     });
+
+export type MapOp = Extract<ChangeOp, { kind: `map.${string}` }>;
+export const isMapOp = (op: ChangeOp): op is MapOp => op.kind.startsWith('map.');
+
+/** What an op is filed under in the diff: the dataset it touches, or its world's map. */
+export const opGroup = (op: ChangeOp): string => (isMapOp(op) ? `map:${op.domain}` : op.datasetId);
 
 export type ChangeOpKind = ChangeOp['kind'];
 
@@ -299,7 +345,12 @@ export type UndoRecord =
       before: DatasetPatch;
       itemSubtopics: Record<string, string>;
     }
-  | { opId: string; kind: 'dataset.create'; datasetId: string };
+  | { opId: string; kind: 'dataset.create'; datasetId: string }
+  /** The deleted dataset (it was empty), and where it sat on the map. */
+  | { opId: string; kind: 'dataset.delete'; datasetId: string; dataset: Dataset; regionId?: string }
+  /** The whole map as it was before this apply touched it — maps are small, and a
+   *  snapshot is the one undo that is right whatever combination of map ops ran. */
+  | { opId: string; kind: 'map'; domain: Domain; before: WorldMap | null };
 
 /** open      — has pending ops
  *  applied   — nothing pending, at least one applied
@@ -326,6 +377,8 @@ export interface ChangesetResult {
   changeset: Changeset;
   updated: Dataset[];
   deletedTopics: string[];
+  /** Every world map the decision changed, as it now stands. */
+  maps: WorldMap[];
 }
 
 export function changesetStatusOf(ops: ChangeOp[], reverted = false): ChangesetStatus {

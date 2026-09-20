@@ -24,7 +24,7 @@ superseded HTTP-MCP design; everything else stands.)
 Where things live:
 - Space: `src/services/agent.ts`, `src/routes/agent.ts` (`/api/chat` untouched)
 - API: `services/agentRun.ts` (run engine + system prompt), `services/agentTools.ts`
-  (the 14 tools), `services/changesets.ts` (stage / apply / revert), `routes/chat.ts`
+  (the tools), `services/changesets.ts` (stage / apply / revert), `routes/chat.ts`
 - Shared: `shared/chat.ts` (types + the one reducer both sides fold events with)
 - Web: `components/chat/*`, `lib/chat.ts`, `lib/chatView.tsx`
 - DB: `supabase/migrations/008_chat.sql` (applied)
@@ -32,10 +32,21 @@ Where things live:
 Decided: personal-world chat allowed (signed-in only) · no separate notes field
 (`description` is the note) · no auto-accept · always review.
 
-Not built yet: presets are hardcoded in `ChatDock.tsx` (not user-editable) · the old
-Review/Expand buttons still exist alongside · BrainPanel doesn't show the agent prompt ·
+Retired 2026-09-20: every fixed review flow. The per-dataset Review button (sweep +
+direct request, `/gaps`, `/gap-fill`), the world review screen (`/field-map`,
+`/boundary-fix`, map suggestions) and the settings cog (`BrainPanel`, `/api/brain`). The
+dock's presets replace them. The only fixed Claude calls left are the new-dataset wizard's.
+
+Map ops — built 2026-09-20. Claude draws and amends a world's map through the same gate:
+`propose_draw_map`, `propose_map_changes` (regions, placements, proposed missing fields),
+`propose_create_dataset`'s `region`, and `propose_delete_dataset` (empty datasets only —
+the last step of a merge). Ops `map.draw | map.region | map.place | map.ghost |
+dataset.delete` in `shared/chat.ts`; their meaning in `services/worldMap.ts`
+(`applyMapOp`); undo is a whole-map snapshot. The map has no other write path.
+
+Not built yet: presets are hardcoded in `ChatDock.tsx` (not user-editable) ·
 no edit-before-accept in the diff (ask Claude to amend, or edit after accepting) ·
-vision · map ops.
+vision.
 
 ---
 

@@ -1,8 +1,8 @@
 // A small in-process cache in front of Supabase.
 //
 // Why it exists: every screen in the app reads the same handful of rows over and
-// over — the shelf re-lists datasets, and the dataset view and the filters subpage
-// both fetch the same dataset. Without a cache each of those is a fresh Supabase
+// over — the shelf re-lists datasets, and every visit to a dataset fetches the
+// same dataset. Without a cache each of those is a fresh Supabase
 // round trip, which costs both latency (the slow first paint) and egress quota. With
 // it, a warm server answers most GETs without touching the database at all.
 //

@@ -1,6 +1,6 @@
 // A quick way in to /embed-tester.html (the standalone, movable/resizable iframe
 // harness for iterating on the embed widget) without hunting for the URL. Mounted
-// alongside the settings cog (BrainButton) the same way it is: fixed in the window's
+// alongside the account button the same way it is: fixed in the window's
 // right margin at `xl`+, inline in the nav pill below that.
 export function EmbedTesterButton({ className = '' }: { className?: string }) {
   return (

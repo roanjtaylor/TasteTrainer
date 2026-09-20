@@ -1,38 +1,12 @@
 import { Router } from 'express';
 import type { Response } from 'express';
-import {
-  fillGaps,
-  findGaps,
-  generateItems,
-  planBoundaryFix,
-  proposePeriods,
-  proposeSubtopics,
-  reviewFieldMap,
-} from '../services/claude.ts';
+import { generateItems, proposeSubtopics } from '../services/claude.ts';
 import { mapWithLimit, resolveDigitalImage, resolvePhysicalImage } from '../services/imageResolvers.ts';
-import { canonicalSubtopic, cleanProposals } from '../services/itemHygiene.ts';
-import { mergeProposal, type MapField } from '../services/worldMap.ts';
-import {
-  createJob,
-  deleteDataset,
-  getDataset,
-  getWorldMap,
-  listDatasets,
-  saveDataset,
-  saveWorldMap,
-  updateJob,
-} from '../storage.ts';
+import { createJob, getDataset, updateJob } from '../storage.ts';
 import { newId, now } from '../util.ts';
-import { isPeriodAccurate, normalizeDomain, slugifyTopic } from '../../../shared/types.ts';
+import { isPeriodAccurate, normalizeDomain } from '../../../shared/types.ts';
 import type {
-  BoundaryIssue,
-  BoundaryKind,
-  CoverageGap,
-  Dataset,
   Domain,
-  EraGroup,
-  FieldSummary,
-  FillMode,
   Item,
   Job,
   ProposedItem,
@@ -162,8 +136,8 @@ function sse(res: Response) {
 const jobWriteChains = new Map<string, Promise<void>>();
 
 /**
- * Wraps `sse()` for the two calls whose result needs to survive the browser closing
- * (items, gap-fill — see shared/types.ts's `Job`). Every event still streams to a
+ * Wraps `sse()` for the calls whose result needs to survive the browser closing
+ * (subtopics, items — see shared/types.ts's `Job`). Every event still streams to a
  * connected client exactly as before; this only ADDS a durable write alongside it, so
  * a client that's watching sees no difference at all.
  *
@@ -238,10 +212,9 @@ function jobSend(res: Response, job: Job) {
   };
 }
 
-// Step 2: propose canonical subtopics for a new topic, and the field's era-periods
-// alongside them — "map the field" is one step to the user, so it is one durable job.
+// Step 2: propose canonical subtopics for a new topic ("map the field").
 //
-// Durable like /items and /gap-fill below (see jobSend above): this used to be a
+// Durable like /items below (see jobSend above): this used to be a
 // plain `sse()` call, whose result only ever lived in the live stream — a refresh or
 // a server restart mid-call lost it outright, with nothing in the notification gutter
 // to resume or even show that it happened. Now it survives the same way.
@@ -257,82 +230,34 @@ curationRouter.post('/subtopics', async (req, res) => {
   });
   const send = jobSend(res, job);
   try {
-    // Subtopics and periods are independent Claude calls — periods only reads
-    // topic/description, never the subtopic list — so running them sequentially was
-    // pure dead time: two ~2-3 minute calls back to back instead of the ~2-3 minutes
-    // the slower of the two actually takes. Progress lines from both are interleaved
-    // as they stream; `send` doesn't care which call a line came from.
-    const [subtopicsResult, eraGroups] = await Promise.all([
-      proposeSubtopics(
-        topic.trim(),
-        description?.trim() ?? '',
-        dom,
-        (line) => send('progress', { line }),
-      ),
-      // Best-effort, same as the client used to treat it: without periods the
-      // research step falls back to its old spread-across-eras behaviour rather than
-      // failing the whole "map the field" step.
-      proposePeriods(
-        { topic: topic.trim(), description: description?.trim() ?? '', domain: dom },
-        (line) => send('progress', { line }),
-      ).catch((): EraGroup[] => []),
-    ]);
-    const { subtopics, suggestedCount } = subtopicsResult;
+    const { subtopics, suggestedCount } = await proposeSubtopics(
+      topic.trim(),
+      description?.trim() ?? '',
+      dom,
+      (line) => send('progress', { line }),
+    );
 
-    send('done', { subtopics, suggestedCount, eraGroups, jobId: job.id });
+    send('done', { subtopics, suggestedCount, jobId: job.id });
   } catch (err: any) {
     send('error', { error: err?.message ?? 'Subtopic proposal failed' });
   }
   res.end();
 });
 
-// Propose named era-periods for the time axis (used by the Era filter timeline, and
-// generated at dataset creation). Input carries the items so the span can be read.
-curationRouter.post('/periods', async (req, res) => {
-  // `items` is optional: the curate flow now asks for periods BEFORE any items exist,
-  // so they can steer generation (era-first). Saved datasets still pass their items so
-  // the periods fit the span actually present.
-  const { topic, description, items, domain } = req.body as {
-    topic: string;
-    description: string;
-    items?: Item[];
-    domain: Domain;
-  };
-  if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
-
-  const send = sse(res);
-  try {
-    const eraGroups = await proposePeriods(
-      {
-        topic: topic.trim(),
-        description: description?.trim() ?? '',
-        items: items ?? [],
-        domain: normalizeDomain(domain),
-      },
-      (line) => send('progress', { line }),
-    );
-    send('done', { eraGroups });
-  } catch (err: any) {
-    send('error', { error: err?.message ?? 'Period proposal failed' });
-  }
-  res.end();
-});
-
 // Step 3: generate items, then fetch a Wikimedia lead image for each.
 curationRouter.post('/items', async (req, res) => {
-  const { topic, description, subtopics, count, existingItems, domain, eraGroups } = req.body as {
+  const { topic, description, subtopics, count, existingItems, domain } = req.body as {
     topic: string;
     description: string;
     subtopics: Subtopic[];
     count: number;
     existingItems?: Item[];
     domain: Domain;
-    eraGroups?: EraGroup[];
   };
   if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
   const dom: Domain = normalizeDomain(domain);
 
-  // This is one of the two calls whose result needs to survive the browser closing —
+  // This is one of the calls whose result needs to survive the browser closing —
   // it returns a review-before-save proposal, not something the server writes itself
   // (see shared/types.ts's `Job`, and jobSend above).
   const job = await createJob({
@@ -349,7 +274,6 @@ curationRouter.post('/items', async (req, res) => {
         subtopics: subtopics ?? [],
         count: Math.max(1, Math.min(50, Number(count) || 12)),
         domain: dom,
-        eraGroups: eraGroups ?? [],
         existingItems: existingItems ?? [],
       },
       (line) => send('progress', { line }),
@@ -362,207 +286,6 @@ curationRouter.post('/items', async (req, res) => {
     send('done', { items: withImages, jobId: job.id });
   } catch (err: any) {
     send('error', { error: err?.message ?? 'Item generation failed' });
-  }
-  res.end();
-});
-
-// "Check this world" — the field-map review, one level above /gaps: it audits the
-// SHELF rather than the inside of one field (curation-rules.md §g).
-//
-// The inventory is assembled HERE, from storage, rather than posted by the client:
-// the shelf listing the client holds has no subtopic names or year spans, and the
-// review is only as good as those. Reading each dataset is a cache hit in the common
-// case (storage.ts caches by id), and this runs on an explicit button press.
-curationRouter.post('/field-map', async (req, res) => {
-  const { domain: rawDomain, redraw } = req.body as { domain?: Domain; redraw?: boolean };
-  const domain = normalizeDomain(rawDomain);
-
-  const send = sse(res);
-  try {
-    send('progress', { line: 'Reading the shelf…' });
-    const summaries = await listDatasets(domain);
-    const fields: FieldSummary[] = [];
-    const mapFields: MapField[] = [];
-    for (const s of summaries) {
-      const ds = await getDataset(s.id);
-      if (!ds) continue;
-      const years = (ds.items ?? [])
-        .map((i) => i.year)
-        .filter((y): y is number => typeof y === 'number');
-      fields.push({
-        topic: ds.topic,
-        description: ds.description,
-        subtopics: (ds.subtopics ?? []).map((st) => st.name),
-        itemCount: (ds.items ?? []).length,
-        yearRange: years.length ? { min: Math.min(...years), max: Math.max(...years) } : null,
-      });
-      mapFields.push({ id: ds.id, topic: ds.topic });
-    }
-
-    // The stored map goes IN so the review amends rather than redraws.
-    //
-    // `redraw` is the deliberate escape hatch from that. A map's axes and regions are
-    // settled by its first draw and nothing else can change them wholesale — which is
-    // the right default, and would be a trap without a way out: a first draw that
-    // picked poor axes would otherwise be permanent. Asking for a redraw throws the
-    // stored map away and starts over, losing the regions and every position.
-    const stored = await getWorldMap(domain).catch(() => null);
-    const existing = redraw ? null : stored;
-    const { proposal, ...review } = await reviewFieldMap(
-      { domain, fields, existingMap: existing },
-      (line) => send('progress', { line }),
-    );
-
-    // Best-effort: a map that fails to save still leaves a usable review on screen,
-    // which is the half that was there before the map existed.
-    let map = null;
-    try {
-      send('progress', { line: 'Drawing the map…' });
-      map = await saveWorldMap(
-        mergeProposal({ domain, existing, review, proposal, fields: mapFields }),
-      );
-    } catch (mapErr: any) {
-      send('progress', { line: `Map not saved: ${mapErr?.message ?? 'unknown error'}` });
-    }
-
-    send('done', { ...review, map });
-  } catch (err: any) {
-    send('error', { error: err?.message ?? 'Field-map review failed' });
-  }
-  res.end();
-});
-
-// "Accept changes" on a boundary issue — the review named the problem, this carries
-// out the fix: Claude works out the concrete result (services/claude.ts,
-// planBoundaryFix) and this route updates, creates and deletes datasets accordingly.
-//
-// `fields` must be exactly the topics the boundary issue named — that's how the
-// stored map's `lastReview` finds and drops the issue once it's been handled.
-curationRouter.post('/boundary-fix', async (req, res) => {
-  const { domain: rawDomain, kind, fields: topics, proposal, why } = req.body as {
-    domain?: Domain;
-    kind?: BoundaryKind;
-    fields?: string[];
-    proposal?: string;
-    why?: string;
-  };
-  const domain = normalizeDomain(rawDomain);
-
-  const send = sse(res);
-  try {
-    if (!kind || !topics?.length || !proposal?.trim()) {
-      send('error', { error: 'kind, fields and proposal are required' });
-      return res.end();
-    }
-
-    send('progress', { line: 'Reading the field(s)…' });
-    const summaries = await listDatasets(domain);
-    const byTopic = new Map(summaries.map((s) => [s.topic.trim().toLowerCase(), s]));
-    const datasets: Dataset[] = [];
-    for (const topic of topics) {
-      const summary = byTopic.get(topic.trim().toLowerCase());
-      const ds = summary && (await getDataset(summary.id));
-      if (!ds) {
-        send('error', { error: `Field "${topic}" no longer exists — try reviewing again.` });
-        return res.end();
-      }
-      datasets.push(ds);
-    }
-
-    const plan = await planBoundaryFix(
-      {
-        domain,
-        kind,
-        proposal: proposal.trim(),
-        why: why?.trim() ?? '',
-        fields: datasets.map((d) => ({
-          topic: d.topic,
-          description: d.description,
-          subtopics: d.subtopics,
-          items: d.items.map((i) => ({ id: i.id, name: i.name, subtopic: i.subtopic, year: i.year })),
-        })),
-      },
-      (line) => send('progress', { line }),
-    );
-
-    send('progress', { line: 'Writing the change…' });
-    const pool = new Map(datasets.flatMap((d) => d.items.map((i) => [i.id, i] as const)));
-    const byTopicExact = new Map(datasets.map((d) => [d.topic, d]));
-
-    const claimedTopics = new Set<string>();
-    const updated: Dataset[] = [];
-    for (const rf of plan.fields) {
-      const source = rf.sourceTopic ? byTopicExact.get(rf.sourceTopic) : undefined;
-      const subtopics = rf.subtopics.length ? rf.subtopics : (source?.subtopics ?? []);
-      const items = rf.itemIds
-        .map((id) => pool.get(id))
-        .filter((it): it is Item => !!it)
-        .map((it) => ({ ...it, subtopic: canonicalSubtopic(it.subtopic, subtopics) }));
-
-      if (source) {
-        claimedTopics.add(source.topic);
-        updated.push(
-          await saveDataset(
-            { ...source, topic: rf.topic || source.topic, description: rf.description || source.description, subtopics, items },
-            slugifyTopic(source.topic),
-          ),
-        );
-      } else {
-        updated.push(
-          await saveDataset({
-            id: newId(),
-            domain,
-            topic: rf.topic,
-            description: rf.description,
-            subtopics,
-            eraGroups: [],
-            items,
-            createdAt: now(),
-            updatedAt: now(),
-          }),
-        );
-      }
-    }
-
-    // Whatever no result field claimed as its source had every one of its items moved
-    // elsewhere by the plan — it's fully absorbed, so it goes away rather than lingering
-    // as an empty field nobody asked to keep.
-    const deletedTopics: string[] = [];
-    for (const d of datasets) {
-      if (claimedTopics.has(d.topic)) continue;
-      await deleteDataset(d.id, slugifyTopic(d.topic));
-      deletedTopics.push(d.topic);
-    }
-
-    // Best-effort: drop the now-handled issue from the map's stored review, so it
-    // doesn't keep showing an "Accept changes" button for a fix already applied.
-    let map = null;
-    try {
-      const stored = await getWorldMap(domain);
-      if (stored?.lastReview) {
-        const wanted = new Set(topics.map((t) => t.trim().toLowerCase()));
-        const remaining = stored.lastReview.boundaryIssues.filter(
-          (b: BoundaryIssue) =>
-            !(
-              b.kind === kind &&
-              b.fields.length === topics.length &&
-              b.fields.every((f) => wanted.has(f.trim().toLowerCase()))
-            ),
-        );
-        if (remaining.length !== stored.lastReview.boundaryIssues.length) {
-          map = await saveWorldMap({
-            ...stored,
-            lastReview: { ...stored.lastReview, boundaryIssues: remaining },
-          });
-        } else {
-          map = stored;
-        }
-      }
-    } catch { /* the next review will settle it either way */ }
-
-    send('done', { updated, deletedTopics, note: plan.note, map });
-  } catch (err: any) {
-    send('error', { error: err?.message ?? 'Applying the fix failed' });
   }
   res.end();
 });
@@ -650,117 +373,6 @@ curationRouter.post('/re-resolve', async (req, res) => {
     send('done', { items: updated, checked: targets.length, changed });
   } catch (err: any) {
     send('error', { error: err?.message ?? 'Re-resolve failed' });
-  }
-  res.end();
-});
-
-// "What's missing?" — breadth-first coverage sweep.
-curationRouter.post('/gaps', async (req, res) => {
-  const { topic, description, subtopics, items, domain, eraGroups, focus } = req.body as {
-    topic: string;
-    description: string;
-    subtopics: Subtopic[];
-    items: Item[];
-    domain: Domain;
-    eraGroups?: EraGroup[];
-    focus?: string;
-  };
-  if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
-  const dom: Domain = normalizeDomain(domain);
-
-  // Durable like /items and /gap-fill below — this is the third proposal-for-review
-  // call, and until now was the one exception: its result only ever lived in the
-  // live SSE stream, so a refresh mid-sweep (or after) lost the gap list outright,
-  // with no row in the resume banner to get it back from.
-  const job = await createJob({
-    id: newId(), domain: dom, kind: 'gaps', status: 'running',
-    title: `Review ${topic.trim()} for gaps`, input: req.body,
-    progress: '', result: null, error: null, createdAt: now(), updatedAt: now(),
-  });
-  const send = jobSend(res, job);
-  try {
-    const { gaps, suggestedCount } = await findGaps(
-      {
-        topic: topic.trim(),
-        description: description?.trim() ?? '',
-        subtopics: subtopics ?? [],
-        items: items ?? [],
-        domain: dom,
-        eraGroups: eraGroups ?? [],
-        focus: focus ?? '',
-      },
-      (line) => send('progress', { line }),
-    );
-    send('done', { gaps, suggestedCount, jobId: job.id });
-  } catch (err: any) {
-    send('error', { error: err?.message ?? 'Gap analysis failed' });
-  }
-  res.end();
-});
-
-// "Add what's missing" — research NEW items targeting the reported gaps, weighing the
-// user's own feedback, then fetch a Wikimedia lead image for each (same as /items).
-// Returns the proposed items plus a `note` explaining how the feedback was handled.
-curationRouter.post('/gap-fill', async (req, res) => {
-  const { topic, description, subtopics, items, gaps, count, feedback, domain, eraGroups, mode } =
-    req.body as {
-      mode?: FillMode;
-      topic: string;
-      description: string;
-      subtopics: Subtopic[];
-      items: Item[];
-      gaps: CoverageGap[];
-      count: number;
-      feedback: string;
-      domain: Domain;
-      eraGroups?: EraGroup[];
-    };
-  if (!topic?.trim()) return res.status(400).json({ error: 'topic is required' });
-  // A direct request with nothing in it has no brief at all — refused here rather than
-  // spending a Claude call on "propose N items about nothing in particular".
-  if (mode === 'direct' && !feedback?.trim()) {
-    return res.status(400).json({ error: 'a request is required' });
-  }
-  const dom: Domain = normalizeDomain(domain);
-
-  // The other durable call — see the comment on /items above.
-  const job = await createJob({
-    id: newId(), domain: dom, kind: 'gap-fill', status: 'running',
-    title: `Expand ${topic.trim()}`, input: req.body,
-    progress: '', result: null, error: null, createdAt: now(), updatedAt: now(),
-  });
-  const send = jobSend(res, job);
-  try {
-    const { items: proposed, note } = await fillGaps(
-      {
-        topic: topic.trim(),
-        description: description?.trim() ?? '',
-        subtopics: subtopics ?? [],
-        existingItems: items ?? [],
-        gaps: gaps ?? [],
-        count: Math.max(1, Math.min(50, Number(count) || 8)),
-        feedback: feedback ?? '',
-        mode: mode === 'direct' ? 'direct' : 'gaps',
-        domain: dom,
-        eraGroups: eraGroups ?? [],
-      },
-      (line) => send('progress', { line }),
-    );
-
-    // Enforced before the images are fetched, not after: a repeat that gets dropped
-    // here would otherwise cost a Wikimedia lookup or a Wayback capture on its way to
-    // being thrown away.
-    const { items: clean, duplicates, unsetSubtopics } = cleanProposals(
-      proposed,
-      items ?? [],
-      subtopics ?? [],
-    );
-    if (duplicates) send('progress', { line: `Dropped ${duplicates} already in the set…` });
-
-    const withImages = await attachImages(clean, dom, send);
-    send('done', { items: withImages, note, duplicates, unsetSubtopics, jobId: job.id });
-  } catch (err: any) {
-    send('error', { error: err?.message ?? 'Gap fill failed' });
   }
   res.end();
 });

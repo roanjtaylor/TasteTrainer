@@ -4,8 +4,8 @@ import { useDomain } from './domain';
 
 // What Claude is told you're looking at (shared/chat.ts's ChatView).
 //
-// The world comes from the URL, so it needs no help. The dataset, the open item and the
-// filters in force are only known to the screens that own them, so those screens
+// The world comes from the URL, so it needs no help. The dataset and the open item
+// are only known to the screens that own them, so those screens
 // REPORT them here (`useReportChatView`) and the chat dock reads the result. A screen
 // reports for as long as it's mounted and withdraws what it said when it leaves — so
 // the dock can never go on claiming you're looking at a dataset you've navigated away

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { ChangeOp, Changeset } from '../../../../shared/chat';
-import type { EraGroup, Subtopic } from '../../../../shared/types';
+import { isMapOp, opGroup, type ChangeOp, type Changeset } from '../../../../shared/chat';
+import type { Subtopic } from '../../../../shared/types';
 import { Photo } from '../Photo';
 
 // The approval gate, as a diff (shared/chat.ts's Changeset). What a pull request is to
@@ -19,7 +19,13 @@ type Decide = (
 ) => Promise<void>;
 
 const open = (op: ChangeOp) => op.status === 'pending' || op.status === 'conflict';
-const tickedByDefault = (op: ChangeOp) => op.status === 'pending' && op.kind !== 'item.remove';
+/** Things that take something away: red in the diff, and never ticked for you. */
+const destructive = (op: ChangeOp) =>
+  op.kind === 'item.remove' ||
+  op.kind === 'dataset.delete' ||
+  (op.kind === 'map.draw' && op.replaces) ||
+  (op.kind === 'map.region' && op.action === 'remove');
+const tickedByDefault = (op: ChangeOp) => op.status === 'pending' && !destructive(op);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 export function summarise(ops: ChangeOp[]): string {
@@ -31,6 +37,8 @@ export function summarise(ops: ChangeOp[]): string {
     count('item.move') && plural(count('item.move'), 'move'),
     count('item.remove') && plural(count('item.remove'), 'removal'),
     count('dataset.update') && plural(count('dataset.update'), 'dataset change'),
+    count('dataset.delete') && plural(count('dataset.delete'), 'dataset deletion'),
+    ops.some(isMapOp) && plural(ops.filter(isMapOp).length, 'map change'),
   ].filter(Boolean);
   return parts.join(' · ');
 }
@@ -123,8 +131,6 @@ function NameListDiff({ label, before, after }: { label: string; before: string[
   );
 }
 
-const eraName = (g: EraGroup) => `${g.label} ${g.start}–${g.end - 1}`;
-
 // ---- One op ----
 
 function OpBody({ op, topics }: { op: ChangeOp; topics: Record<string, string> }) {
@@ -199,9 +205,6 @@ function OpBody({ op, topics }: { op: ChangeOp; topics: Record<string, string> }
           {op.renames && Object.entries(op.renames).map(([from, to]) => (
             <FieldDiff key={from} label="items in" before={from} after={to} />
           ))}
-          {op.patch.eraGroups && (
-            <NameListDiff label="eras" before={(op.before.eraGroups ?? []).map(eraName)} after={op.patch.eraGroups.map(eraName)} />
-          )}
         </div>
       );
     case 'dataset.create':
@@ -210,6 +213,75 @@ function OpBody({ op, topics }: { op: ChangeOp; topics: Record<string, string> }
           <p className="serif text-sm"><span className={`${ADD} px-1`}>+ New {op.domain} dataset: {op.topic}</span></p>
           <p className="mt-1">{op.description}</p>
           <p className="mt-1 flex flex-wrap gap-1">{op.subtopics.map((s) => <span key={s.name} className={`${ADD} px-1`}>{s.name}</span>)}</p>
+        </div>
+      );
+    case 'dataset.delete':
+      return (
+        <p className="serif text-sm">
+          <span className={`${DEL} px-1`}>− Delete the dataset {op.topic}</span>
+          <span className="ml-2 text-xs text-[var(--color-muted)]">only once it is empty</span>
+        </p>
+      );
+    case 'map.draw':
+      return (
+        <div className="space-y-1.5 text-xs leading-relaxed">
+          <p className="serif text-sm">
+            <span className={`${op.replaces ? DEL : ADD} px-1`}>{op.replaces ? 'Redraw the map from scratch' : '+ Draw the map'}</span>
+          </p>
+          <p className="text-[var(--color-muted)]">
+            Across: {op.axes.x.label} ({op.axes.x.low} → {op.axes.x.high}) · Up: {op.axes.y.label} ({op.axes.y.low} → {op.axes.y.high})
+          </p>
+          {op.regions.map((r) => {
+            const here = Object.entries(op.assignments).filter(([, regionId]) => regionId === r.id).map(([id]) => op.fieldNames[id] ?? id);
+            return (
+              <div key={r.id}>
+                <p><span className={`${ADD} px-1`}>{r.name}</span> <span className="text-[var(--color-muted)]">{r.description}</span></p>
+                {here.length > 0 && <p className="pl-2 text-[var(--color-muted)]">{here.join(' · ')}</p>}
+              </div>
+            );
+          })}
+        </div>
+      );
+    case 'map.region':
+      if (op.action === 'update' && op.before) {
+        const moved = op.before.x !== op.region.x || op.before.y !== op.region.y;
+        return (
+          <div className="space-y-1">
+            <p className="serif text-sm">Region: {op.before.name}</p>
+            {op.before.name !== op.region.name && <FieldDiff label="name" before={op.before.name} after={op.region.name} />}
+            {op.before.description !== op.region.description && <FieldDiff label="description" before={op.before.description} after={op.region.description} />}
+            {moved && <FieldDiff label="position" before={`${op.before.x}, ${op.before.y}`} after={`${op.region.x}, ${op.region.y}`} />}
+          </div>
+        );
+      }
+      return (
+        <div className="text-xs leading-relaxed">
+          <p className="serif text-sm">
+            <span className={`${op.action === 'remove' ? DEL : ADD} px-1`}>{op.action === 'remove' ? '−' : '+'} Region: {op.region.name}</span>
+          </p>
+          {op.action === 'add' && <p className="mt-1">{op.region.description}</p>}
+        </div>
+      );
+    case 'map.place':
+      return (
+        <p className="text-xs">
+          <span className="serif text-sm">{op.fieldName}</span>
+          {op.beforeRegionName && <span className={`ml-2 ${DEL} px-1`}>{op.beforeRegionName}</span>}
+          <span className="mx-1.5 text-[var(--color-muted)]">→</span>
+          <span className={`${ADD} px-1`}>{op.regionName}</span>
+        </p>
+      );
+    case 'map.ghost':
+      return (
+        <div className="text-xs leading-relaxed">
+          <p className="serif text-sm">
+            <span className={`${op.action === 'remove' ? DEL : ADD} px-1`}>
+              {op.action === 'remove' ? '− Drop proposed field' : '+ Missing field'}: {op.field.topic}
+            </span>
+            {op.regionName && <span className="ml-2 text-xs text-[var(--color-muted)]">in {op.regionName}</span>}
+          </p>
+          {op.action === 'add' && <p className="mt-1">{op.field.description}</p>}
+          {op.action === 'add' && op.field.why && <p className="mt-0.5 italic text-[var(--color-muted)]">{op.field.why}</p>}
         </div>
       );
   }
@@ -224,10 +296,10 @@ function OpRow({
   onTick: (next: boolean) => void;
   onForce: () => void;
 }) {
-  const edge =
-    op.kind === 'item.remove' ? 'border-l-red-400'
-    : op.kind === 'item.add' || op.kind === 'dataset.create' ? 'border-l-emerald-500'
-    : 'border-l-amber-400';
+  const adds =
+    op.kind === 'item.add' || op.kind === 'dataset.create' || op.kind === 'map.draw' ||
+    ((op.kind === 'map.region' || op.kind === 'map.ghost') && op.action === 'add');
+  const edge = destructive(op) ? 'border-l-red-400' : adds ? 'border-l-emerald-500' : 'border-l-amber-400';
   const settled = !open(op);
   return (
     <li className={`flex gap-2.5 border-l-2 bg-[var(--color-card)] py-2 pl-2.5 pr-2 ${edge} ${settled ? 'opacity-55' : ''}`}>
@@ -279,7 +351,7 @@ export function ChangesetReview({ changeset, decide, onClose }: { changeset: Cha
   const chosen = pending.filter((o) => ticked.has(o.id)).map((o) => o.id);
   const groups = useMemo(() => {
     const byDataset = new Map<string, ChangeOp[]>();
-    for (const op of changeset.ops) byDataset.set(op.datasetId, [...(byDataset.get(op.datasetId) ?? []), op]);
+    for (const op of changeset.ops) byDataset.set(opGroup(op), [...(byDataset.get(opGroup(op)) ?? []), op]);
     return [...byDataset];
   }, [changeset.ops]);
 
@@ -382,7 +454,7 @@ export function ChangesetCard({ changeset, decide, busy }: { changeset: Changese
   const pending = changeset.ops.filter(open);
   const applied = changeset.ops.filter((o) => o.status === 'applied');
   const failed = changeset.ops.filter((o) => o.status === 'failed');
-  const topics = [...new Set(changeset.ops.map((o) => changeset.datasetTopics[o.datasetId]).filter(Boolean))].join(', ');
+  const topics = [...new Set(changeset.ops.map((o) => changeset.datasetTopics[opGroup(o)]).filter(Boolean))].join(', ');
 
   let body: ReactNode;
   if (pending.length) {

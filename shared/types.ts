@@ -90,21 +90,6 @@ export interface Subtopic {
 }
 
 /**
- * A named period grouping the dataset's time axis (e.g. "Renaissance", 1400–1600).
- * AI-initialised per dataset like subtopics, but for ERA. Era is still derived from
- * each item's `year`; era-groups are just a meaningful grouping of that axis (2-data.md).
- * Ranges are contiguous and non-overlapping; `start` is inclusive, `end` exclusive.
- */
-export interface EraGroup {
-  /** Period name, e.g. "Baroque & Rococo" or "Mid-century". */
-  label: string;
-  /** Inclusive start year. */
-  start: number;
-  /** Exclusive end year. */
-  end: number;
-}
-
-/**
  * How a digital item's screenshot was actually obtained (7-software-design.md).
  *
  * Recorded because the two outcomes look identical once saved: a true archived
@@ -201,7 +186,7 @@ export interface Item {
   description: string;
   /** Web address of the picture. URL only — never downloaded (2-data.md #3). */
   image: string;
-  /** Year made/released. Drives the derived era. null if unknown. */
+  /** Year made/released. null if unknown. */
   year: number | null;
   /** Company / maker, where applicable (e.g. "Patek Philippe"). "" for works with no company. */
   brand: string;
@@ -278,12 +263,6 @@ export interface Dataset {
   description: string;
   /** The canonical, AI-initialised list of subtopics. */
   subtopics: Subtopic[];
-  /**
-   * Named era-periods grouping the time axis (AI-initialised). Optional: older
-   * datasets predate this field, and the web app derives a century-bucket fallback
-   * when it's absent (web/src/lib/format.ts: eraGroupsOf).
-   */
-  eraGroups?: EraGroup[];
   items: Item[];
   createdAt: string;
   updatedAt: string;
@@ -374,40 +353,17 @@ export interface ImageCandidate {
   note?: string;
 }
 
-/** A reported coverage gap from the "what's missing?" sweep. */
-export interface CoverageGap {
-  /** The axis that is thin/missing, e.g. "brand", "era", "region", "subtopic". */
-  axis: string;
-  /** Human-readable description of what's under-represented. */
-  detail: string;
-}
-
-/**
- * How an expansion reads the user's words. 'gaps' follows a sweep: the reported gaps
- * are the brief, and the user's text is a steer weighed against the curation rules.
- * 'direct' is the freeform review mode: no sweep, and the user's text IS the brief.
- */
-export type FillMode = 'gaps' | 'direct';
-
-// ---- The field map: one level ABOVE a dataset (8-field-map.md) ----
+// ---- The world map (8-field-map.md) ----
 //
-// "What's missing?" audits the inside of one field. This audits the SHELF: given
-// every field you've built in a world, what does the world's real map look like,
-// which fields are you blind to, and which boundaries are drawn wrong? It exists
-// because a map assembled one dataset at a time inherits the blind spots you had
-// when you named them — and nothing else in the app ever questions the naming.
-
-/** The compact inventory of one dataset handed to the field-map review. Item lists
- *  are deliberately NOT sent: this call reasons about the shape of the map, not the
- *  contents of any one field, and a whole shelf of items would swamp the prompt. */
-export interface FieldSummary {
-  topic: string;
-  description: string;
-  subtopics: string[];
-  itemCount: number;
-  /** Earliest–latest year across the field's dated items; null when nothing is dated. */
-  yearRange: { min: number; max: number } | null;
-}
+// A picture of a world: fields sit inside named
+// regions positioned on two meaningful axes, so WHERE a card sits means something,
+// and a field you don't have yet is a visible hole rather than a bullet point.
+//
+// The design turns on one constraint: a model asked to lay out a world twice gives
+// two different answers, and a map that rearranges itself can never be learned. So
+// the split is deliberate — **Claude decides meaning, code decides pixels**. Claude
+// is reliable at "is a watch held or inhabited"; it is not reliable at "x=340".
+// Everything below is the semantic half; `web/src/lib/mapLayout.ts` is the pixels.
 
 /** A field of this world you have no dataset for — the unknown-unknowns surface. */
 export interface MissingField {
@@ -417,60 +373,6 @@ export interface MissingField {
   /** Why this field matters to someone mapping this world — the teaching part. */
   why: string;
 }
-
-/** The kinds of structural fix the review can propose for existing fields. */
-export type BoundaryKind = 'merge' | 'split' | 'rename';
-
-/** A proposed structural fix to the fields you already have. */
-export interface BoundaryIssue {
-  kind: BoundaryKind;
-  /** The existing dataset topic(s) this concerns. */
-  fields: string[];
-  /** The concrete change, e.g. "Split into Road Bicycles and Track Bicycles". */
-  proposal: string;
-  why: string;
-}
-
-/** An existing field that is thin or skewed — a pointer to run its own gap sweep. */
-export interface ThinField {
-  topic: string;
-  detail: string;
-}
-
-/**
- * Applying an accepted `BoundaryIssue`: Claude works out the concrete result (which
- * fields end up with what shape, and where each item lands) and the server carries
- * it out — updating, creating and deleting datasets as the fix requires.
- */
-export interface BoundaryFixResult {
-  /** Every dataset left standing once the fix is applied, in its final shape. */
-  updated: Dataset[];
-  /** Topics of datasets that were fully absorbed elsewhere and removed. */
-  deletedTopics: string[];
-  /** One sentence from Claude on what it did. */
-  note: string;
-}
-
-/** The whole world-level review. */
-export interface FieldMapReview {
-  /** One paragraph on how this world actually divides — the shape to build toward. */
-  mapSummary: string;
-  missingFields: MissingField[];
-  boundaryIssues: BoundaryIssue[];
-  thinFields: ThinField[];
-}
-
-// ---- The world map: the review, made spatial (8-field-map.md) ----
-//
-// The review above is prose. This turns it into a picture: fields sit inside named
-// regions positioned on two meaningful axes, so WHERE a card sits means something,
-// and a field you don't have yet is a visible hole rather than a bullet point.
-//
-// The design turns on one constraint: a model asked to lay out a world twice gives
-// two different answers, and a map that rearranges itself can never be learned. So
-// the split is deliberate — **Claude decides meaning, code decides pixels**. Claude
-// is reliable at "is a watch held or inhabited"; it is not reliable at "x=340".
-// Everything below is the semantic half; `web/src/lib/mapLayout.ts` is the pixels.
 
 /**
  * One end-to-end dimension of a world, proposed once and then left alone.
@@ -512,20 +414,8 @@ export interface GhostField extends MissingField {
   regionId: string;
 }
 
-/**
- * A change to the map the review proposes and you accept or dismiss.
- *
- * Only the three kinds that can be applied mechanically and safely live here.
- * Anything bigger — merge two fields, split a dataset's items — stays advice in
- * `boundaryIssues`, because applying it would mean moving items around, and a
- * suggestion is not consent for that.
- */
-export type MapSuggestion =
-  | { id: string; kind: 'add-region'; why: string; region: MapRegion }
-  | { id: string; kind: 'move-field'; why: string; datasetId: string; toRegionId: string }
-  | { id: string; kind: 'rename-region'; why: string; regionId: string; name: string };
-
-/** One world's stored map. Durable: generated once, then amended, never redrawn. */
+/** One world's stored map. Durable: drawn once, then amended — and only ever through a
+ *  changeset you accepted (chat.ts's `map.*` ops), so it never rearranges itself. */
 export interface WorldMap {
   domain: Domain;
   axes: { x: MapAxis; y: MapAxis };
@@ -533,12 +423,6 @@ export interface WorldMap {
   /** Keyed by dataset id, or by a ghost's `key`. */
   placements: Record<string, Placement>;
   ghosts: GhostField[];
-  /** Proposed changes awaiting accept/dismiss. */
-  suggestions: MapSuggestion[];
-  /** The prose half of the last review that drew or amended this map — durable, so
-   *  reopening the review page shows the full analysis rather than just the map's
-   *  mechanical leftovers (ghosts, suggestions). Overwritten by the next review. */
-  lastReview?: FieldMapReview;
   updatedAt: string;
 }
 
@@ -584,7 +468,7 @@ export interface EmbedDataset {
 /** Which curation call a job wraps. Only calls that return a proposal for the user to
  *  review (rather than writing straight to storage themselves, like the field-map
  *  review or a boundary fix) need this. */
-export type JobKind = 'subtopics' | 'items' | 'gap-fill' | 'gaps';
+export type JobKind = 'subtopics' | 'items';
 
 export type JobStatus = 'running' | 'done' | 'error';
 
@@ -596,8 +480,7 @@ export interface Job {
   /** Shown in the resume banner, e.g. "Expand Watches dataset". */
   title: string;
   /** The exact request body the call was started with — enough to resume the screen
-   *  it belongs to (and, for a gap-fill job, to re-derive which dataset it targets:
-   *  there is no stored dataset id, see `slugifyTopic` on `input.topic`). */
+   *  it belongs to (there is no stored dataset id — see `slugifyTopic` on `input.topic`). */
   input: unknown;
   /** The latest progress line — the same text the live SSE stream shows. */
   progress: string;
@@ -606,77 +489,4 @@ export interface Job {
   error: string | null;
   createdAt: string;
   updatedAt: string;
-}
-
-// ---- The brain: how this app prompts Claude, as data ----
-// Served by GET /api/brain and drawn by the settings cog (web/components/BrainPanel.tsx).
-// The point is legibility: every Claude call the app makes, what goes into it, what
-// comes back, and what the code checks afterwards — so the setup can be read from the
-// top down, and a change to it can be judged against what it was before.
-
-/** One Claude call the app makes. The catalogue lives beside the code that makes the
- *  calls (server/src/services/brain.ts), and `runJson` refuses a call that isn't in
- *  it, so this list cannot silently fall behind the prompts. */
-export type BrainCallId =
-  | 'subtopics'
-  | 'periods'
-  | 'items'
-  | 'gaps'
-  | 'gap-fill'
-  | 'direct-request'
-  | 'field-map'
-  | 'boundary-shape'
-  | 'boundary-classify';
-
-/** The most recent real run of a call, held in server memory only — it resets when
- *  the server restarts, and says so in the UI rather than pretending to be history. */
-export interface BrainRun {
-  at: string;
-  durationMs: number;
-  ok: boolean;
-  error: string | null;
-  /** True when Claude's first answer wasn't valid JSON and the call was re-asked. */
-  retried: boolean;
-  systemChars: number;
-  promptChars: number;
-  /** The exact task prompt that was sent (the system prompt is the rulebook, shown
-   *  separately). */
-  prompt: string;
-}
-
-export interface BrainCall {
-  id: BrainCallId;
-  name: string;
-  /** Which level of the product the call works at. */
-  level: 'field' | 'world';
-  /** Where in the UI it's fired from. */
-  trigger: string;
-  /** What the call is for, in one or two sentences. */
-  purpose: string;
-  /** What the prompt is assembled from. */
-  inputs: string[];
-  /** The JSON shape asked for. */
-  output: string;
-  /** Sections of the rulebook this call leans on most (it is sent all of them). */
-  rules: string[];
-  /** What the code enforces around the model's answer, rather than trusting it. */
-  guardrails: string[];
-  /** Whether the result survives the browser closing (a durable `Job`). */
-  durable: boolean;
-  lastRun: BrainRun | null;
-}
-
-export interface BrainSetup {
-  model: string;
-  timeoutMs: number;
-  /** Whether this server has the proxy secret — without it every call below fails. */
-  proxyConfigured: boolean;
-  /** How every call's system prompt is assembled. */
-  systemTemplate: string;
-  /** The editable rulebook, verbatim (server/src/prompts/curation-rules.md). */
-  rules: string;
-  rulesPath: string;
-  calls: BrainCall[];
-  /** When this server process started — the horizon of every `lastRun`. */
-  serverStartedAt: string;
 }

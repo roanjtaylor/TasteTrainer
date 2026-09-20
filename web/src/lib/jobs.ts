@@ -16,7 +16,7 @@ import { api } from './api';
 
 let jobs: Job[] = [];
 /** True once the first fetch has answered — so a page deciding whether to resume a
- *  dataset's job on open (DatasetView, Curate) can tell "no job" from "not asked yet". */
+ *  dataset's job on open (Curate) can tell "no job" from "not asked yet". */
 let loaded = false;
 const listeners = new Set<() => void>();
 let pollTimer: ReturnType<typeof setTimeout> | undefined;
@@ -27,7 +27,9 @@ function notify(): void {
 
 async function fetchAll(): Promise<void> {
   try {
-    jobs = await api.listJobs();
+    // Rows of a retired kind (the old per-dataset review/expand jobs) may still sit in
+    // the table; nothing can open them any more, so they are never shown.
+    jobs = (await api.listJobs()).filter((j) => j.kind in JOB_STAGE);
     loaded = true;
     notify();
   } catch {
@@ -109,8 +111,8 @@ export async function cancelJob(id: string): Promise<void> {
 
 // ---- Grouping: one dataset, many steps ----
 //
-// A dataset moves through stages — map → research (Curate.tsx), or review → expand
-// (DatasetView.tsx) — and each stage is its own durable job row. To the user those
+// A dataset moves through stages — map → research (Curate.tsx) — and each stage is
+// its own durable job row. To the user those
 // are ONE thing happening to ONE dataset, so everything that shows jobs (the
 // notification gutter, a page deciding what to resume on open) keys them by dataset
 // and picks a single "current" job per key.
@@ -130,16 +132,13 @@ export function jobGroupKey(job: Job): string {
 export const JOB_STAGE: Record<JobKind, string> = {
   subtopics: 'Map',
   items: 'Research',
-  gaps: 'Review',
-  'gap-fill': 'Expand',
 };
 
 /** Later stages supersede earlier ones: an 'items' job's input carries the subtopics
- *  it was researched against, and a 'gap-fill' job's input carries the gaps it filled,
- *  so the later job is self-sufficient to resume from and the earlier one is just
- *  history. (Curate.tsx / DatasetView.tsx delete the earlier row outright once the
- *  later step's result is saved.) */
-const STAGE_RANK: Record<JobKind, number> = { subtopics: 0, gaps: 0, items: 1, 'gap-fill': 1 };
+ *  it was researched against, so the later job is self-sufficient to resume from and
+ *  the earlier one is just history. (Curate.tsx deletes the earlier row outright once
+ *  the later step's result is saved.) */
+const STAGE_RANK: Record<JobKind, number> = { subtopics: 0, items: 1 };
 
 /**
  * The one job that represents a dataset right now, out of every row keyed to it:
@@ -162,14 +161,11 @@ export function jobsFor(all: Job[], key: string): Job[] {
   return all.filter((j) => jobGroupKey(j) === key);
 }
 
-/** Where "View" lands for a job: 'subtopics' and 'items' are both steps of the same
- *  "new dataset" flow (Curate.tsx), which resumes either kind via its `?job=` param on
- *  the field's own research URL — the other kinds amend an existing, already-saved
- *  dataset, so they land on that dataset's own page instead. */
+/** Where "View" lands for a job: both kinds are steps of the same "new dataset" flow
+ *  (Curate.tsx), which resumes either via its `?job=` param on the field's own
+ *  research URL. */
 export function jobReviewPath(job: Job): string {
   const input = job.input as { topic?: string };
   const slug = slugifyTopic(input.topic ?? '');
-  return job.kind === 'items' || job.kind === 'subtopics'
-    ? `/${job.domain}/${slug}/new?job=${job.id}`
-    : `/${job.domain}/${slug}?job=${job.id}`;
+  return `/${job.domain}/${slug}/new?job=${job.id}`;
 }

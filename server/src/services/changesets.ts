@@ -22,14 +22,15 @@ import {
   saveDataset,
   saveWorldMap,
 } from '../storage.ts';
-import { absorbGhost } from './worldMap.ts';
+import { absorbGhost, applyMapOp, blankMap, removePlacement } from './worldMap.ts';
 import { canonicalSubtopic } from './itemHygiene.ts';
 import { newId, now } from '../util.ts';
 import { singleWordTopic, slugifyTopic } from '../../../shared/types.ts';
-import type { Dataset, Item } from '../../../shared/types.ts';
+import type { Dataset, Domain, Item, WorldMap } from '../../../shared/types.ts';
 import {
   ITEM_PATCH_KEYS,
   changesetStatusOf,
+  isMapOp,
   type ChangeOp,
   type Changeset,
   type ChangesetResult,
@@ -72,6 +73,7 @@ export async function openChangeset(threadId: string): Promise<Changeset | null>
 function datasetIdsOf(ops: ChangeOp[]): string[] {
   const ids = new Set<string>();
   for (const op of ops) {
+    if (isMapOp(op)) continue;
     if (op.kind !== 'dataset.create') ids.add(op.datasetId);
     if (op.kind === 'item.move') ids.add(op.toDatasetId);
   }
@@ -102,6 +104,21 @@ export async function project(cs: Changeset | null, extraDatasetIds: string[] = 
     }
   }
   return ws;
+}
+
+/** A world's map as it would be if every pending map op were accepted — what the next
+ *  map proposal is validated against. Same best-guess rule as `project`. */
+export async function projectMap(cs: Changeset | null, domain: Domain): Promise<WorldMap | null> {
+  let map = await getWorldMap(domain);
+  for (const op of cs?.ops ?? []) {
+    if (op.status !== 'pending' || !isMapOp(op) || op.domain !== domain) continue;
+    try {
+      map = applyMapOp(map, op);
+    } catch {
+      /* see `project` */
+    }
+  }
+  return map && map.regions.length ? map : null;
 }
 
 // ---- What each op means ----
@@ -179,12 +196,12 @@ export function applyOp(ws: Workspace, op: ChangeOp, force = false): UndoRecord 
     case 'dataset.update': {
       const ds = requireDataset(ws, op.datasetId);
       const before: DatasetPatch = {};
-      for (const key of ['topic', 'description', 'subtopics', 'eraGroups'] as const) {
+      for (const key of ['topic', 'description', 'subtopics'] as const) {
         if (!(key in op.patch)) continue;
         if (!force && !same(ds[key], op.before[key])) {
           throw new OpError('conflict', `${ds.topic}'s ${key} changed after Claude proposed this.`);
         }
-        (before as any)[key] = ds[key] ?? (key === 'eraGroups' ? [] : '');
+        (before as any)[key] = ds[key] ?? '';
         (ds as any)[key] = key === 'topic' ? singleWordTopic(op.patch.topic as string) : op.patch[key];
       }
       const itemSubtopics: Record<string, string> = {};
@@ -206,13 +223,27 @@ export function applyOp(ws: Workspace, op: ChangeOp, force = false): UndoRecord 
         topic: singleWordTopic(op.topic),
         description: op.description,
         subtopics: op.subtopics,
-        eraGroups: op.eraGroups,
         items: [],
         createdAt: now(),
         updatedAt: now(),
       });
       return { opId: op.id, kind: 'dataset.create', datasetId: op.datasetId };
     }
+
+    case 'dataset.delete': {
+      const ds = requireDataset(ws, op.datasetId);
+      // Never a way to lose items: they are moved or removed first, as ops of their own
+      // that the user saw and accepted.
+      if (ds.items.length) {
+        throw new OpError('failed', `${ds.topic} still holds ${ds.items.length} item${ds.items.length === 1 ? '' : 's'} — move or remove them first.`);
+      }
+      ws.delete(ds.id);
+      return { opId: op.id, kind: 'dataset.delete', datasetId: ds.id, dataset: ds };
+    }
+
+    default:
+      // Map ops don't touch datasets — `applyChangeset` runs them through applyMapOp.
+      throw new OpError('failed', 'Not a dataset change.');
   }
 }
 
@@ -302,10 +333,40 @@ export function applyChangeset(
     const slugBefore = new Map([...ws.values()].map((ds) => [ds.id, slugifyTopic(ds.topic)]));
 
     const touched = new Set<string>();
-    const undoByOp = new Map<string, UndoRecord>();
+    const undos: UndoRecord[] = [];
+    const deleted: Array<{ op: ChangeOp; id: string; slug: string; topic: string }> = [];
+
+    // Maps are loaded up front and written once at the end, like datasets. The first
+    // time a world's map is touched, the whole map is snapshotted as that op's undo.
+    const maps = new Map<Domain, WorldMap | null>();
+    const dirtyMaps = new Set<Domain>();
+    for (const op of selected) {
+      if ('domain' in op && !maps.has(op.domain)) maps.set(op.domain, await getWorldMap(op.domain).catch(() => null));
+    }
+    const snapshotted = new Set<Domain>();
+    const writeMap = (opId: string, domain: Domain, next: WorldMap) => {
+      if (!snapshotted.has(domain)) {
+        snapshotted.add(domain);
+        undos.push({ opId, kind: 'map', domain, before: maps.get(domain) ?? null });
+      }
+      maps.set(domain, next);
+      dirtyMaps.add(domain);
+    };
 
     for (const op of selected) {
       try {
+        if (isMapOp(op)) {
+          let next: WorldMap;
+          try {
+            next = applyMapOp(maps.get(op.domain) ?? null, op);
+          } catch (err: any) {
+            throw new OpError('failed', err?.message ?? 'The map has changed since this was proposed.');
+          }
+          writeMap(op.id, op.domain, next);
+          op.status = 'applied';
+          delete op.problem;
+          continue;
+        }
         // Dataset names are unique across the whole shelf (the slug column), and the
         // database's own complaint about that is not something to show anyone.
         const newTopic =
@@ -316,7 +377,22 @@ export function applyChangeset(
             throw new OpError('failed', `A dataset called ${clash.topic} already exists.`);
           }
         }
-        undoByOp.set(op.id, applyOp(ws, op, opts.force === true));
+        const undo = applyOp(ws, op, opts.force === true);
+        if (undo.kind === 'dataset.delete') {
+          deleted.push({
+            op,
+            id: undo.datasetId,
+            slug: slugBefore.get(undo.datasetId) ?? slugifyTopic(undo.dataset.topic),
+            topic: undo.dataset.topic,
+          });
+          const map = maps.get(undo.dataset.domain);
+          const without = map && removePlacement(map, undo.datasetId);
+          if (map && without) {
+            undo.regionId = map.placements[undo.datasetId]?.regionId;
+            writeMap(op.id, undo.dataset.domain, without);
+          }
+        }
+        undos.push(undo);
         op.status = 'applied';
         delete op.problem;
         touched.add(op.datasetId);
@@ -327,7 +403,17 @@ export function applyChangeset(
       }
     }
 
+    /** The write behind an op didn't happen after all: say so, and forget its undo. */
+    const fail = (op: ChangeOp, problem: string) => {
+      op.status = 'failed';
+      op.problem = problem;
+      for (let i = undos.length - 1; i >= 0; i -= 1) {
+        if (undos[i].opId === op.id && undos[i].kind !== 'map') undos.splice(i, 1);
+      }
+    };
+
     const updated: Dataset[] = [];
+    let saveFailed = false;
     for (const id of touched) {
       const ds = ws.get(id);
       if (!ds) continue;
@@ -335,14 +421,45 @@ export function applyChangeset(
         updated.push(await saveDataset(ds, slugBefore.get(id)));
       } catch (err: any) {
         // The write itself failed: nothing in this dataset actually changed.
+        saveFailed = true;
         for (const op of selected) {
+          if (isMapOp(op)) continue;
           const mine = op.datasetId === id || (op.kind === 'item.move' && op.toDatasetId === id);
-          if (mine && op.status === 'applied') {
-            op.status = 'failed';
-            op.problem = err?.message ?? 'The save failed.';
-            undoByOp.delete(op.id);
-          }
+          if (mine && op.status === 'applied') fail(op, err?.message ?? 'The save failed.');
         }
+      }
+    }
+
+    // Deletions go last, and not at all if any save above failed: a dataset emptied by
+    // moves must not disappear while its items' new home didn't get written.
+    const deletedTopics: string[] = [];
+    for (const d of deleted) {
+      if (d.op.status !== 'applied') continue;
+      if (saveFailed) {
+        fail(d.op, 'Another save failed, so nothing was deleted.');
+        continue;
+      }
+      try {
+        await deleteDataset(d.id, d.slug);
+        deletedTopics.push(d.topic);
+      } catch (err: any) {
+        fail(d.op, err?.message ?? 'The delete failed.');
+      }
+    }
+
+    for (const domain of [...dirtyMaps]) {
+      const map = maps.get(domain);
+      try {
+        if (map) await saveWorldMap(map);
+      } catch (err: any) {
+        for (const op of selected) {
+          if (isMapOp(op) && op.domain === domain && op.status === 'applied') fail(op, err?.message ?? 'The map could not be saved.');
+        }
+        for (let i = undos.length - 1; i >= 0; i -= 1) {
+          const u = undos[i];
+          if (u.kind === 'map' && u.domain === domain) undos.splice(i, 1);
+        }
+        dirtyMaps.delete(domain);
       }
     }
 
@@ -353,17 +470,25 @@ export function applyChangeset(
       try {
         const map = await getWorldMap(op.domain);
         const absorbed = map && absorbGhost(map, op.datasetId, singleWordTopic(op.topic));
-        if (absorbed) await saveWorldMap(absorbed);
-      } catch { /* the next review will place it */ }
+        if (absorbed) {
+          await saveWorldMap(absorbed);
+          dirtyMaps.add(op.domain);
+        }
+      } catch { /* it still shows, in the map's first region, until it is placed */ }
     }
 
-    cs.undo.push(...selected.map((op) => undoByOp.get(op.id)).filter((u): u is UndoRecord => !!u));
+    cs.undo.push(...undos);
     for (const ds of updated) cs.datasetTopics[ds.id] = ds.topic;
     cs.status = changesetStatusOf(cs.ops);
     cs.updatedAt = now();
     await saveChangeset(cs);
-    return { changeset: cs, updated, deletedTopics: [] };
+    return { changeset: cs, updated, deletedTopics, maps: await currentMaps(dirtyMaps) };
   });
+}
+
+async function currentMaps(domains: Iterable<Domain>): Promise<WorldMap[]> {
+  const maps = await Promise.all([...domains].map((d) => getWorldMap(d).catch(() => null)));
+  return maps.filter((m): m is WorldMap => !!m);
 }
 
 /**
@@ -378,6 +503,7 @@ export function revertChangeset(threadId: string, changesetId: string): Promise<
     const records = [...cs.undo].reverse();
     const ids = new Set<string>();
     for (const u of records) {
+      if (u.kind === 'map' || u.kind === 'dataset.delete') continue;
       ids.add(u.datasetId);
       if (u.kind === 'item.move') ids.add(u.toDatasetId);
     }
@@ -385,8 +511,23 @@ export function revertChangeset(threadId: string, changesetId: string): Promise<
     const slugBefore = new Map([...ws.values()].map((ds) => [ds.id, slugifyTopic(ds.topic)]));
     const touched = new Set<string>();
     const created: string[] = [];
+    const restoredMaps = new Set<Domain>();
 
     for (const u of records) {
+      if (u.kind === 'map') {
+        // Newest first, so the last one written for a world is its oldest snapshot.
+        await saveWorldMap(structuredClone(u.before ?? blankMap(u.domain)));
+        restoredMaps.add(u.domain);
+        continue;
+      }
+      if (u.kind === 'dataset.delete') {
+        // Put back only if the name hasn't been taken since.
+        if (!(await getDataset(u.datasetId)) && !(await getDataset(slugifyTopic(u.dataset.topic)))) {
+          ws.set(u.datasetId, structuredClone(u.dataset));
+          touched.add(u.datasetId);
+        }
+        continue;
+      }
       const ds = ws.get(u.datasetId);
       if (!ds) continue;
       touched.add(ds.id);
@@ -444,6 +585,6 @@ export function revertChangeset(threadId: string, changesetId: string): Promise<
     cs.status = changesetStatusOf(cs.ops, true);
     cs.updatedAt = now();
     await saveChangeset(cs);
-    return { changeset: cs, updated, deletedTopics };
+    return { changeset: cs, updated, deletedTopics, maps: await currentMaps(restoredMaps) };
   });
 }

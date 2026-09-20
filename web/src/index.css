@@ -38,8 +38,8 @@ h3,
   letter-spacing: -0.01em;
 }
 
-/* A slim, on-theme scrollbar for panels that scroll their own content (the settings
-   panel's right-hand drawer, BrainPanel.tsx) — the default OS scrollbar reads as a
+/* A slim, on-theme scrollbar for panels that scroll their own content (the
+   chat dock, the changeset review) — the default OS scrollbar reads as a
    jarring system chrome next to the gallery-wall design everywhere else. */
 .custom-scroll {
   scrollbar-width: thin;

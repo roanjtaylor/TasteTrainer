@@ -4,7 +4,6 @@ import {
   singleWordTopic,
   slugifyTopic,
   type Domain,
-  type EraGroup,
   type ProposedItem,
   type Subtopic,
 } from '../../../shared/types';
@@ -20,6 +19,8 @@ import { ImagePicker } from '../components/ImagePicker';
 import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
 import { PersonalNew } from './PersonalNew';
+import { useChatView } from '../lib/chatView';
+import { WORLD_PROMPTS } from '../components/chat/ChatDock';
 
 // Route element for both "/:domain/new" (no field chosen yet) and "/:domain/:slug/new"
 // (a field's own dedicated research URL — see initialise() below for how a session
@@ -44,6 +45,7 @@ export function CurateRoute() {
 function Curate() {
   const navigate = useNavigate();
   const domain = useDomain();
+  const { ask } = useChatView();
   const { slug: routeSlug } = useParams();
   // The shared job cache (lib/jobs.ts): read here so opening this field's URL shows
   // whatever step of its research is current — running or finished — without a
@@ -58,10 +60,6 @@ function Curate() {
   const [count, setCount] = useState(12);
 
   const [subtopics, setSubtopics] = useState<Subtopic[]>([]);
-  // Era-periods are decided BEFORE the items, not after saving. They become an explicit
-  // per-era quota on the research call, which is what actually stops a set from
-  // clustering in the era the model knows best (7-software-design.md).
-  const [eraGroups, setEraGroups] = useState<EraGroup[]>([]);
   const [items, setItems] = useState<ProposedItem[]>([]);
 
   const [busy, setBusy] = useState<null | string>(null);
@@ -167,9 +165,8 @@ function Curate() {
         setDescription(input.description);
         mapJobIdRef.current = id;
         if (job.status === 'done') {
-          const result = job.result as { subtopics: Subtopic[]; suggestedCount: number; eraGroups: EraGroup[] };
+          const result = job.result as { subtopics: Subtopic[]; suggestedCount: number };
           setSubtopics(result.subtopics ?? []);
-          setEraGroups(result.eraGroups ?? []);
           setCount(result.suggestedCount ?? 12);
         }
       } else {
@@ -178,12 +175,10 @@ function Curate() {
           description: string;
           subtopics: Subtopic[];
           count: number;
-          eraGroups?: EraGroup[];
         };
         setTopic(input.topic);
         setDescription(input.description);
         setSubtopics(input.subtopics ?? []);
-        setEraGroups(input.eraGroups ?? []);
         setCount(input.count ?? 12);
         jobIdRef.current = id;
         if (job.status === 'done') {
@@ -269,9 +264,8 @@ function Curate() {
     }
   }
 
-  // Mapping a field means both of its axes: the subtopics it divides into, and the
-  // periods its history divides into. Both are settled before any item is researched,
-  // so the research call is filling a known frame rather than inventing one.
+  // Mapping a field means settling the subtopics it divides into before any item is
+  // researched, so the research call is filling a known frame rather than inventing one.
   async function initialise() {
     if (!topic.trim()) return;
     // First call for this topic: move off the shared "/:domain/new" URL onto this
@@ -301,13 +295,6 @@ function Curate() {
       setSubtopics(res.subtopics ?? []);
       // Claude sizes the collection to the field; the user can still override below.
       setCount(res.suggestedCount ?? 12);
-      // Defensive `?? []`: `eraGroups` and `jobId` were added to this payload later
-      // than `subtopics` was, and the server runs under plain `tsx` (no watch) — a
-      // server process started before that change still answers with the old shape,
-      // and `eraGroups.length` in the render below would then throw and blank the
-      // whole page. Missing periods just mean the research call falls back to its
-      // spread-across-eras behaviour, which is what it always did.
-      setEraGroups(res.eraGroups ?? []);
       const jobId = res.jobId ?? null;
       if (previousMapJob && jobId && previousMapJob !== jobId) {
         api.deleteJob(previousMapJob).catch(() => {});
@@ -332,7 +319,6 @@ function Curate() {
             subtopics,
             count,
             domain: dom,
-            eraGroups,
             existingItems: more ? (items as any) : [],
           },
           onProgress,
@@ -366,24 +352,15 @@ function Curate() {
       setError('A one-line description is required before saving.');
       return;
     }
-    const ds = await run('Saving…', topic.trim(), async () => {
-      const created = await createDataset({
+    const ds = await run('Saving…', topic.trim(), () =>
+      createDataset({
         topic: topic.trim(),
         description: description.trim(),
         subtopics,
         items,
         domain: dom,
-      });
-      // The periods that steered the research are the ones the dataset is born with —
-      // so the Era filter reads the same divisions the items were selected to fill.
-      // No AI call here any more; they were settled back at "Map the field".
-      if (!eraGroups.length) return created;
-      try {
-        return await saveDataset(created.id, { eraGroups });
-      } catch {
-        return created;
-      }
-    });
+      }),
+    );
     if (ds) {
       if (mapJobIdRef.current) {
         api.deleteJob(mapJobIdRef.current).catch(() => {});
@@ -426,11 +403,10 @@ function Curate() {
         <section className="rounded-xl border border-[var(--color-line)] bg-[var(--color-wall-soft)] p-5">
           <p className="text-sm text-[var(--color-muted)]">
             Not sure what to study?{' '}
-            <Link to={`/${dom}/review`} className="text-[var(--color-accent)] underline">
-              Check this world
-            </Link>{' '}
-            — it maps the whole {dom} world and names the fields you don't have yet, each
-            ready to start from here.
+            <button onClick={() => ask(WORLD_PROMPTS.review)} className="text-[var(--color-accent)] underline">
+              Ask Claude to review this world
+            </button>{' '}
+            — it maps the whole {dom} world and proposes the fields you don't have yet.
           </p>
         </section>
       )}
@@ -517,31 +493,6 @@ function Curate() {
               </div>
             ))}
           </div>
-          {/* The field's other axis. Shown because it is now load-bearing: these
-              periods become a per-era quota on the research call below, so what you
-              see here is the shape the collection will actually have. */}
-          {eraGroups.length > 0 && (
-            <div className="pt-2">
-              <h3 className="text-sm font-medium">Periods</h3>
-              <p className="mt-0.5 text-sm text-[var(--color-muted)]">
-                The items will be spread evenly across these — roughly{' '}
-                {Math.max(1, Math.floor(count / eraGroups.length))} per period.
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {eraGroups.map((g) => (
-                  <span
-                    key={`${g.label}-${g.start}`}
-                    className="rounded-full border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-1 text-sm"
-                  >
-                    {g.label}{' '}
-                    <span className="text-[var(--color-muted)]">
-                      {g.start}–{g.end - 1}
-                    </span>
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
           <div className="flex flex-wrap items-end gap-3 pt-1">
             <label className="block">
               <span className="text-sm text-[var(--color-muted)]">How many items</span>

@@ -12,8 +12,8 @@ import { layoutWorld, type LaidOutCard, type MapCard } from '../lib/mapLayout';
 //
 // The map is READ-ONLY. Cards used to be draggable, macOS-desktop style, with the
 // positions you chose stored and honoured. That's gone: where a card sits is derived
-// entirely from which region it belongs to, so the map says what the review thinks and
-// nothing else. Moving a field means changing which region it's in — a statement about
+// entirely from which region it belongs to, so the map says what you and Claude agreed
+// and nothing else. Moving a field means changing which region it's in — a statement about
 // the world — not nudging a pixel.
 
 export function WorldMapCanvas({ map, cards }: { map: WorldMap; cards: MapCard[] }) {
@@ -130,7 +130,7 @@ function MapCardView({ card }: { card: LaidOutCard }) {
     'absolute flex items-center justify-center overflow-hidden rounded-full px-3 text-center shadow-sm';
 
   // Ghosts are dashed and muted — a hole in the map, not a thing in it. Clicking one
-  // opens the curate flow already filled in from the review that proposed it.
+  // opens the curate flow already filled in from the proposal Claude made.
   return (
     <Link
       to={card.href}

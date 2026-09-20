@@ -21,6 +21,14 @@ const EFFORT_KEY = 'tt:chat:effort';
 const stored = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
 const store = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* fine */ } };
 
+/** The world-level asks, shared with the shelf's own buttons (pages/Home.tsx). */
+export const WORLD_PROMPTS = {
+  draw: 'Draw the map of this world: choose the two axes and the regions, place every dataset, and mark the fields I’m missing.',
+  review:
+    'Review this world: is the map still right, which fields am I missing (favour the ones I wouldn’t think of), and which datasets should be merged, split or renamed? Propose the changes.',
+  fields: 'Which fields make up this world? Propose the datasets I should start with, then draw its map.',
+};
+
 /** Starting points, chosen by what's on screen. Plain prompts — each does nothing a
  *  typed message couldn't, which is the point: they replace the old fixed Review
  *  buttons with text you can read, send as-is, or edit first. */
@@ -40,9 +48,11 @@ function presetsFor(view: ChatView): string[] {
       'Fill in any thin or missing descriptions.',
     ];
   }
+  if (view.domain === 'personal') return ['Which of my datasets look thin or lopsided?'];
   if (view.domain) {
     return [
-      'Which fields is this world missing? Favour the ones I wouldn’t think of.',
+      WORLD_PROMPTS.review,
+      WORLD_PROMPTS.draw,
       'Which of my datasets look thin or lopsided?',
     ];
   }
@@ -106,7 +116,7 @@ export function ChatDock() {
   const effectiveView = useMemo<ChatView>(() => {
     const v: ChatView = { ...view };
     if (dropped.item || dropped.dataset) { delete v.itemId; delete v.itemName; }
-    if (dropped.dataset) { delete v.datasetId; delete v.datasetTopic; delete v.filters; }
+    if (dropped.dataset) { delete v.datasetId; delete v.datasetTopic; }
     return v;
   }, [view, dropped]);
 

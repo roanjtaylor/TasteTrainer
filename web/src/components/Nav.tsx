@@ -4,7 +4,6 @@ import { useDomain } from '../lib/domain';
 import { useDatasetList } from '../lib/data';
 import { NavActionsSlot } from '../lib/navActions';
 import { AccountButton } from './AccountButton';
-import { BrainButton } from './BrainPanel';
 import { EmbedTesterButton } from './EmbedTesterButton';
 
 // Centred pill-style top nav — a floating rounded bar (6-ui.md), not a full-width
@@ -33,17 +32,12 @@ export function Nav() {
     const second = segments[1];
     if (second === 'new') {
       crumbs.push({ label: 'New dataset', to: `/${domain}/new` });
-    } else if (second === 'review') {
-      crumbs.push({ label: 'Review', to: `/${domain}/review` });
     } else if (second) {
       // Prefer the field's actual name; fall back to un-slugifying the URL, which is
       // right often enough to never show a placeholder while the list loads.
       const match = (datasets ?? []).find((d) => slugifyTopic(d.topic) === second);
       const label = match?.topic ?? second.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase());
       crumbs.push({ label, to: `/${domain}/${second}` });
-      if (segments[2] === 'filters') {
-        crumbs.push({ label: 'Filters', to: `/${domain}/${second}/filters` });
-      }
     }
   }
 
@@ -87,14 +81,12 @@ export function Nav() {
             here, but it counted finished-but-undismissed jobs too and read as a
             confusing backlog rather than activity. */}
 
-        {/* The settings cog's narrow-window home, and the embed tester and account
-            control just to its left (their own fixed homes sit above `xl` — see
-            main.tsx). At `xl`+ all three move out to the window's right margin; below
-            that there's no margin, and fixed buttons would sit on top of the nav
-            actions to the right of this pill. */}
+        {/* The embed tester's and account control's narrow-window home (their own fixed
+            homes sit above `xl` — see main.tsx). At `xl`+ both move out to the window's
+            right margin; below that there's no margin, and fixed buttons would sit on
+            top of the nav actions to the right of this pill. */}
         <EmbedTesterButton className="flex hover:bg-[var(--color-wall-soft)] xl:hidden" />
         <AccountButton className="flex hover:bg-[var(--color-wall-soft)] xl:hidden" />
-        <BrainButton className="flex hover:bg-[var(--color-wall-soft)] xl:hidden" />
         </nav>
         {/* The page owning the current route portals its own action buttons in here
             (lib/navActions.tsx), so they sit inline with the bar instead of on a row

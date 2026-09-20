@@ -1,15 +1,8 @@
 import type {
-  BoundaryFixResult,
-  BrainSetup,
-  BoundaryKind,
-  CoverageGap,
   Dataset,
   DatasetSummary,
   Domain,
   EmbedDataset,
-  EraGroup,
-  FieldMapReview,
-  FillMode,
   ImageCandidate,
   ImageKind,
   Item,
@@ -154,10 +147,10 @@ export const api = {
   getEmbed: (id: string) => http<EmbedDataset>(`/api/embed/${id}`),
 
   // Curation — these stream live progress (onProgress) and resolve with the result.
-  // "Map the field": subtopics AND the era-periods that steer research, in one durable
+  // "Map the field": the subtopics, as one durable
   // call (see jobId below) — the client treats the two as a single step.
   proposeSubtopics: (topic: string, description: string, domain: Domain, onProgress?: OnProgress) =>
-    streamSSE<{ subtopics: Subtopic[]; suggestedCount: number; eraGroups: EraGroup[]; jobId: string }>(
+    streamSSE<{ subtopics: Subtopic[]; suggestedCount: number; jobId: string }>(
       '/api/curation/subtopics',
       { topic, description, domain },
       onProgress,
@@ -169,8 +162,6 @@ export const api = {
       subtopics: Subtopic[];
       count: number;
       domain: Domain;
-      /** The field's named periods, turned into an explicit per-era quota server-side. */
-      eraGroups?: EraGroup[];
       existingItems?: Item[];
     },
     onProgress?: OnProgress,
@@ -190,91 +181,9 @@ export const api = {
     body,
     onProgress,
   ),
-  // "Check this world" — the world-level map review. The server assembles the shelf
-  // inventory itself, so the only input is which world to audit.
-  // Returns the review AND the map it merged into: one press both audits the world
-  // and updates its map. `map` is null if the map couldn't be saved (e.g. migration
-  // 003 not applied) — the review half still works.
-  // `redraw` discards the stored map and starts over — the escape hatch from a first
-  // draw whose axes or regions turned out badly, since nothing else can change them.
-  reviewFieldMap: (domain: Domain, onProgress?: OnProgress, redraw = false) =>
-    streamSSE<FieldMapReview & { map: WorldMap | null }>(
-      '/api/curation/field-map',
-      { domain, redraw },
-      onProgress,
-    ),
-  // "Accept changes" on a boundary issue — hands the review's own wording straight
-  // back to the server, which resolves it to the actual dataset(s) and asks Claude to
-  // work out the concrete fix. `fields` must be exactly `BoundaryIssue.fields`.
-  applyBoundaryFix: (
-    body: { domain: Domain; kind: BoundaryKind; fields: string[]; proposal: string; why: string },
-    onProgress?: OnProgress,
-  ) =>
-    streamSSE<BoundaryFixResult & { map: WorldMap | null }>(
-      '/api/curation/boundary-fix',
-      body,
-      onProgress,
-    ),
-  findGaps: (
-    body: {
-      topic: string;
-      description: string;
-      subtopics: Subtopic[];
-      items: Item[];
-      domain: Domain;
-      // The field's named periods, so a reported gap can be phrased as "the Post-War
-      // period is thin" rather than a bare year range.
-      eraGroups?: EraGroup[];
-      // An area to read more closely — the sweep still covers the whole field.
-      focus?: string;
-    },
-    onProgress?: OnProgress,
-    // See generateItems' jobId above.
-  ) => streamSSE<{ gaps: CoverageGap[]; suggestedCount: number; jobId: string }>(
-    '/api/curation/gaps',
-    body,
-    onProgress,
-  ),
-  fillGaps: (
-    body: {
-      topic: string;
-      description: string;
-      subtopics: Subtopic[];
-      items: Item[];
-      gaps: CoverageGap[];
-      count: number;
-      feedback: string;
-      // 'direct' makes `feedback` the brief itself rather than a steer on the gaps.
-      mode?: FillMode;
-      domain: Domain;
-      eraGroups?: EraGroup[];
-    },
-    onProgress?: OnProgress,
-  ) =>
-    streamSSE<{
-      items: ProposedItem[];
-      note: string;
-      // What the server's hygiene pass had to correct: proposals dropped as repeats,
-      // and proposals whose subtopic was off-list and now needs one picked.
-      duplicates: number;
-      unsetSubtopics: number;
-      // See generateItems' jobId above.
-      jobId: string;
-    }>('/api/curation/gap-fill', body, onProgress),
-
-  // The world map (8-field-map.md). Generating it belongs to the review above; these
-  // are the map as an object you own — where you dragged things, and which of the
-  // review's suggestions you took.
+  // The world map (8-field-map.md). Read-only here: it changes only by accepting a
+  // changeset Claude staged in the chat.
   getWorldMap: (domain: Domain) => http<{ map: WorldMap | null }>(`/api/map/${domain}`),
-  updateWorldMap: (
-    domain: Domain,
-    body: {
-      regionNames?: Record<string, string>;
-      axes?: WorldMap['axes'];
-      accept?: string;
-      dismiss?: string;
-    },
-  ) => http<{ map: WorldMap }>(`/api/map/${domain}`, { method: 'PUT', body: JSON.stringify(body) }),
 
   // Images
   searchImages: (q: string) =>
@@ -331,10 +240,6 @@ export const api = {
     http<Job[]>(`/api/curation/jobs${domain ? `?domain=${domain}` : ''}`),
   getJob: (id: string) => http<Job>(`/api/curation/jobs/${id}`),
   deleteJob: (id: string) => http<void>(`/api/curation/jobs/${id}`, { method: 'DELETE' }),
-
-  // The settings cog (components/BrainPanel.tsx): how the server prompts Claude —
-  // model, rulebook, every call and its last real run. Read-only.
-  getBrain: () => http<BrainSetup>('/api/brain'),
 
   // The Claude chat (server/src/routes/chat.ts). Sending returns as soon as the turn
   // has STARTED; the reply is watched with `watchChat` below.

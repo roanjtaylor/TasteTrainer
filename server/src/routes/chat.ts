@@ -13,7 +13,7 @@ import { isRunning, liveThread, startRun, stopRun, subscribe } from '../services
 import { applyChangeset, rejectOps, revertChangeset } from '../services/changesets.ts';
 import { newId, now } from '../util.ts';
 import { optionalDomain } from '../../../shared/types.ts';
-import { CHAT_EFFORTS } from '../../../shared/chat.ts';
+import { CHAT_EFFORTS, isMapOp } from '../../../shared/chat.ts';
 import type {
   Changeset,
   ChatEffort,
@@ -61,7 +61,7 @@ async function loadChangeset(req: Request, res: Response): Promise<Changeset | n
   if (!cs) { res.status(404).json({ error: 'Changeset not found.' }); return null; }
   if (!req.user) {
     const thread = await getThread(cs.threadId);
-    const ids = [...new Set(cs.ops.flatMap((o) => (o.kind === 'item.move' ? [o.datasetId, o.toDatasetId] : [o.datasetId])))];
+    const ids = [...new Set(cs.ops.flatMap((o) => (isMapOp(o) ? [] : o.kind === 'item.move' ? [o.datasetId, o.toDatasetId] : [o.datasetId])))];
     const datasets = await Promise.all(ids.map((id) => getDataset(id)));
     const personal =
       thread?.domain === 'personal' ||

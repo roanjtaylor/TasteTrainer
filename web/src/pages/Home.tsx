@@ -6,6 +6,8 @@ import { prefetchDataset, useDatasetList, useWorldMap } from '../lib/data';
 import { cardsFor } from '../lib/mapLayout';
 import { WorldMapCanvas, WorldMapSections } from '../components/WorldMapCanvas';
 import { NavActions } from '../lib/navActions';
+import { useChatView } from '../lib/chatView';
+import { WORLD_PROMPTS } from '../components/chat/ChatDock';
 
 // Datasets home — one world's fields (6-ui.md, 7-software-design.md), addressed by
 // the world: /physical, /digital.
@@ -20,10 +22,12 @@ import { NavActions } from '../lib/navActions';
 export function Home() {
   const domain = useDomain();
   const { data: datasets, loading, error } = useDatasetList(domain);
-  // The personal world is never reviewed by Claude (9-personal-and-auth.md), so it has
-  // no map to fetch and none of the review's entry points — it is always the plain grid.
+  // The personal world has no map (9-personal-and-auth.md) — it is always the plain grid.
   const curated = !!domain && isCuratedDomain(domain);
   const { data: map } = useWorldMap(curated ? domain : null);
+  // Mapping and reviewing a world is Claude's work: these buttons just open the dock
+  // with the ask written out, for you to send or reword (lib/chatView.tsx).
+  const { ask } = useChatView();
 
   const [narrow, setNarrow] = useState(
     () => typeof window !== 'undefined' && window.innerWidth < 700,
@@ -65,8 +69,8 @@ export function Home() {
     // wanted a heading of its own.
     <div>
       {!curated && (
-        // The researched worlds start a field from the map's gaps or the review; here
-        // there is neither, so the shelf itself needs the way in.
+        // The researched worlds start a field from the map's gaps or by asking Claude;
+        // here there is no map, so the shelf itself needs the way in.
         <NavActions>
           <Link
             to={`/${domain}/new`}
@@ -79,10 +83,10 @@ export function Home() {
       {curated && !loading && !error && (datasets?.length ?? 0) > 0 && (
         <NavActions>
           <Link
-            to={`/${domain}/review`}
+            to={`/${domain}/new`}
             className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
           >
-            {hasMap ? 'Review' : 'Check this world'}
+            + New dataset
           </Link>
         </NavActions>
       )}
@@ -107,12 +111,12 @@ export function Home() {
               + New dataset
             </Link>
             {curated && (
-              <Link
-                to={`/${domain}/review`}
+              <button
+                onClick={() => ask(WORLD_PROMPTS.fields)}
                 className="rounded-full border border-[var(--color-line)] px-5 py-2 text-sm"
               >
-                Map this world →
-              </Link>
+                Ask Claude to map this world →
+              </button>
             )}
           </div>
         </div>
@@ -127,10 +131,10 @@ export function Home() {
           {curated && !hasMap && (
             <p className="mb-4 text-sm text-[var(--color-muted)]">
               This world has no map yet.{' '}
-              <Link to={`/${domain}/review`} className="text-[var(--color-accent)] underline">
-                Check this world
-              </Link>{' '}
-              to see how it divides and what's missing from it.
+              <button onClick={() => ask(WORLD_PROMPTS.draw)} className="text-[var(--color-accent)] underline">
+                Ask Claude to draw it
+              </button>{' '}
+              — how this world divides, and what's missing from it.
             </p>
           )}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">

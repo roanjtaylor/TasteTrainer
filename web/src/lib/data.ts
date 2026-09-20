@@ -1,5 +1,5 @@
 import { slugifyTopic } from '../../../shared/types';
-import type { BoundaryFixResult, Dataset, DatasetSummary, Domain, WorldMap } from '../../../shared/types';
+import type { Dataset, DatasetSummary, Domain, WorldMap } from '../../../shared/types';
 import { api } from './api';
 import { cacheKeys, drop, prefetch, useCached, write, type CachedResource } from './store';
 
@@ -21,8 +21,7 @@ export function useDatasetList(domain: Domain | null): CachedResource<DatasetSum
 
 /**
  * One dataset in full, addressed by slug (the URL: /physical/ships) or by id — the
- * server resolves either. Shared by the dataset view and the filters subpage; the
- * cache is what stops moving between them refetching the same thing.
+ * server resolves either. The cache is what makes returning to a dataset free.
  */
 export function useDataset(idOrSlug: string | null): CachedResource<Dataset> {
   return useCached(
@@ -47,9 +46,9 @@ export function publishDataset(ds: Dataset): void {
 }
 
 /**
- * One world's map. Cached hard: it changes only when you drag something or run a
- * review, both of which write through `saveWorldMap` below — so there is nothing to
- * poll for, and the shelf should paint the map instantly on every return visit.
+ * One world's map. Cached hard: it changes only when you accept map changes Claude
+ * proposed, and that publishes the new map straight into this cache (lib/chat.ts) — so
+ * there is nothing to poll for, and the shelf paints the map instantly on every visit.
  */
 export function useWorldMap(domain: Domain | null): CachedResource<WorldMap | null> {
   return useCached(
@@ -59,17 +58,7 @@ export function useWorldMap(domain: Domain | null): CachedResource<WorldMap | nu
   );
 }
 
-/** Write a map edit through and republish it, so the canvas reflects a drop at once. */
-export async function saveWorldMap(
-  domain: Domain,
-  body: Parameters<typeof api.updateWorldMap>[1],
-): Promise<WorldMap> {
-  const { map } = await api.updateWorldMap(domain, body);
-  write(cacheKeys.worldMap(domain), map);
-  return map;
-}
-
-/** Publish a map the review just produced, without a refetch. */
+/** Publish a map the server just handed back, without a refetch. */
 export function publishWorldMap(domain: Domain, map: WorldMap | null): void {
   write(cacheKeys.worldMap(domain), map);
 }
@@ -101,24 +90,5 @@ export async function deleteDataset(id: string, topic: string): Promise<void> {
   await api.deleteDataset(id);
   drop(cacheKeys.dataset(id));
   drop(cacheKeys.dataset(slugifyTopic(topic)));
-  drop(cacheKeys.datasetListPrefix, { prefix: true });
-}
-
-/**
- * Sync the client cache after a boundary fix — the server route that backs it writes
- * datasets directly via `storage.ts` rather than through the `saveDataset`/
- * `createDataset`/`deleteDataset` mutators above, so none of their cache invalidation
- * ran. Without this, a field carved out into a brand-new dataset (or one absorbed and
- * deleted) is correct in Supabase the moment "Accept changes" resolves, but the shelf
- * and map both keep serving their pre-fix `useDatasetList` cache — up to a minute old
- * — so the new field looks like it was never created.
- */
-export function publishBoundaryFix(result: BoundaryFixResult): void {
-  for (const ds of result.updated) {
-    publishDataset(ds);
-  }
-  for (const topic of result.deletedTopics) {
-    drop(cacheKeys.dataset(slugifyTopic(topic)));
-  }
   drop(cacheKeys.datasetListPrefix, { prefix: true });
 }

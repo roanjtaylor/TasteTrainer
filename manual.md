@@ -18,10 +18,10 @@ Every dataset belongs to one of three **worlds**, chosen on the landing screen:
 
 Then (steps 0–1 are the researched worlds; the personal world skips straight to building and browsing):
 
-0. **Check this world** — before building anything, audit the shelf itself: Claude reads every field you have in a world and reports how that world really divides, which fields you have no dataset for, which boundaries are drawn wrong (merge/split/rename), and which fields are thin. Each missing field starts a dataset in one click. This is the level above "what's missing?", and it exists because a map built one topic at a time inherits the blind spots you had when you named the topics.
-0b. **The map** — that review also draws the world, and the world's shelf *is* that map. Fields sit in named regions on two meaningful axes (for objects, roughly *held → inhabited* across and *practical → expressive* up), sized by how deep they are, and fields you don't have yet appear as **dashed holes** where they belong. Drag cards anywhere and they stay put; **Tidy up** re-flows them. The map is stored, not regenerated — re-reviewing places new fields and proposes changes you accept, so it stays something you can learn rather than something that rearranges itself.
-1. **Curate** — name a field; Claude maps both of its axes (subtopics *and* named era-periods), then researches the defining work against an explicit per-era quota so the set can't cluster in one era, countering popularity bias. You review and edit before saving.
-2. **Browse** — explore a dataset as a gallery, filtered by one subtopic **or** one era-period. **Review** asks which question you have before any Claude call starts: *Find what I'm missing* (the item-level coverage sweep, with an optional area to read more closely) or *Ask for something specific* (a freeform brief Claude follows directly, no sweep). Both end in a review-before-save proposal.
+0. **Review the world** — ask Claude in the chat dock (bottom-left) from a world's shelf: "Review this world" is a preset. It reads every field you have, tells you how that world really divides, and **proposes** the changes as a diff you accept or discard: fields you have no dataset for (favouring the ones you wouldn't think of), boundaries drawn wrong (merge / split / rename — staged as create, move items, delete the emptied field), and changes to the map. Nothing is written until you accept, and an accepted changeset can be undone. It exists because a map built one topic at a time inherits the blind spots you had when you named the topics.
+0b. **The map** — the world's shelf *is* its map, and Claude draws it ("Draw the map of this world"). Fields sit in named regions on two meaningful axes (for objects, roughly *held → inhabited* across and *practical → expressive* up), sized by how deep they are, and fields you don't have yet appear as **dashed holes** where they belong — click one to start that dataset. The map is stored, not regenerated: it only changes when you accept map changes Claude proposed (new regions, a field moved, a missing field added), so it stays something you can learn rather than something that rearranges itself.
+1. **Curate** — name a field; Claude maps its subtopics, then researches the defining work breadth-first — across makers, movements, regions and time — countering popularity bias. Items carry the year they were made; there are no named eras. You review and edit before saving.
+2. **Browse** — explore a dataset as one wall of images, oldest first — no filters; the mosaic itself shows how the field moved. To grow or fix a dataset, **ask Claude** in the chat dock (bottom-left): it sees the dataset and filter on screen, researches, and stages its changes as a diff you accept or discard. "What is this dataset missing?" is one of its presets.
 
 Datasets live in Supabase. Images are stored as **URLs only**, never downloaded — except files you upload into the personal world, which have no public URL to point at.
 
@@ -78,7 +78,7 @@ server/src/prompts/curation-rules.md
 
 Edit it to refine coverage, anti-bias, dedup, field-filling, or web-search policy. Changes take effect on the next call (the file is re-read each time) — no restart, no code change.
 
-To **see** the whole setup from inside the app, click the **settings cog** (top-right of the window; inside the nav pill on narrow windows). It reads `GET /api/brain` from the running server and shows, top-down: the model and proxy status, the anatomy every call shares, each Claude call (what goes in, what comes back, which rules it leans on, what the code enforces afterwards), and the rulebook itself. Each call also shows its **last real run** — duration, outcome, and the exact prompt sent — held in server memory, so it resets on restart. The call descriptions live in `server/src/services/brain.ts`; `runJson` requires a catalogue id for every call, so a new prompt can't be added without describing it there.
+The chat dock's own system prompt is short and lives in `server/src/services/agentRun.ts`; it reads the rulebook on demand (`get_curation_rules`) rather than carrying it in every call.
 
 ## Database migrations
 
@@ -86,7 +86,7 @@ SQL lives in [`supabase/migrations`](./supabase/migrations); run each once in th
 
 - `001_create_tables.sql` — the original datasets table.
 - `002_physical_digital_and_rankings.sql` — renames stored domains to physical/digital and adds a summary **view** the app reads instead of whole rows. (Also created a `taste_rankings` table for a since-removed ranking feature — harmless to leave in place.)
-- `003_world_maps.sql` — adds `taste_world_maps`, one row per world, holding its map (axes, regions, where every field and every proposed field sits). Until it's applied the shelf simply shows the grid and the review names the file.
+- `003_world_maps.sql` — adds `taste_world_maps`, one row per world, holding its map (axes, regions, where every field and every proposed field sits). Until it's applied the shelf simply shows the grid.
 - `004_jobs.sql` — durable rows for long curation calls, so research survives a closed tab.
 - `005_personal_world.sql` — teaches the shelf view the `personal` world. Until it's applied, personal datasets are listed on the *physical* shelf instead of their own.
 

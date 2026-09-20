@@ -12,7 +12,7 @@ import { canonicalSubtopic } from '../services/itemHygiene.ts';
 import { removeFiles, storagePathsIn } from '../services/personalFiles.ts';
 import { newId, now } from '../util.ts';
 import { normalizeDomain, optionalDomain, slugifyTopic } from '../../../shared/types.ts';
-import type { Dataset, Domain, EraGroup, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
+import type { Dataset, Domain, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
 
 export const datasetsRouter = Router();
 
@@ -95,11 +95,10 @@ datasetsRouter.get('/:id', async (req: Request, res: Response, next: NextFunctio
 
 datasetsRouter.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { topic, description, subtopics, eraGroups, items, domain } = req.body as {
+    const { topic, description, subtopics, items, domain } = req.body as {
       topic: string;
       description: string;
       subtopics: Subtopic[];
-      eraGroups?: EraGroup[];
       items: ProposedItem[];
       domain: Domain;
     };
@@ -129,7 +128,6 @@ datasetsRouter.post('/', async (req: Request, res: Response, next: NextFunction)
       topic: topic.trim(),
       description: description.trim(),
       subtopics: canonicalSubtopics,
-      eraGroups: eraGroups ?? [],
       items: (items ?? []).map((it) => toItem(it, canonicalSubtopics)),
       createdAt: now(),
       updatedAt: now(),
@@ -166,7 +164,6 @@ datasetsRouter.put('/:id', async (req: Request, res: Response, next: NextFunctio
       topic: body.topic?.trim() || existing.topic,
       description: body.description?.trim() || existing.description,
       subtopics,
-      eraGroups: body.eraGroups ?? existing.eraGroups,
       items: (body.items ?? existing.items).map((it) => toItem(it, subtopics)),
     };
     // A topic edit is also a rename of the dataset's URL, so hand the old slug over

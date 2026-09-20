@@ -2,14 +2,14 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 
-// The account's home in the chrome: right next to the settings cog, not a bare
+// The account's home in the chrome: the window's top-right corner, not a bare
 // "Sign out" text button appended to the end of the nav pill. Signed in, it's an
 // avatar-style initial that opens a small menu (who you are, sign out); signed out,
 // it's a quiet "Log in" link into the personal world, the only place a session is
 // ever asked for (lib/auth.tsx).
 //
-// Mounted twice by the shell (main.tsx / Nav.tsx), same as BrainButton and
-// EmbedTesterButton, each showing at its own breakpoint.
+// Mounted twice by the shell (main.tsx / Nav.tsx), same as EmbedTesterButton, each
+// showing at its own breakpoint.
 export function AccountButton({ className = '' }: { className?: string }) {
   const { email, signOut } = useAuth();
   const [open, setOpen] = useState(false);

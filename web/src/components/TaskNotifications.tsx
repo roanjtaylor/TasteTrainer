@@ -10,10 +10,10 @@ import { cancelJob, currentJob, JOB_STAGE, jobGroupKey, jobReviewPath, useJobs }
 // refresh) and durable, cross-refresh jobs (lib/jobs.ts). Both carry the dataset
 // they belong to (`task.group` / `jobGroupKey`), and everything sharing a key is
 // folded into a single card titled with the dataset's name, a stage label underneath
-// (Map → Research, or Review → Expand), and ONE status slot that changes over time:
+// (Map → Research), and ONE status slot that changes over time:
 // the live progress line while the step runs, then the button that opens it for
 // review once it's done. That replaces a stack of separate "Map Engines" /
-// "Research Engines" / "Expand Engines" cards that each had to be noticed and
+// "Research Engines" cards that each had to be noticed and
 // dismissed on its own — the user asked for "the dataset names as the title, the
 // state as a label, and the status as it updates or the button to view it".
 //
@@ -80,7 +80,7 @@ export function TaskNotifications({ variant }: { variant: 'overlay' | 'rail' }) 
   // gutters either side of this track are already halved there, so the cards' width
   // IS the column's; a cap here would just hand that width back to blank margin.
   // Titles `truncate`, so a narrow track shows their first words. From `xl` it sticks
-  // lower, clearing the settings cog that sits fixed in this margin's top corner.
+  // lower, clearing the buttons that sit fixed in this margin's top corner.
   return (
     <div className="pointer-events-none sticky top-3 z-30 xl:top-14 hidden w-full flex-col gap-2 self-start lg:flex">
       {body}
@@ -96,7 +96,7 @@ interface Card {
   key: string;
   /** The dataset's name for a grouped card; the task's own title otherwise. */
   title: string;
-  /** "Map" / "Research" / "Review" / "Expand" — absent on a standalone task. */
+  /** "Map" / "Research" — absent on a standalone task. */
   stage?: string;
   status: CardStatus;
   /** The live line while running, or the error text. */
@@ -203,10 +203,10 @@ function NotificationCard({ card }: { card: Card }) {
           card.jobIds.forEach((id) => void cancelJob(id));
         };
 
-  // What the button does depends on the stage: a map or a gap review is just
-  // "look at it"; research and expansion produce a proposal that needs accepting.
+  // What the button does depends on the stage: a map is just "look at it";
+  // research produces a proposal that needs accepting.
   const actionLabel =
-    job && (job.kind === 'items' || job.kind === 'gap-fill') ? 'Review & accept →' : 'View →';
+    job && job.kind === 'items' ? 'Review & accept →' : 'View →';
 
   return (
     <CardShell title={card.title} stage={card.stage} running={card.status === 'running'} onDismiss={onDismiss}>

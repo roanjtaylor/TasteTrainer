@@ -42,6 +42,9 @@ function labelOf(block: ToolBlock): string {
     case 'propose_move_items': return `Proposing to move ${plural(input.itemIds?.length ?? 0, 'item')}${input.toDataset ? ` to ${input.toDataset}` : ''}`;
     case 'propose_update_dataset': return 'Proposing a change to the dataset itself';
     case 'propose_create_dataset': return `Proposing a new dataset${input.topic ? `: ${input.topic}` : ''}`;
+    case 'propose_delete_dataset': return `Proposing to delete the emptied dataset${input.dataset ? ` ${input.dataset}` : ''}`;
+    case 'propose_draw_map': return `Proposing ${input.redraw ? 'a redrawn' : 'a'} map of the ${input.domain ?? ''} world`;
+    case 'propose_map_changes': return 'Proposing changes to the map';
     case 'withdraw_changes': return `Withdrew ${plural(input.opIds?.length ?? 0, 'staged change')}`;
     case 'WebSearch': return `Searched the web for “${input.query ?? '…'}”`;
     case 'WebFetch': return `Read ${hostOf(input.url)}`;

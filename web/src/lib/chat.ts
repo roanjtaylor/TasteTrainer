@@ -10,7 +10,7 @@ import {
   type ChatView,
 } from '../../../shared/chat';
 import { api, watchChat } from './api';
-import { publishDataset } from './data';
+import { publishDataset, publishWorldMap } from './data';
 import { cacheKeys, drop } from './store';
 
 // The chat dock's state (components/chat/ChatDock.tsx).
@@ -29,6 +29,7 @@ function publishResult(result: ChangesetResult): void {
   for (const ds of result.updated) publishDataset(ds);
   for (const topic of result.deletedTopics) drop(cacheKeys.dataset(slugifyTopic(topic)));
   if (result.updated.length || result.deletedTopics.length) drop(cacheKeys.datasetListPrefix, { prefix: true });
+  for (const map of result.maps ?? []) publishWorldMap(map.domain, map);
 }
 
 export interface ChatState {

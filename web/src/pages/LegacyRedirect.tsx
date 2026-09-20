@@ -15,10 +15,10 @@ export function LegacyDatasetRedirect() {
   return <Navigate to={`/${ds.domain}/${slugifyTopic(ds.topic)}`} replace />;
 }
 
-/** `/:domain/map` was the review screen before the world had an actual map. The map
- *  now lives on the shelf, so the name would point at the wrong thing — send it to
- *  the review, which is what that address always meant. */
+/** `/:domain/map` and `/:domain/review` were the world-review screen. The map lives on
+ *  the shelf and reviewing a world is a conversation with Claude there, so both land on
+ *  the shelf. */
 export function LegacyMapRedirect() {
   const { domain = '' } = useParams();
-  return <Navigate to={`/${domain}/review`} replace />;
+  return <Navigate to={`/${domain}`} replace />;
 }
