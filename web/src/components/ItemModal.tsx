@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type WheelEvent } from 'react';
 import type { Dataset, Item } from '../../../shared/types';
 import { saveDataset } from '../lib/data';
 import { physicalImageQuery } from '../lib/image';
@@ -37,6 +37,24 @@ export function ItemModal({
   const [draft, setDraft] = useState<Item | null>(null);
   const [picker, setPicker] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Pinch/ctrl+scroll zooms the focused card itself — image and text together — rather
+  // than the dataset wall behind it. Resets whenever a different item opens, so zoom
+  // never carries over from whatever was last inspected.
+  const [scale, setScale] = useState(1);
+  const MIN_SCALE = 1;
+  const MAX_SCALE = 3;
+  useEffect(() => {
+    setScale(1);
+  }, [item.id]);
+  function onWheel(e: WheelEvent<HTMLDivElement>) {
+    if (!e.ctrlKey && !e.metaKey) return;
+    // Consumed here so it never reaches the grid's own wheel listener underneath —
+    // the dataset wall must not reflow while the modal is what's being zoomed.
+    e.preventDefault();
+    e.stopPropagation();
+    setScale((s) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s - e.deltaY * 0.01)));
+  }
 
   function startEdit() {
     setDraft({ ...item });
@@ -118,6 +136,8 @@ export function ItemModal({
         aria-modal="true"
         aria-label={item.name || 'Item details'}
         onClick={(e) => e.stopPropagation()}
+        onWheel={onWheel}
+        style={{ transform: scale !== 1 ? `scale(${scale})` : undefined }}
         className="grid h-full max-h-[42rem] w-full max-w-5xl grid-cols-1 overflow-hidden border border-[var(--color-line)] bg-[var(--color-card)] md:grid-cols-2"
       >
         <div className="relative aspect-[4/3] w-full bg-[var(--color-wall-soft)] md:aspect-auto md:h-full">

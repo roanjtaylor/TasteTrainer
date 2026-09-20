@@ -125,6 +125,17 @@ h3,
 .embed-flip-inner.embed-flip-anim {
   animation: embed-flip-turn 550ms cubic-bezier(0.4, 0.2, 0.2, 1) both;
 }
+/* Changeset review (ChangesetReview.tsx): a quick checkmark burst confirms the
+   accepted changes actually saved, then the modal closes itself — one less click. */
+@keyframes changeset-check-pop {
+  0% { transform: scale(0.4); opacity: 0; }
+  60% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.changeset-check-pop {
+  animation: changeset-check-pop 380ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
 .embed-flip-face {
   position: absolute;
   inset: 0;

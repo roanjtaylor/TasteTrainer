@@ -206,6 +206,16 @@ function Browse({
   const hoveredIdRef = useRef<string | null>(null);
   const anchorRef = useRef<{ id: string; top: number } | null>(null);
 
+  // Tracks whether ItemModal (the full-screen detail view) is currently showing, so
+  // the grid's own pinch/ctrl+scroll zoom below can step aside — see its use in
+  // onWheel. A ref, not state, since it only needs to be read inside that native
+  // listener, not to drive a render.
+  const modalOpen = !!expandedId && !editing && !!pool.find((i) => i.id === expandedId && !i.tweet);
+  const modalOpenRef = useRef(false);
+  useEffect(() => {
+    modalOpenRef.current = modalOpen;
+  }, [modalOpen]);
+
   // `point`, when given (the wheel/pinch case), pins the anchor to whatever card is
   // literally under the pointer at that instant — more precise than the last
   // mouseenter, since a fast pinch can arrive before the enter event does. Without a
@@ -251,6 +261,11 @@ function Browse({
   useEffect(() => {
     function onWheel(e: WheelEvent) {
       if (!e.ctrlKey && !e.metaKey) return;
+      // ItemModal owns pinch/ctrl+scroll while it's open — it stops the event from
+      // reaching here (see its own onWheel) so the grid underneath never reflows
+      // while you're zooming the focused card. This is only a fallback in case some
+      // future modal chrome doesn't stop propagation.
+      if (modalOpenRef.current) return;
       e.preventDefault();
       // Anchor to whatever card is under the pointer right now — captured once per
       // event, before any of the steps below, so it reflects the card's position

@@ -331,6 +331,7 @@ function OpRow({
 export function ChangesetReview({ changeset, decide, onClose }: { changeset: Changeset; decide: Decide; onClose: () => void }) {
   const [ticked, setTicked] = useState<Set<string>>(() => new Set(changeset.ops.filter(tickedByDefault).map((o) => o.id)));
   const [busy, setBusy] = useState(false);
+  const [applied, setApplied] = useState(false);
 
   // Claude can keep staging while this is open; new ops arrive ticked by the same rule.
   const known = useMemo(() => new Set<string>(), []);
@@ -355,11 +356,26 @@ export function ChangesetReview({ changeset, decide, onClose }: { changeset: Cha
     return [...byDataset];
   }, [changeset.ops]);
 
+  // Once an apply resolves, wait for the changeset to actually come back with
+  // nothing left pending (it streams back in via props, not the awaited call) —
+  // then show the success beat and close, but only once everything is decided.
+  const [awaitingApplySettle, setAwaitingApplySettle] = useState(false);
+
   const run = async (action: 'apply' | 'discard', body: { opIds?: string[]; force?: boolean }) => {
     setBusy(true);
     await decide(changeset.id, action, body);
     setBusy(false);
+    if (action === 'apply') setAwaitingApplySettle(true);
   };
+
+  useEffect(() => {
+    if (!awaitingApplySettle) return;
+    if (pending.length > 0) return;
+    setAwaitingApplySettle(false);
+    setApplied(true);
+    const t = setTimeout(onClose, 1000);
+    return () => clearTimeout(t);
+  }, [awaitingApplySettle, pending.length, onClose]);
 
   const tickAll = (ops: ChangeOp[], on: boolean) =>
     setTicked((prev) => {
@@ -367,6 +383,21 @@ export function ChangesetReview({ changeset, decide, onClose }: { changeset: Cha
       for (const o of ops.filter(open)) on ? next.add(o.id) : next.delete(o.id);
       return next;
     });
+
+  if (applied) {
+    return (
+      <div data-changeset-review className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+        <div className="flex w-full max-w-sm flex-col items-center gap-3 rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-8 py-10 text-center shadow-2xl">
+          <span className="changeset-check-pop grid h-14 w-14 place-items-center rounded-full bg-emerald-100 text-emerald-700">
+            <svg viewBox="0 0 24 24" fill="none" className="h-8 w-8" aria-hidden="true">
+              <path d="M5 12.5 10 17 19 7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+          <p className="serif text-base">Changes saved</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div data-changeset-review className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
