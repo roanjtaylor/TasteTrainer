@@ -10,11 +10,9 @@
 //     so completely that even timeouts can't fire — the "stuck on loading
 //     @anthropic-ai/claude-agent-sdk" hang.
 //   • `node --watch` avoids the deadlock but restarts the server spuriously on
-//     Windows (fs.watch double-fires), dropping in-flight curation calls (ECONNRESET).
+//     Windows (fs.watch double-fires), dropping in-flight Claude calls (ECONNRESET).
 // Plain `tsx` has neither problem. The only cost is no server auto-reload — restart
 // `npm run dev` after editing server code (the Vite-served UI still hot-reloads).
-// (Belt-and-suspenders for any future watcher: CLAUDE_CWD in services/claude.ts
-// keeps the Claude CLI's scratch writes out of the project tree.)
 // ‼️ Must stay the first import: loads .env.local before config.ts/storage.ts
 // read process.env at module scope. See env.ts for why it can't be inlined here.
 import './env.ts';
@@ -26,12 +24,12 @@ import { ALLOWED_EMAILS, PORT } from './config.ts';
 import { attachUser, requireAuth } from './auth.ts';
 import { datasetsRouter } from './routes/datasets.ts';
 import { curationRouter } from './routes/curation.ts';
-import { jobsRouter } from './routes/jobs.ts';
 import { imagesRouter } from './routes/images.ts';
 import { mapRouter } from './routes/map.ts';
 import { filesRouter } from './routes/files.ts';
 import { tweetsRouter } from './routes/tweets.ts';
 import { embedRouter } from './routes/embed.ts';
+import { reportsRouter } from './routes/reports.ts';
 import { chatRouter } from './routes/chat.ts';
 
 const app = express();
@@ -73,10 +71,10 @@ app.use('/api', attachUser);
 // Public embed widget (no auth, personal domain excluded — routes/embed.ts). Mounted
 // ahead of /api/datasets purely for readability; the two prefixes don't overlap.
 app.use('/api/embed', embedRouter);
+// Visitor-flagged item problems (routes/reports.ts) — read/resolve from inside the
+// app; the flagging itself happens through embedRouter above, from the public widget.
+app.use('/api/reports', reportsRouter);
 app.use('/api/datasets', datasetsRouter);
-// More specific prefix first — Express matches middleware in registration order, and
-// /api/curation would otherwise swallow every /api/curation/jobs request itself.
-app.use('/api/curation/jobs', jobsRouter);
 app.use('/api/curation', curationRouter);
 app.use('/api/images', imagesRouter);
 app.use('/api/map', mapRouter);

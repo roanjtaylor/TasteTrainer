@@ -3,7 +3,6 @@ import type { Dataset, LikedTweetRef, TweetImportStats } from '../../../shared/t
 import { api } from '../lib/api';
 import { publishDataset } from '../lib/data';
 import { finishTask, startTask, updateTask } from '../lib/tasks';
-import { groupKey } from '../lib/jobs';
 
 /** Matches the server's per-request cap (server/src/routes/tweets.ts). */
 const BATCH = 50;
@@ -72,7 +71,7 @@ export function TweetImportPanel({
     setRunning(true);
     setError('');
     const total: TweetImportStats = { added: 0, merged: 0, skipped: 0, unavailable: 0, failed: 0 };
-    const taskId = startTask(ds.topic, { group: groupKey(ds.domain, ds.topic), stage: 'Import' });
+    const taskId = startTask(ds.topic, { stage: 'Import' });
     try {
       for (let at = 0; at < queued.length; at += BATCH) {
         const line = `Importing ${Math.min(at + BATCH, queued.length).toLocaleString()} of ${queued.length.toLocaleString()}…`;

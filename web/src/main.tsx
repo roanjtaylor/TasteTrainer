@@ -12,9 +12,9 @@ import { ChatViewProvider } from './lib/chatView';
 import { ChatDock } from './components/chat/ChatDock';
 import { DomainSelect } from './pages/DomainSelect';
 import { Home } from './pages/Home';
-import { CurateRoute } from './pages/Curate';
+import { PersonalNew } from './pages/PersonalNew';
 import { DatasetView } from './pages/DatasetView';
-import { LegacyDatasetRedirect, LegacyMapRedirect } from './pages/LegacyRedirect';
+import { LegacyCurateRedirect, LegacyDatasetRedirect, LegacyMapRedirect } from './pages/LegacyRedirect';
 import { Embed } from './pages/Embed';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -96,8 +96,8 @@ function AppShell() {
           <main className="min-w-0">
             {/* The URL names the world and the field: /physical, /physical/ships.
                 ":domain" is validated by lib/domain (anything else redirects to the
-                gate), and the static "new" segment outranks ":slug" in React Router's
-                route ranking, so /physical/new is always the curate screen. */}
+                gate), and static segments outrank ":slug" in React Router's route
+                ranking, so /personal/new is always the new-collection form. */}
             {/* Gates only the personal world (/personal/...) behind a sign-in screen —
                 every other route renders straight through (lib/auth.tsx). */}
             <PersonalGate>
@@ -108,19 +108,18 @@ function AppShell() {
                 <Route path="/new" element={<Navigate to="/" replace />} />
                 <Route path="/dataset/:id" element={<LegacyDatasetRedirect />} />
                 <Route path="/:domain" element={<Home />} />
-                {/* Bare "new" (no field chosen yet) and a per-field "<slug>/new" (once one
-                    has). CurateRoute keys the actual page by domain+slug, so a session
-                    researching one field and a session starting another are always
-                    separate component instances — never the same mounted page silently
-                    swapping which field's research a still-running call writes into. See
-                    Curate.tsx for why that used to happen on the single shared /new URL. */}
-                <Route path="/:domain/new" element={<CurateRoute />} />
-                <Route path="/:domain/:slug/new" element={<CurateRoute />} />
+                {/* Only the personal world has a "new dataset" screen: its collections
+                    are hand-built, so something has to make the empty shelf. The
+                    researched worlds have no wizard — you ask Claude in the dock, from
+                    whatever world or field you're looking at. */}
+                <Route path="/personal/new" element={<PersonalNew />} />
                 {/* Static segments outrank ":slug", so these always win over a field
-                    name. The world's map lives on the shelf itself (/physical); both
-                    of these are retired addresses that now land there. */}
+                    name. Retired addresses, kept alive for open tabs: the world's map
+                    lives on the shelf itself (/physical), and the curate wizard is gone. */}
                 <Route path="/:domain/review" element={<LegacyMapRedirect />} />
                 <Route path="/:domain/map" element={<LegacyMapRedirect />} />
+                <Route path="/:domain/new" element={<LegacyCurateRedirect />} />
+                <Route path="/:domain/:slug/new" element={<LegacyCurateRedirect />} />
                 <Route path="/:domain/:slug" element={<DatasetView />} />
               </Routes>
             </PersonalGate>

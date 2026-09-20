@@ -59,9 +59,12 @@ export const Photo = memo(function Photo({
         aria-hidden
         loading="lazy"
         decoding="async"
+        draggable={false}
         className="absolute inset-0 h-full w-full scale-110 object-cover opacity-60 blur-xl"
       />
-      {/* The real image, shown in full. */}
+      {/* The real image, shown in full. draggable=false: without it the browser's
+          native "drag this image" gesture grabs the pointer first, which is what was
+          silently swallowing Mosaic's own drag-to-pan handling. */}
       <img
         src={src}
         srcSet={srcSet}
@@ -69,6 +72,7 @@ export const Photo = memo(function Photo({
         alt={alt}
         loading="lazy"
         decoding="async"
+        draggable={false}
         onError={srcSet ? () => setPlain(true) : undefined}
         className="relative h-full w-full object-contain"
       />

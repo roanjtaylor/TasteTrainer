@@ -6,7 +6,7 @@ import type {
   ImageCandidate,
   ImageKind,
   Item,
-  Job,
+  ItemReport,
   LikedTweetRef,
   Subtopic,
   TweetImportStats,
@@ -65,10 +65,8 @@ async function http<T>(url: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-/** `jobId` rides along on progress lines from the durable calls (server's `jobSend`),
- *  so the caller can pair its transient notification with the durable job row while
- *  the call is still in flight. Absent for the plain, non-durable calls. */
-export type OnProgress = (line: string, jobId?: string) => void;
+/** One line of live status from a streaming call, for a notification card to show. */
+export type OnProgress = (line: string) => void;
 
 // POST a body and consume the backend's Server-Sent Event stream (see
 // server/src/routes/curation.ts): `progress` lines drive the live status, then a
@@ -115,7 +113,7 @@ async function streamSSE<T>(url: string, body: unknown, onProgress?: OnProgress)
       }
       if (!data) continue;
       const parsed = JSON.parse(data);
-      if (event === 'progress') onProgress?.(parsed.line, parsed.jobId);
+      if (event === 'progress') onProgress?.(parsed.line);
       else if (event === 'done') result = parsed as T;
       else if (event === 'error') errorMessage = parsed.error;
     }
@@ -145,30 +143,15 @@ export const api = {
   // as everything else; it's harmless that this also sends an auth header when one
   // exists, the endpoint just ignores it.
   getEmbed: (id: string) => http<EmbedDataset>(`/api/embed/${id}`),
+  // Flip a picture, flag it wrong (Embed.tsx's card back). Same reach as getEmbed —
+  // public, no auth — and stored durably (server/src/routes/reports.ts) for the
+  // curator to review and hand to the Claude agent.
+  reportItem: (datasetId: string, itemId: string, text: string) =>
+    http<{ ok: true }>(`/api/embed/${datasetId}/report`, {
+      method: 'POST',
+      body: JSON.stringify({ itemId, text }),
+    }),
 
-  // Curation — these stream live progress (onProgress) and resolve with the result.
-  // "Map the field": the subtopics, as one durable
-  // call (see jobId below) — the client treats the two as a single step.
-  proposeSubtopics: (topic: string, description: string, domain: Domain, onProgress?: OnProgress) =>
-    streamSSE<{ subtopics: Subtopic[]; suggestedCount: number; jobId: string }>(
-      '/api/curation/subtopics',
-      { topic, description, domain },
-      onProgress,
-    ),
-  generateItems: (
-    body: {
-      topic: string;
-      description: string;
-      subtopics: Subtopic[];
-      count: number;
-      domain: Domain;
-      existingItems?: Item[];
-    },
-    onProgress?: OnProgress,
-    // `jobId` identifies the durable row this call was tracked under (web/lib/jobs.ts)
-    // — present once it's `done`, so a live caller can delete it the moment its
-    // proposal is saved or discarded, same as a resumed one does.
-  ) => streamSSE<{ items: ProposedItem[]; jobId: string }>('/api/curation/items', body, onProgress),
   // "Re-fetch images" — run the current image pipeline over a dataset that is already
   // saved. Images used to be resolved only at curation time, so every sourcing
   // improvement applied to future items and left existing ones untouched. Returns the
@@ -234,13 +217,6 @@ export const api = {
       body: JSON.stringify({ datasetId, likes }),
     }),
 
-  // Durable curation jobs (web/lib/jobs.ts) — what survives a refresh mid-Claude-call,
-  // and what the resume banner reads. `domain` omitted lists across both worlds.
-  listJobs: (domain?: Domain) =>
-    http<Job[]>(`/api/curation/jobs${domain ? `?domain=${domain}` : ''}`),
-  getJob: (id: string) => http<Job>(`/api/curation/jobs/${id}`),
-  deleteJob: (id: string) => http<void>(`/api/curation/jobs/${id}`, { method: 'DELETE' }),
-
   // The Claude chat (server/src/routes/chat.ts). Sending returns as soon as the turn
   // has STARTED; the reply is watched with `watchChat` below.
   chatModels: () => http<{ models: ChatModel[]; defaultModel: string }>('/api/chat/models'),
@@ -258,6 +234,12 @@ export const api = {
     http<ChangesetResult>(`/api/chat/changesets/${id}/discard`, { method: 'POST', body: JSON.stringify(body) }),
   revertChangeset: (id: string) =>
     http<ChangesetResult>(`/api/chat/changesets/${id}/revert`, { method: 'POST' }),
+
+  // Reviewing what visitors flagged (server/src/routes/reports.ts) — read side of the
+  // report a viewer files from the embed widget's card back.
+  listReports: (datasetId: string) => http<ItemReport[]>(`/api/reports?datasetId=${datasetId}`),
+  resolveReport: (id: string) => http<void>(`/api/reports/${id}/resolve`, { method: 'POST' }),
+  dismissReport: (id: string) => http<void>(`/api/reports/${id}`, { method: 'DELETE' }),
 };
 
 /**

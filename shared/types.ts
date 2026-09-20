@@ -367,7 +367,7 @@ export interface ImageCandidate {
 
 /** A field of this world you have no dataset for — the unknown-unknowns surface. */
 export interface MissingField {
-  /** Ready to hand straight to the Curate flow. */
+  /** A single word, ready to become the dataset's name. */
   topic: string;
   description: string;
   /** Why this field matters to someone mapping this world — the teaching part. */
@@ -435,8 +435,9 @@ export function mapSlug(name: string): string {
 //
 // A stripped-down, unauthenticated view of a dataset for embedding elsewhere as an
 // iframe — a shuffleable picture viewer. Deliberately thin: only what the widget
-// draws, never the curation-side fields (capture, candidates, etc.), so a site
-// embedding it can't scrape more than the picture + caption it shows.
+// draws (the picture, its caption, and the read-mode "back of the card"), never the
+// curation-side fields (capture, candidates, etc.), so a site embedding it can't
+// scrape more than that.
 
 /** One picture in an embed widget. */
 export interface EmbedItem {
@@ -445,6 +446,9 @@ export interface EmbedItem {
   image: string;
   year: number | null;
   brand: string;
+  /** Shown on the card's flipped-over back, not the front — the widget's read mode. */
+  description: string;
+  definingFact: string;
 }
 
 /** What GET /api/embed/:id returns. Never issued for the personal domain — the
@@ -457,36 +461,25 @@ export interface EmbedDataset {
   items: EmbedItem[];
 }
 
-// ---- Background jobs ----
+// ---- Item reports ----
 //
-// A curation call that streams its progress and result over SSE (server/src/routes/
-// curation.ts) is durably tracked here too, alongside the live stream — the server is
-// a persistent process (render.yaml), so the call itself keeps running after the
-// browser disconnects; a job row is what lets its result survive to be reviewed in a
-// later session instead of only ever reaching a browser that's still connected.
+// A viewer flips a picture in the embed widget and, if something's wrong with it,
+// leaves a freeform note. Never issued for the personal domain (embed.ts 404s that
+// id before a report could ever name one). Stored durably so it survives the
+// anonymous visitor's tab closing, and read by the Claude agent's get_item_reports
+// tool so the curator can ask it to act on what was flagged.
 
-/** Which curation call a job wraps. Only calls that return a proposal for the user to
- *  review (rather than writing straight to storage themselves, like the field-map
- *  review or a boundary fix) need this. */
-export type JobKind = 'subtopics' | 'items';
+export type ItemReportStatus = 'open' | 'resolved';
 
-export type JobStatus = 'running' | 'done' | 'error';
-
-export interface Job {
+export interface ItemReport {
   id: string;
+  datasetId: string;
+  itemId: string;
+  /** Denormalized so a reports list reads without a join back to the item, which may
+   *  itself have been edited or removed by the time anyone looks. */
+  itemName: string;
   domain: Domain;
-  kind: JobKind;
-  status: JobStatus;
-  /** Shown in the resume banner, e.g. "Expand Watches dataset". */
-  title: string;
-  /** The exact request body the call was started with — enough to resume the screen
-   *  it belongs to (there is no stored dataset id — see `slugifyTopic` on `input.topic`). */
-  input: unknown;
-  /** The latest progress line — the same text the live SSE stream shows. */
-  progress: string;
-  /** The call's `done` payload, once `status` is 'done'. */
-  result: unknown | null;
-  error: string | null;
+  text: string;
+  status: ItemReportStatus;
   createdAt: string;
-  updatedAt: string;
 }

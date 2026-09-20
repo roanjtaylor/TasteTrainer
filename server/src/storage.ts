@@ -1,9 +1,9 @@
 import { supabase } from './supabase.ts';
-import { now } from './util.ts';
+import { newId, now } from './util.ts';
 import { removeFiles, storagePathsIn, toServedImages, toStoredImages } from './services/personalFiles.ts';
 import { cached, invalidate, invalidatePrefix, keys, put } from './cache.ts';
 import { normalizeDomain, singleWordTopic, slugifyTopic } from '../../shared/types.ts';
-import type { Dataset, DatasetSummary, Domain, Job, WorldMap } from '../../shared/types.ts';
+import type { Dataset, DatasetSummary, Domain, ItemReport, ItemReportStatus, WorldMap } from '../../shared/types.ts';
 import type { Changeset, ChatThread } from '../../shared/chat.ts';
 
 /**
@@ -169,93 +169,10 @@ export async function saveWorldMap(map: WorldMap): Promise<WorldMap> {
   return map;
 }
 
-// ---- Background jobs (one row per long curation call — see shared/types.ts) ----
-//
-// Not cached: a job's whole point is to be read fresh (its status changes while it's
-// being watched), and job traffic is low-volume enough that a Supabase round trip on
-// every read is not worth the staleness risk a TTL cache would introduce here.
-
-const JOBS_MIGRATION_HINT =
-  'The taste_jobs table is missing. Run supabase/migrations/004_jobs.sql in the Supabase SQL editor.';
-
-/** A `running` job whose row hasn't been touched in this long is presumed dead — most
- *  likely a server restart interrupted it mid-call — rather than shown as spinning
- *  forever. Computed at read time, not written back: there is no background sweep, so
- *  a job that outlives this window simply reads as failed from then on. */
-const STALE_RUNNING_MS = 20 * 60_000;
-
-function rowToJob(row: any): Job {
-  const job: Job = { id: row.id, domain: normalizeDomain(row.domain), status: row.status, ...row.data };
-  if (job.status === 'running' && Date.now() - new Date(job.updatedAt).getTime() > STALE_RUNNING_MS) {
-    return { ...job, status: 'error', error: 'No update in over 20 minutes — probably interrupted by a restart.' };
-  }
-  return job;
-}
-
-export async function createJob(job: Job): Promise<Job> {
-  const { id, domain, status, ...data } = job;
-  const { error } = await supabase
-    .from('taste_jobs')
-    .insert({ id, domain, status, data, updated_at: job.updatedAt });
-  if (missingRelation(error)) throw new Error(JOBS_MIGRATION_HINT);
-  if (error) throw new Error(error.message);
-  return job;
-}
-
-/** Merge `patch` into a job's stored `data` and bump `status`/`updated_at`. A no-op,
- *  not an error, if the row is already gone — the job's owner dismissed it on
- *  purpose, and the call producing this update has no way to know that, or need to. */
-export async function updateJob(
-  id: string,
-  patch: Partial<Pick<Job, 'status' | 'progress' | 'result' | 'error'>>,
-): Promise<void> {
-  const { data: row, error: readErr } = await supabase
-    .from('taste_jobs')
-    .select('data, status')
-    .eq('id', id)
-    .maybeSingle();
-  if (missingRelation(readErr)) throw new Error(JOBS_MIGRATION_HINT);
-  if (readErr) throw new Error(readErr.message);
-  if (!row) return;
-
-  const nextStatus = patch.status ?? row.status;
-  const nextData = { ...row.data, ...patch, updatedAt: now() };
-  delete (nextData as any).status;
-  const { error } = await supabase
-    .from('taste_jobs')
-    .update({ status: nextStatus, data: nextData, updated_at: nextData.updatedAt })
-    .eq('id', id);
-  if (error) throw new Error(error.message);
-}
-
-export async function getJob(id: string): Promise<Job | null> {
-  const { data, error } = await supabase.from('taste_jobs').select('*').eq('id', id).maybeSingle();
-  if (missingRelation(error)) throw new Error(JOBS_MIGRATION_HINT);
-  if (error) throw new Error(error.message);
-  return data ? rowToJob(data) : null;
-}
-
-/** Every job, or one domain's — unscoped so a global "N waiting" indicator can query
- *  both worlds in a single call. Newest first, same convention as `listDatasets`. */
-export async function listJobs(domain?: Domain): Promise<Job[]> {
-  let query = supabase.from('taste_jobs').select('*').order('updated_at', { ascending: false });
-  if (domain) query = query.eq('domain', domain);
-  const { data, error } = await query;
-  if (missingRelation(error)) return [];
-  if (error) throw new Error(error.message);
-  return (data ?? []).map(rowToJob);
-}
-
-export async function deleteJob(id: string): Promise<void> {
-  const { error } = await supabase.from('taste_jobs').delete().eq('id', id);
-  if (missingRelation(error)) return;
-  if (error) throw new Error(error.message);
-}
-
 // ---- Claude chat: threads and changesets (shared/chat.ts, migration 008) ----
 //
-// Not cached, for the same reason jobs aren't: a thread is read precisely because it
-// may have changed (a turn is running), and the traffic is one user's conversation.
+// Not cached: a thread is read precisely because it may have changed (a turn is
+// running), and the traffic is one user's conversation.
 
 const CHAT_MIGRATION_HINT =
   'The chat tables are missing. Run supabase/migrations/008_chat.sql in the Supabase SQL editor.';
@@ -330,4 +247,71 @@ export async function listChangesets(threadId: string): Promise<Changeset[]> {
   if (missingRelation(error)) throw new Error(CHAT_MIGRATION_HINT);
   if (error) throw new Error(error.message);
   return (data ?? []).map(rowToChangeset);
+}
+
+// ---- Item reports: visitor-flagged problems from the public embed widget
+// (shared/types.ts#ItemReport, migration 009) ----
+
+const REPORTS_MIGRATION_HINT =
+  'The taste_item_reports table is missing. Run supabase/migrations/009_item_reports.sql in the Supabase SQL editor.';
+
+function rowToReport(row: any): ItemReport {
+  return {
+    id: row.id,
+    datasetId: row.dataset_id,
+    itemId: row.item_id,
+    itemName: row.item_name ?? '',
+    domain: normalizeDomain(row.domain),
+    text: row.text,
+    status: row.status === 'resolved' ? 'resolved' : 'open',
+    createdAt: row.created_at,
+  };
+}
+
+export async function createItemReport(input: {
+  datasetId: string;
+  itemId: string;
+  itemName: string;
+  domain: Domain;
+  text: string;
+}): Promise<ItemReport> {
+  const row = {
+    id: newId(),
+    dataset_id: input.datasetId,
+    item_id: input.itemId,
+    item_name: input.itemName,
+    domain: input.domain,
+    text: input.text,
+    status: 'open',
+    created_at: now(),
+  };
+  const { error } = await supabase.from('taste_item_reports').insert(row);
+  if (missingRelation(error)) throw new Error(REPORTS_MIGRATION_HINT);
+  if (error) throw new Error(error.message);
+  return rowToReport(row);
+}
+
+/** Newest first. `datasetId` narrows to one dataset; omit for every dataset. */
+export async function listItemReports(filter: {
+  datasetId?: string;
+  status?: ItemReportStatus;
+} = {}): Promise<ItemReport[]> {
+  let query = supabase.from('taste_item_reports').select('*').order('created_at', { ascending: false });
+  if (filter.datasetId) query = query.eq('dataset_id', filter.datasetId);
+  if (filter.status) query = query.eq('status', filter.status);
+  const { data, error } = await query;
+  if (missingRelation(error)) throw new Error(REPORTS_MIGRATION_HINT);
+  if (error) throw new Error(error.message);
+  return (data ?? []).map(rowToReport);
+}
+
+export async function setItemReportStatus(id: string, status: ItemReportStatus): Promise<void> {
+  const { error } = await supabase.from('taste_item_reports').update({ status }).eq('id', id);
+  if (missingRelation(error)) throw new Error(REPORTS_MIGRATION_HINT);
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteItemReport(id: string): Promise<void> {
+  const { error } = await supabase.from('taste_item_reports').delete().eq('id', id);
+  if (error && !missingRelation(error)) throw new Error(error.message);
 }

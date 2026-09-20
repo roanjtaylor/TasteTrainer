@@ -33,8 +33,11 @@ export interface MapCard {
   itemCount: number;
   /** Proposed rather than built: drawn as a hole in the map. */
   ghost: boolean;
-  /** Where clicking goes — the dataset, or the curate flow prefilled from the ghost. */
-  href: string;
+  /** Where clicking goes, on a field that exists. */
+  href?: string;
+  /** A gap has nowhere to go yet, so clicking one opens Claude with the ask to build
+   *  it instead — the proposal it made, handed back to it as a request. */
+  ask?: string;
   /** Ghosts carry their reason so the card can explain why the gap matters. */
   why?: string;
 }
@@ -394,7 +397,7 @@ export function cardsFor(
       itemCount: 0,
       ghost: true,
       why: g.why,
-      href: `/${domain}/new?topic=${encodeURIComponent(g.topic)}&description=${encodeURIComponent(g.description)}`,
+      ask: `Build the ${g.topic} field in this world — ${g.description}. Work out the subtopics it divides into, then propose the defining items for it.`,
     })),
   ];
 }

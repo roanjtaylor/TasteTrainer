@@ -8,16 +8,16 @@
 // A propose tool's RESULT is written for Claude, not the user: it says exactly what was
 // staged and what was refused and why ("'Dive Watches' is not a subtopic of Watches; the
 // subtopics are …"), so Claude corrects itself within the same turn. That replaces the
-// old pattern of asking for JSON in a fixed shape and repairing it afterwards
-// (services/claude.ts) — the model gets told, instead of the code guessing.
+// old pattern of asking for JSON in a fixed shape and repairing it afterwards — the
+// model gets told, instead of the code guessing.
 //
 // The manifest below travels to the HF Space with every run; the Space registers each
 // entry with the Agent SDK and relays the calls back here (services/agentRun.ts).
-import { getDataset, getWorldMap, listDatasets } from '../storage.ts';
+import { getDataset, getWorldMap, listDatasets, listItemReports } from '../storage.ts';
 import { attachImages } from '../routes/curation.ts';
 import { mapWithLimit } from './imageResolvers.ts';
 import { nameKey } from './itemHygiene.ts';
-import { loadRules } from './claude.ts';
+import { loadRules } from './curationRules.ts';
 import { openChangeset, patchOps, project, projectMap, rejectOps, stageOps, type Workspace } from './changesets.ts';
 import { applyMapOp, ghostKey } from './worldMap.ts';
 import { newId } from '../util.ts';
@@ -171,6 +171,18 @@ export const TOOL_SPECS: ToolSpec[] = [
     name: 'get_pending_changes',
     description: 'List the changes already staged in this conversation and still awaiting the user, with their ids.',
     inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'get_item_reports',
+    description:
+      "Read visitor-flagged problems on items — left by flipping a picture in the public embed widget (wrong info, a bad picture, anything off). Check this before refining a dataset the user mentions reports for, or when they ask what's been flagged.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dataset: { ...DATASET_REF, description: 'Limit to one dataset (id or topic). Omit to see reports across every dataset.' },
+        status: { type: 'string', enum: ['open', 'resolved'], description: 'Default open.' },
+      },
+    },
   },
   {
     name: 'propose_add_items',
@@ -565,6 +577,18 @@ async function pendingChangesTool(ctx: ToolContext): Promise<string> {
   const pending = (cs?.ops ?? []).filter((o) => o.status === 'pending' || o.status === 'conflict');
   if (!cs || !pending.length) return 'Nothing is staged.';
   return pending.map((o) => `${o.id} — ${describeOp(o, cs.datasetTopics)}`).join('\n');
+}
+
+async function getItemReportsTool(ctx: ToolContext, input: any): Promise<string> {
+  const status = input?.status === 'resolved' ? 'resolved' : 'open';
+  const datasetId = str(input?.dataset) ? (await resolveDataset(ctx, input.dataset)).id : undefined;
+  const reports = (await listItemReports({ datasetId, status })).filter(
+    (r) => ctx.personal || r.domain !== 'personal',
+  );
+  if (!reports.length) return `No ${status} item reports${datasetId ? ' for this dataset' : ''}.`;
+  return reports
+    .map((r) => `${r.id} — dataset ${r.datasetId}, item "${r.itemName}" (${r.itemId}): ${r.text}`)
+    .join('\n');
 }
 
 // ---- Propose tools ----
@@ -1106,6 +1130,7 @@ const HANDLERS: Record<string, (ctx: ToolContext, input: any) => Promise<string>
   get_world_map: getWorldMapTool,
   get_curation_rules: () => loadRules(),
   get_pending_changes: pendingChangesTool,
+  get_item_reports: getItemReportsTool,
   propose_add_items: proposeAddItems,
   propose_update_items: proposeUpdateItems,
   propose_remove_items: proposeRemoveItems,

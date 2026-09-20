@@ -4,13 +4,15 @@ import { slugifyTopic, type Subtopic } from '../../../shared/types';
 import { createDataset, useDatasetList } from '../lib/data';
 import { SubtopicEditor, namedSubtopics } from '../components/SubtopicEditor';
 
-// Starting a personal dataset (9-personal-and-auth.md) — /personal/new.
+// Starting a personal dataset (9-personal-and-auth.md) — /personal/new, and the only
+// "new dataset" screen left in the app.
 //
-// The researched worlds' version of this screen (Curate.tsx) is three steps because
-// Claude does two of them: map the field, research the items. Neither exists here.
-// What your collection divides into, and what is in it, are things only you know — so
-// this is one short form that makes an EMPTY dataset, and the adding happens inside it
-// (DatasetView), where you can see the collection take shape as you drop files in.
+// The researched worlds don't need one: a field there is named, mapped and filled by
+// asking Claude in the dock, and the map's gaps are the way in. Here neither half is
+// Claude's to do — what your collection divides into, and what is in it, are things
+// only you know. So this is one short form that makes an EMPTY dataset, and the adding
+// happens inside it (DatasetView), where you can see the collection take shape as you
+// drop files in.
 export function PersonalNew() {
   const navigate = useNavigate();
   const [topic, setTopic] = useState('');
@@ -21,7 +23,7 @@ export function PersonalNew() {
 
   // Names are unique across the WHOLE shelf, every world (the slug column's unique
   // constraint), so a personal "Watches" collides with the physical one. Caught as
-  // you type, the same way Curate does, rather than as a 409 on save.
+  // you type rather than as a 409 on save.
   const lists = [useDatasetList('physical'), useDatasetList('digital'), useDatasetList('personal')];
   const topicSlug = slugifyTopic(topic.trim());
   const existing = topicSlug
@@ -64,7 +66,7 @@ export function PersonalNew() {
           <input
             className={field}
             value={topic}
-            // One word, as everywhere else — see Curate.tsx.
+            // One word, as dataset names are everywhere else.
             onChange={(e) => setTopic(e.target.value.replace(/\s+/g, ''))}
             placeholder="e.g. Books, Films, Albums, Memories"
           />

@@ -1,26 +1,11 @@
 import type { ReactNode } from 'react';
-import { Link } from 'react-router-dom';
-import type { Job } from '../../../shared/types';
 import { dismissTask, useTasks, type Task } from '../lib/tasks';
-import { cancelJob, currentJob, JOB_STAGE, jobGroupKey, jobReviewPath, useJobs } from '../lib/jobs';
 
-// The single notification queue — one card per DATASET, not one per AI call.
+// The notification queue — one card per running task (lib/tasks.ts), titled by what
+// it is working on, with a stage label underneath and the live progress line under
+// that. Client-side and deliberately transient: gone on refresh.
 //
-// Two sources feed it: running/finished client-side tasks (lib/tasks.ts, gone on
-// refresh) and durable, cross-refresh jobs (lib/jobs.ts). Both carry the dataset
-// they belong to (`task.group` / `jobGroupKey`), and everything sharing a key is
-// folded into a single card titled with the dataset's name, a stage label underneath
-// (Map → Research), and ONE status slot that changes over time:
-// the live progress line while the step runs, then the button that opens it for
-// review once it's done. That replaces a stack of separate "Map Engines" /
-// "Research Engines" cards that each had to be noticed and
-// dismissed on its own — the user asked for "the dataset names as the title, the
-// state as a label, and the status as it updates or the button to view it".
-//
-// Ungrouped tasks (a world-map redraw, a boundary fix, a save) stay as standalone
-// cards under their own title — they aren't steps in a dataset's pipeline.
-//
-// Mounted TWICE (main.tsx), both reading the same shared task/job state, each showing
+// Mounted TWICE (main.tsx), both reading the same shared task state, each showing
 // only at its own breakpoint via Tailwind's `hidden`/responsive classes — never both at
 // once, just two ways of placing the same list:
 //   - `overlay`: a small fixed box, top-right, for narrow windows where the content
@@ -38,24 +23,22 @@ import { cancelJob, currentJob, JOB_STAGE, jobGroupKey, jobReviewPath, useJobs }
 //     proportional margin for this rail to occupy, at any window width.
 export function TaskNotifications({ variant }: { variant: 'overlay' | 'rail' }) {
   const tasks = useTasks();
-  const { jobs } = useJobs();
-  const cards = buildCards(tasks, jobs);
-  if (!cards.length) return null;
+  if (!tasks.length) return null;
 
-  const running = cards.filter((c) => c.status === 'running').length;
+  const running = tasks.filter((t) => t.status === 'running').length;
 
   const body = (
     <>
-      {/* How much AI work is in flight right now — this replaced the nav bar's "N
-          waiting" pill, which counted every finished-but-undismissed job too and so
+      {/* How much work is in flight right now — this replaced the nav bar's "N
+          waiting" pill, which counted finished-but-undismissed work too and so
           read as a backlog rather than activity. */}
       {running > 0 && (
         <p className="pointer-events-auto text-center text-xs text-[var(--color-muted)] underline underline-offset-4">
           {running} running
         </p>
       )}
-      {cards.map((c) => (
-        <NotificationCard key={c.key} card={c} />
+      {tasks.map((t) => (
+        <NotificationCard key={t.id} task={t} />
       ))}
     </>
   );
@@ -88,155 +71,26 @@ export function TaskNotifications({ variant }: { variant: 'overlay' | 'rail' }) 
   );
 }
 
-// ---- Model: one card per dataset ----
-
-type CardStatus = 'running' | 'done' | 'error';
-
-interface Card {
-  key: string;
-  /** The dataset's name for a grouped card; the task's own title otherwise. */
-  title: string;
-  /** "Map" / "Research" — absent on a standalone task. */
-  stage?: string;
-  status: CardStatus;
-  /** The live line while running, or the error text. */
-  detail: string;
-  /** The durable job the card's action (View / Retry) points at, if any. */
-  job: Job | null;
-  /** Everything ✕ should clear — every transient task and every finished job that was
-   *  folded into this card. */
-  taskIds: string[];
-  jobIds: string[];
-}
-
-/**
- * Folds tasks and jobs into cards, newest-activity first. A durable call is tracked
- * twice while it runs — as the transient task streaming its progress, and as the
- * durable job row the poll picks up — and both land in the same dataset's card, where
- * the task's live line wins over the job's (up to 15s stale) polled one. That pairing
- * is also what stops the old mistake this file guards against: two cards for one
- * operation, where the duplicate's ✕ deleted the durable job mid-run and the finished
- * result then had no row to land in.
- */
-function buildCards(tasks: Task[], jobs: Job[]): Card[] {
-  const cards = new Map<string, Card>();
-
-  // Durable jobs first, grouped by dataset, one "current" job each.
-  const byKey = new Map<string, Job[]>();
-  for (const job of jobs) {
-    const key = jobGroupKey(job);
-    byKey.set(key, [...(byKey.get(key) ?? []), job]);
-  }
-  for (const [key, group] of byKey) {
-    const job = currentJob(group)!;
-    const input = job.input as { topic?: string };
-    cards.set(key, {
-      key,
-      title: input.topic ?? job.title,
-      stage: JOB_STAGE[job.kind],
-      status: job.status,
-      detail: job.status === 'error' ? job.error ?? 'Something went wrong' : job.progress || 'still running…',
-      job,
-      taskIds: [],
-      // Only rows that can actually be deleted: the server refuses to delete a running
-      // one (routes/jobs.ts), and ✕ isn't offered while anything in the card runs.
-      jobIds: group.filter((j) => j.status !== 'running').map((j) => j.id),
-    });
-  }
-
-  // Then transient tasks: into their dataset's card if they have one, standalone if not.
-  for (const task of tasks) {
-    const key = task.group ?? `task:${task.id}`;
-    const existing = cards.get(key);
-    if (!existing) {
-      cards.set(key, {
-        key,
-        title: task.title,
-        stage: task.stage,
-        status: task.status,
-        detail: task.detail,
-        job: null,
-        taskIds: [task.id],
-        jobIds: [],
-      });
-      continue;
-    }
-    existing.taskIds.push(task.id);
-    if (task.status === 'running') {
-      // The live stream is the freshest word on what's happening — and the stage it
-      // names is the one the user just started, even if an older job for the same
-      // dataset is still the durable "current" until the new row is fetched.
-      existing.status = 'running';
-      existing.stage = task.stage ?? existing.stage;
-      existing.detail = task.detail || existing.detail;
-    } else if (task.status === 'error' && existing.status !== 'running') {
-      existing.status = 'error';
-      existing.detail = task.detail || existing.detail;
-    }
-  }
-
-  // Running work at the top, then whatever finished most recently.
-  return [...cards.values()].sort((a, b) => {
-    const ar = a.status === 'running' ? 1 : 0;
-    const br = b.status === 'running' ? 1 : 0;
-    if (ar !== br) return br - ar;
-    const au = a.job?.updatedAt ?? '';
-    const bu = b.job?.updatedAt ?? '';
-    return bu < au ? -1 : bu > au ? 1 : 0;
-  });
-}
-
-// ---- View ----
-
-function NotificationCard({ card }: { card: Card }) {
-  const { job } = card;
-  // No ✕ while running: the server can't stop the Claude call behind a job (and
-  // refuses to delete a running row — routes/jobs.ts), so "cancel" here only ever
-  // meant "throw the result away when it lands". Once it finishes or fails, ✕
-  // genuinely dismisses the whole dataset's card. A job that stops updating for 20
-  // minutes reads as failed (storage.ts) and becomes dismissable that way.
-  const onDismiss =
-    card.status === 'running'
-      ? undefined
-      : () => {
-          card.taskIds.forEach(dismissTask);
-          card.jobIds.forEach((id) => void cancelJob(id));
-        };
-
-  // What the button does depends on the stage: a map is just "look at it";
-  // research produces a proposal that needs accepting.
-  const actionLabel =
-    job && job.kind === 'items' ? 'Review & accept →' : 'View →';
+function NotificationCard({ task }: { task: Task }) {
+  // Both success and failure stay until dismissed — work that quietly cleared itself
+  // on success was easy to miss finishing at all.
+  const onDismiss = task.status === 'running' ? undefined : () => dismissTask(task.id);
 
   return (
-    <CardShell title={card.title} stage={card.stage} running={card.status === 'running'} onDismiss={onDismiss}>
-      {card.status === 'running' && (
-        <p className="mt-1 truncate text-xs text-[var(--color-muted)]" title={card.detail}>
-          {card.detail || 'Starting…'}
+    <CardShell
+      title={task.title}
+      stage={task.stage}
+      running={task.status === 'running'}
+      onDismiss={onDismiss}
+    >
+      {task.status === 'running' && (
+        <p className="mt-1 truncate text-xs text-[var(--color-muted)]" title={task.detail}>
+          {task.detail || 'Starting…'}
         </p>
       )}
-      {card.status === 'error' && <p className="mt-1 text-xs text-[var(--color-accent)]">{card.detail}</p>}
-      {card.status === 'done' && job && (
-        <Link
-          to={jobReviewPath(job)}
-          className="mt-2 inline-block rounded-full bg-[var(--color-accent)] px-3 py-1 text-xs text-white"
-        >
-          {actionLabel}
-        </Link>
-      )}
-      {card.status === 'done' && !job && card.detail && (
-        <p className="mt-1 text-xs text-[var(--color-muted)]">{card.detail}</p>
-      )}
-      {/* A stale/failed job still remembers what it was started with (server/storage.ts's
-          rowToJob, Curate.tsx's resumeJob) — retrying is picking it back up, not
-          retyping the topic from scratch. */}
-      {card.status === 'error' && job && (
-        <Link
-          to={jobReviewPath(job)}
-          className="mt-2 inline-block rounded-full border border-[var(--color-line)] px-3 py-1 text-xs"
-        >
-          Retry →
-        </Link>
+      {task.status === 'error' && <p className="mt-1 text-xs text-[var(--color-accent)]">{task.detail}</p>}
+      {task.status === 'done' && task.detail && (
+        <p className="mt-1 text-xs text-[var(--color-muted)]">{task.detail}</p>
       )}
     </CardShell>
   );

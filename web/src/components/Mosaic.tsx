@@ -218,7 +218,7 @@ export function Mosaic({ items, onOpenItem }: { items: EmbedItem[]; onOpenItem: 
     <div className="relative h-full w-full overflow-hidden bg-[var(--color-ink)]">
       <div
         ref={viewportRef}
-        className="h-full w-full touch-none"
+        className="h-full w-full cursor-grab touch-none select-none active:cursor-grabbing"
         onPointerDown={(e) => onPointerDown(e)}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}

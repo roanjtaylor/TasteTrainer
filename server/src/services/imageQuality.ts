@@ -189,7 +189,7 @@ export function readDimensions(b: Buffer): { width: number | null; height: numbe
 
 export interface Verdict {
   confidence: Confidence;
-  /** Human-readable, shown in the curate stream and stored on the item. */
+  /** Human-readable, shown in the progress stream and stored on the item. */
   reasons: string[];
   fatal: boolean;
 }
@@ -325,7 +325,7 @@ export function combine(...verdicts: Verdict[]): Verdict {
  * Ask Claude whether the image actually depicts the item — the only check that can
  * catch a well-formed screenshot of the wrong thing.
  *
- * Unwired on purpose. The HF Space proxy (services/claude.ts) sends `content` as a
+ * Unwired on purpose. The HF Space proxy sends `content` as a
  * plain string and rejects Anthropic content blocks with
  * "last.content.trim is not a function", so it cannot carry an image today. This is the
  * seam: when the Space accepts blocks, this returns a real Verdict and joins combine()

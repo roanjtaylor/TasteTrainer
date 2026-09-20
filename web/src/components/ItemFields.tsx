@@ -1,7 +1,7 @@
 import type { Domain, Subtopic } from '../../../shared/types';
 
-// The editable fields shared by a proposed item (Curate review grid) and a saved
-// item (dataset edit). Both Item and ProposedItem carry this subset.
+// The editable fields shared by a proposed item and a saved item (dataset edit).
+// Both Item and ProposedItem carry this subset.
 export interface EditableItem {
   name: string;
   description: string;

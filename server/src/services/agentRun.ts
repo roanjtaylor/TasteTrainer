@@ -21,7 +21,7 @@ import {
   HF_APP_SECRET,
   HF_BASE_URL,
 } from '../config.ts';
-import { getDataset, listDatasets, saveThread } from '../storage.ts';
+import { getDataset, listDatasets, listItemReports, saveThread } from '../storage.ts';
 import { openChangeset } from './changesets.ts';
 import {
   TOOL_SPECS,
@@ -43,8 +43,10 @@ import {
   type ChatView,
 } from '../../../shared/chat.ts';
 
-// undici's own idle limits sit under any AbortSignal (see services/claude.ts); lift
-// them past the run deadline so the deadline is the only thing that can end a run.
+// undici's own idle limits (headersTimeout/bodyTimeout, 300s each) sit under any
+// AbortSignal we pass — either one kills a long silent call with a bare
+// `TypeError: terminated`. Lift them past the run deadline so the deadline is the only
+// thing that can end a run.
 const dispatcher = new Agent({ headersTimeout: CHAT_TIMEOUT_MS + 60_000, bodyTimeout: CHAT_TIMEOUT_MS + 60_000 });
 
 /** The Space prefixes caller tools with its MCP server name; the transcript shouldn't. */
@@ -169,6 +171,13 @@ async function describeView(view: ChatView, personal: boolean): Promise<string> 
     if (item) {
       lines.push('', 'And this item open in front of them — "this", "it", "this one" mean this item:', JSON.stringify(itemForClaude(item), null, 1));
     }
+    const openReports = await listItemReports({ datasetId: ds.id, status: 'open' });
+    if (openReports.length) {
+      lines.push(
+        '',
+        `${openReports.length} open visitor report(s) flagged on this dataset from the public embed widget — call get_item_reports to read them.`,
+      );
+    }
   } else if (view.domain && (view.domain !== 'personal' || personal)) {
     const shelf = await listDatasets(view.domain);
     lines.push(
@@ -194,7 +203,7 @@ The app is the storage and the display. You are the intelligence. The user talks
 
 # How you work here
 - You see what they see. Their current view is described below; "this", "here", "these" refer to it.
-- READ freely: get_dataset, get_items, search_items, list_datasets, get_world_map. Use WebSearch / WebFetch when a fact matters and you aren't sure of it — years, makers and attributions should be right, not plausible.
+- READ freely: get_dataset, get_items, search_items, list_datasets, get_world_map, get_item_reports (what visitors have flagged wrong on the public embed widget). Use WebSearch / WebFetch when a fact matters and you aren't sure of it — years, makers and attributions should be right, not plausible.
 - CHANGE only through the propose_* tools. They never write: each stages a change the user then sees as a red/green diff and accepts, edits or discards — exactly like a code review. So never say a change "has been made" or "is saved"; say what you've proposed and that it's waiting for them. Don't ask permission before proposing — proposing IS asking.
 - The propose tools validate, and their results tell you what was refused and why. Read them and fix what you can in the same turn.
 - Refer to items by id in tool calls, by name when talking to the user. Never show ids in your reply.

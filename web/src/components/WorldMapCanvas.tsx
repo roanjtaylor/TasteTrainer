@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useMemo, type CSSProperties, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import type { WorldMap } from '../../../shared/types';
+import { useChatView } from '../lib/chatView';
 import { layoutWorld, type LaidOutCard, type MapCard } from '../lib/mapLayout';
 
 // The world as a map (8-field-map.md).
@@ -107,8 +108,42 @@ function AxisLabel({ axis, vertical }: { axis: WorldMap['axes']['x']; vertical?:
   );
 }
 
+/**
+ * A card is a link when the field exists and a button when it doesn't: a gap has no
+ * page of its own to open, so clicking one opens Claude with the ask to build it
+ * (lib/chatView.tsx) — the proposal it made on the map, handed straight back as a
+ * request you can send or reword.
+ */
+function CardAction({
+  card,
+  title,
+  style,
+  className,
+  children,
+}: {
+  card: MapCard;
+  title?: string;
+  style?: CSSProperties;
+  className: string;
+  children: ReactNode;
+}) {
+  const { ask } = useChatView();
+  if (card.href) {
+    return (
+      <Link to={card.href} title={title} style={style} className={className}>
+        {children}
+      </Link>
+    );
+  }
+  return (
+    <button type="button" onClick={() => card.ask && ask(card.ask)} title={title} style={style} className={className}>
+      {children}
+    </button>
+  );
+}
+
 function MapCardView({ card }: { card: LaidOutCard }) {
-  const style: React.CSSProperties = {
+  const style: CSSProperties = {
     left: `${card.x * 100}%`,
     top: `${card.y * 100}%`,
     width: `${card.width * 100}%`,
@@ -130,13 +165,13 @@ function MapCardView({ card }: { card: LaidOutCard }) {
     'absolute flex items-center justify-center overflow-hidden rounded-full px-3 text-center shadow-sm';
 
   // Ghosts are dashed and muted — a hole in the map, not a thing in it. Clicking one
-  // opens the curate flow already filled in from the proposal Claude made.
+  // asks Claude to build it.
   return (
-    <Link
-      to={card.href}
+    <CardAction
+      card={card}
       title={
         card.ghost
-          ? `${card.title} — not built yet.${card.why ? ` ${card.why}` : ''}`
+          ? `${card.title} — not built yet.${card.why ? ` ${card.why}` : ''} Click to ask Claude to build it.`
           : `${card.title} — ${card.itemCount} items. ${card.subtitle}`
       }
       style={style}
@@ -147,7 +182,7 @@ function MapCardView({ card }: { card: LaidOutCard }) {
       }
     >
       <span className="serif truncate leading-none">{card.title}</span>
-    </Link>
+    </CardAction>
   );
 }
 
@@ -177,10 +212,10 @@ export function WorldMapSections({ map, cards }: { map: WorldMap; cards: MapCard
                 .slice()
                 .sort((a, b) => Number(a.ghost) - Number(b.ghost) || b.itemCount - a.itemCount)
                 .map((card) => (
-                  <Link
+                  <CardAction
                     key={card.key}
-                    to={card.href}
-                    className={`rounded-xl p-4 ${
+                    card={card}
+                    className={`rounded-xl p-4 text-left ${
                       card.ghost
                         ? 'border border-dashed border-[var(--color-accent)]/50'
                         : 'border border-[var(--color-line)] bg-[var(--color-card)]'
@@ -189,9 +224,9 @@ export function WorldMapSections({ map, cards }: { map: WorldMap; cards: MapCard
                     <div className="serif text-lg leading-tight">{card.title}</div>
                     <p className="mt-1 text-sm text-[var(--color-muted)]">{card.subtitle}</p>
                     <p className="mt-2 text-xs uppercase tracking-wider text-[var(--color-muted)]">
-                      {card.ghost ? 'not built yet' : `${card.itemCount} items`}
+                      {card.ghost ? 'not built yet — ask Claude' : `${card.itemCount} items`}
                     </p>
-                  </Link>
+                  </CardAction>
                 ))}
             </div>
           </section>

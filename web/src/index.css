@@ -62,3 +62,75 @@ h3,
 .custom-scroll::-webkit-scrollbar-thumb:hover {
   background-color: var(--color-muted);
 }
+
+/* Embed slideshow (Embed.tsx): the incoming picture slides in over the outgoing
+   one instead of a hard swap. "next" and "prev" travel in opposite directions,
+   so entering and leaving each have a left- and a right-going variant. */
+@keyframes embed-slide-in-from-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+@keyframes embed-slide-in-from-left {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+@keyframes embed-slide-out-to-left {
+  from { transform: translateX(0); }
+  to { transform: translateX(-100%); }
+}
+@keyframes embed-slide-out-to-right {
+  from { transform: translateX(0); }
+  to { transform: translateX(100%); }
+}
+.embed-slide-enter-next {
+  animation: embed-slide-in-from-right 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.embed-slide-enter-prev {
+  animation: embed-slide-in-from-left 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.embed-slide-exit-next {
+  animation: embed-slide-out-to-left 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.embed-slide-exit-prev {
+  animation: embed-slide-out-to-right 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Embed slideshow card flip (Embed.tsx): clicking the picture flips it horizontally
+   to its "back" — the item's info, and a way to report a problem with it. A plain
+   rotateY transition clips the top/bottom corners mid-flip: at 90deg the card is
+   edge-on to the camera, and perspective makes its projected height overshoot the
+   container right where it's clipped by overflow-hidden. Shrinking to ~80% at the
+   midpoint (a proper 3-keyframe animation, not a 2-point transition — a transition
+   can't pass through a value it isn't animating to) keeps every corner in frame
+   through the whole turn, then it's back at full size once it settles flat again.
+   The angles themselves come in through `--flip-from/mid/to` (set inline by
+   Embed.tsx) rather than being baked into the keyframes: front->back and
+   back->front both spin the same way round — always increasing — instead of the
+   card winding forward then unwinding backward, so it keeps spinning like a
+   revolving door rather than snapping back and forth. */
+.embed-flip-perspective {
+  perspective: 1600px;
+}
+.embed-flip-inner {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  transform-style: preserve-3d;
+}
+@keyframes embed-flip-turn {
+  0% { transform: rotateY(var(--flip-from)) scale(1); }
+  50% { transform: rotateY(var(--flip-mid)) scale(0.8); }
+  100% { transform: rotateY(var(--flip-to)) scale(1); }
+}
+.embed-flip-inner.embed-flip-anim {
+  animation: embed-flip-turn 550ms cubic-bezier(0.4, 0.2, 0.2, 1) both;
+}
+.embed-flip-face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+.embed-flip-face-back {
+  transform: rotateY(180deg);
+}

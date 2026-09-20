@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import type { Dataset, Domain, Item, Subtopic } from '../../../shared/types';
+import type { Dataset, Domain, Item, ItemReport, Subtopic } from '../../../shared/types';
 import { saveDataset, useDataset } from '../lib/data';
-import { useReportChatView } from '../lib/chatView';
+import { api } from '../lib/api';
+import { useChatView, useReportChatView } from '../lib/chatView';
 import { physicalImageQuery } from '../lib/image';
 import { ItemCard } from '../components/ItemCard';
 import { ItemModal } from '../components/ItemModal';
@@ -67,6 +68,8 @@ export function DatasetView() {
         </p>
       </div>
 
+      <ReportsPanel datasetId={ds.id} />
+
       <Browse
         ds={ds}
         pool={pool}
@@ -74,6 +77,81 @@ export function DatasetView() {
       />
 
       <BackToTop />
+    </div>
+  );
+}
+
+// ---- Reports: what visitors flagged from the public embed widget's card-back
+// (Embed.tsx's flip), read through server/src/routes/reports.ts. Shown only while
+// there's something open to look at — most datasets most of the time have nothing
+// here, and an empty "0 reports" strip would just be permanent clutter. ----
+function ReportsPanel({ datasetId }: { datasetId: string }) {
+  const [reports, setReports] = useState<ItemReport[] | null>(null);
+  const { ask } = useChatView();
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listReports(datasetId)
+      .then((r) => {
+        if (!cancelled) setReports(r);
+      })
+      .catch(() => {
+        if (!cancelled) setReports([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [datasetId]);
+
+  async function dismiss(id: string) {
+    // Optimistic: the curator has read it, whether or not the resolve write lands
+    // before they move on.
+    setReports((r) => r?.filter((x) => x.id !== id) ?? r);
+    try {
+      await api.dismissReport(id);
+    } catch {
+      /* stays dismissed in this view either way */
+    }
+  }
+
+  if (!reports || reports.length === 0) return null;
+
+  return (
+    <div className="space-y-2 rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/5 p-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-accent)]">
+        {reports.length} reported {reports.length === 1 ? 'problem' : 'problems'}
+      </p>
+      <ul className="space-y-2">
+        {reports.map((r) => (
+          <li key={r.id} className="flex items-start justify-between gap-3 text-sm">
+            <div className="min-w-0">
+              <p className="truncate font-medium">{r.itemName || 'Untitled item'}</p>
+              <p className="text-[var(--color-muted)]">{r.text}</p>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <button
+                onClick={() =>
+                  ask(
+                    `A visitor flagged a problem with "${r.itemName}" via the embed widget: "${r.text}". Please look into it and fix the dataset if something needs fixing.`,
+                  )
+                }
+                title="Ask Claude about this"
+                className="rounded-full border border-[var(--color-claude)]/60 px-3 py-1 text-xs text-[var(--color-claude)] hover:bg-[var(--color-wall-soft)]"
+              >
+                Ask Claude
+              </button>
+              <button
+                onClick={() => dismiss(r.id)}
+                title="Dismiss this report"
+                className="rounded-full border border-[var(--color-line)] px-3 py-1 text-xs text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
+              >
+                Dismiss
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -508,7 +586,7 @@ function ZoomControl({
   );
 }
 
-// Inline editor for a saved item — same minimalist form as the curate review grid,
+// Inline editor for a saved item — the same minimalist form as everywhere else,
 // outlined in the accent colour so it reads as "editing". Save writes through to disk.
 function ItemEditorCard({
   draft,

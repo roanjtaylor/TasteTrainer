@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { DOMAINS, DOMAIN_LABELS, isCuratedDomain } from '../../../shared/types';
-import type { DatasetSummary, Domain, EmbedDataset } from '../../../shared/types';
+import type { DatasetSummary, Domain, EmbedDataset, EmbedItem } from '../../../shared/types';
 import { api } from '../lib/api';
 import { thumbSrcSet } from '../lib/image';
 import { Photo } from '../components/Photo';
@@ -17,16 +17,29 @@ const SINGLE_SIZES = '100vw';
 type Step =
   | { kind: 'world' }
   | { kind: 'dataset'; domain: Domain }
-  // `next` is the picture the following shuffle will land on — chosen ahead of time so
-  // it can be fetched while this one is being looked at (see Browse's preload).
-  | { kind: 'browse'; ds: EmbedDataset; index: number; next: number };
+  | { kind: 'browse'; ds: EmbedDataset };
 
-/** A random index other than `not` — or `not` itself when there's nothing else. */
-function randomOther(count: number, not: number): number {
-  if (count < 2) return not;
-  let i = not;
-  while (i === not) i = Math.floor(Math.random() * count);
-  return i;
+/** How the slideshow steps through the dataset: a random pass, or oldest-first. */
+type PlayMode = 'shuffle' | 'chronological';
+
+/** A permutation of `0..n-1` — the browsing order for the given mode. Shuffle
+ * plays a full random pass (a Fisher-Yates shuffle) rather than picking a fresh
+ * random index each time, so pictures don't repeat until the whole set has. */
+function buildOrder(items: EmbedItem[], mode: PlayMode): number[] {
+  const order = items.map((_, i) => i);
+  if (mode === 'chronological') {
+    order.sort((a, b) => {
+      const ya = items[a].year ?? Infinity;
+      const yb = items[b].year ?? Infinity;
+      return ya !== yb ? ya - yb : a - b;
+    });
+    return order;
+  }
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  return order;
 }
 
 /**
@@ -53,10 +66,7 @@ export function Embed() {
     setError('');
     api
       .getEmbed(id)
-      .then((ds) => {
-        const index = Math.floor(Math.random() * Math.max(ds.items.length, 1));
-        setStep({ kind: 'browse', ds, index, next: randomOther(ds.items.length, index) });
-      })
+      .then((ds) => setStep({ kind: 'browse', ds }))
       .catch((e: any) => setError(e?.message ?? 'Could not load this dataset'));
   }, []);
 
@@ -75,22 +85,6 @@ export function Embed() {
       return [] as DatasetSummary[];
     }).then(setDatasets);
   }
-
-  // Never repeats the picture on screen when there's more than one to pick from.
-  const shuffle = useCallback(() => {
-    setStep((s) => {
-      if (s.kind !== 'browse' || s.ds.items.length < 2) return s;
-      return { ...s, index: s.next, next: randomOther(s.ds.items.length, s.next) };
-    });
-  }, []);
-
-  // Picking a tile in the mosaic (below) jumps straight to it, same as landing on
-  // it by shuffle — one index, shared by both ways of looking.
-  const openIndex = useCallback((index: number) => {
-    setStep((s) =>
-      s.kind === 'browse' ? { ...s, index, next: s.next === index ? randomOther(s.ds.items.length, index) : s.next } : s,
-    );
-  }, []);
 
   // A deep-linked embed that failed to load shows only the error — never the picker,
   // which would just invite browsing to something else instead of what was linked.
@@ -115,14 +109,7 @@ export function Embed() {
         />
       )}
       {step.kind === 'browse' && (
-        <Browse
-          ds={step.ds}
-          index={step.index}
-          next={step.next}
-          onShuffle={shuffle}
-          onOpenIndex={openIndex}
-          onBack={deepLink ? undefined : () => setStep({ kind: 'world' })}
-        />
+        <Browse ds={step.ds} onBack={deepLink ? undefined : () => setStep({ kind: 'world' })} />
       )}
     </div>
   );
@@ -188,41 +175,127 @@ function DatasetPicker({
   );
 }
 
-// ---- Step 3: browse one dataset — either one picture at a time (shuffle) or the
-// whole field at once (a zoomable/pannable mosaic of every picture, Mosaic.tsx) ----
-function Browse({
-  ds,
-  index,
-  next,
-  onShuffle,
-  onOpenIndex,
-  onBack,
-}: {
-  ds: EmbedDataset;
-  index: number;
-  /** Where the next shuffle lands — fetched ahead so the swap is instant. */
-  next: number;
-  onShuffle: () => void;
-  /** Tapping a tile in the mosaic jumps single-picture view to that one. */
-  onOpenIndex: (index: number) => void;
-  /** Absent for a deep-linked embed — there's no picker to go back to. */
-  onBack?: () => void;
-}) {
-  const [mode, setMode] = useState<'single' | 'mosaic'>('single');
+// ---- Step 3: browse one dataset — either a retro slideshow, one picture at a time
+// with next/previous (shuffle or chronological order), or the whole field at once
+// (a zoomable/pannable mosaic of every picture, Mosaic.tsx) ----
+function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
+  const [viewMode, setViewMode] = useState<'slideshow' | 'mosaic'>('slideshow');
+  const [playMode, setPlayMode] = useState<PlayMode>('shuffle');
+  const [order, setOrder] = useState<number[]>(() => buildOrder(ds.items, 'shuffle'));
+  const [pos, setPos] = useState(0);
+  // Set only while a next/prev transition is animating: the outgoing picture
+  // (at `prevPos`) slides off in `dir` while the new current picture slides in.
+  const [slide, setSlide] = useState<{ prevPos: number; dir: 1 | -1 } | null>(null);
 
-  // Warm the cache with the next shuffle's picture. Same srcset + sizes as the Photo
-  // that will show it, so the browser picks — and later reuses — the same file.
-  const nextImage = mode === 'single' && next !== index ? ds.items[next]?.image : undefined;
+  const goTo = useCallback(
+    (newPos: number, dir: 1 | -1) => {
+      if (order.length < 2 || slide) return;
+      setSlide({ prevPos: pos, dir });
+      setPos(newPos);
+    },
+    [order.length, pos, slide],
+  );
+  const goNext = useCallback(() => goTo((pos + 1) % order.length, 1), [goTo, pos, order.length]);
+  const goPrev = useCallback(() => goTo((pos - 1 + order.length) % order.length, -1), [goTo, pos, order.length]);
+
+  // Switching shuffle/chronological rebuilds the order but stays on the same
+  // picture — only where you go from here changes, not what's on screen.
+  const switchPlayMode = useCallback(
+    (mode: PlayMode) => {
+      setPlayMode((prev) => {
+        if (prev === mode) return prev;
+        const currentItem = order[pos];
+        const nextOrder = buildOrder(ds.items, mode);
+        const nextPos = nextOrder.indexOf(currentItem);
+        setOrder(nextOrder);
+        setPos(nextPos === -1 ? 0 : nextPos);
+        setSlide(null);
+        return mode;
+      });
+    },
+    [ds.items, order, pos],
+  );
+
+  // Tapping a tile in the mosaic jumps the slideshow straight to it, no transition.
+  const openItemIndex = useCallback(
+    (itemIndex: number) => {
+      const p = order.indexOf(itemIndex);
+      setSlide(null);
+      setPos(p === -1 ? 0 : p);
+      setViewMode('slideshow');
+    },
+    [order],
+  );
+
+  // The card flip (click the picture -> its info + a report button, on the back) and
+  // the report form under it. Both belong to whichever picture is on screen, so
+  // leaving it — next/prev, mosaic, a fresh dataset — resets them rather than
+  // carrying a stale draft or an already-sent confirmation onto the next picture.
+  //
+  // `restAngle` is the settled rotation — 0 (front) or 180 (back), never anything
+  // else once an animation finishes. A flip always animates rest -> rest+180 and
+  // keeps going the same way round every time (front->back is 0->180, and the next
+  // back->front is 180->360, which looks identical to 0 but arrives by continuing
+  // to spin rather than winding back the way it came) — a revolving door, not a
+  // door that swings open and shut. `restAngle` then snaps 360 back down to 0 (same
+  // angle, so nothing visibly changes) purely so the number doesn't grow forever.
+  const [restAngle, setRestAngle] = useState(0);
+  const [animating, setAnimating] = useState(false);
+  const flipped = restAngle === 180;
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportText, setReportText] = useState('');
+  const [reportState, setReportState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [reportError, setReportError] = useState('');
   useEffect(() => {
-    if (!nextImage) return;
-    const img = new Image();
-    const srcSet = thumbSrcSet(nextImage);
-    if (srcSet) {
-      img.sizes = SINGLE_SIZES;
-      img.srcset = srcSet;
+    setRestAngle(0);
+    setAnimating(false);
+    setReportOpen(false);
+    setReportText('');
+    setReportState('idle');
+    setReportError('');
+  }, [pos, viewMode]);
+
+  // Ignoring a click mid-animation stops a fast double-click from restarting the
+  // turn partway through.
+  function flipTo(next: boolean) {
+    if (animating || next === flipped) return;
+    setAnimating(true);
+  }
+  // The chrome around the picture (top bars, caption, prev/next) hides for the whole
+  // turn, not just once it settles — otherwise it would reappear mid-flip, while the
+  // front is still rotating past face-on.
+  const showingBack = flipped || animating;
+
+  async function submitReport(itemId: string) {
+    const text = reportText.trim();
+    if (!text) return;
+    setReportState('sending');
+    setReportError('');
+    try {
+      await api.reportItem(ds.id, itemId, text);
+      setReportState('sent');
+    } catch (e: any) {
+      setReportState('error');
+      setReportError(e?.message ?? 'Could not send that — try again.');
     }
-    img.src = nextImage;
-  }, [nextImage]);
+  }
+
+  // Warm the cache for both neighbours — whichever way the visitor goes next, same
+  // srcset + sizes as the Photo that will show it, so the browser reuses the file.
+  useEffect(() => {
+    if (viewMode !== 'slideshow' || order.length < 2) return;
+    for (const d of [1, -1]) {
+      const src = ds.items[order[(pos + d + order.length) % order.length]]?.image;
+      if (!src) continue;
+      const img = new Image();
+      const srcSet = thumbSrcSet(src);
+      if (srcSet) {
+        img.sizes = SINGLE_SIZES;
+        img.srcset = srcSet;
+      }
+      img.src = src;
+    }
+  }, [pos, order, viewMode, ds.items]);
 
   if (ds.items.length === 0) {
     return (
@@ -232,81 +305,253 @@ function Browse({
     );
   }
 
-  const item = ds.items[index];
-  const canMosaic = ds.items.length > 1;
+  const current = ds.items[order[pos]];
+  const canBrowse = ds.items.length > 1;
+
+  // Every piece of chrome (back, mode toggles, caption, prev/next) lives in this
+  // `group` and only shows on hover — the photo itself displays uninterrupted
+  // otherwise. `opacity-0`+`pointer-events-none` at rest so hidden controls can't
+  // eat clicks meant for the image; hover reveals both together.
+  const chrome = 'opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto';
 
   return (
-    <div className="relative h-full w-full">
-      {onBack && (
-        <button
-          onClick={onBack}
-          aria-label="Choose a different dataset"
-          title="Choose a different dataset"
-          className="absolute left-3 top-3 z-10 rounded-full bg-[var(--color-ink)]/70 px-3 py-1.5 text-xs text-[var(--color-wall)] backdrop-blur hover:bg-[var(--color-ink)]"
-        >
-          ← {ds.topic}
-        </button>
-      )}
+    <div className="group relative h-full w-full">
+      {!showingBack && (
+      <div className={`absolute left-3 top-3 z-10 flex items-center gap-1.5 ${chrome}`}>
+        {onBack && (
+          <button
+            onClick={onBack}
+            aria-label="Choose a different dataset"
+            title="Choose a different dataset"
+            className="rounded-full bg-[var(--color-ink)]/70 px-3 py-1.5 text-xs text-[var(--color-wall)] backdrop-blur hover:bg-[var(--color-ink)]"
+          >
+            ← {ds.topic}
+          </button>
+        )}
 
-      {canMosaic && (
-        <div className="absolute right-3 top-3 z-10 flex gap-1.5">
-          {mode === 'single' ? (
-            <>
-              <button
-                onClick={() => setMode('mosaic')}
-                aria-label="See every picture at once"
-                title="See every picture at once"
-                className="rounded-full bg-[var(--color-ink)]/70 p-2 text-[var(--color-wall)] backdrop-blur transition hover:bg-[var(--color-ink)]"
-              >
-                <MosaicIcon />
-              </button>
-              <button
-                onClick={onShuffle}
-                aria-label="Show another picture"
-                title="Shuffle"
-                className="rounded-full bg-[var(--color-ink)]/70 p-2 text-[var(--color-wall)] backdrop-blur transition hover:bg-[var(--color-ink)]"
-              >
-                <ShuffleIcon />
-              </button>
-            </>
-          ) : (
+        {canBrowse &&
+          (viewMode === 'slideshow' ? (
             <button
-              onClick={() => setMode('single')}
-              aria-label="Back to one picture"
-              title="Back to one picture"
-              className="rounded-full bg-[var(--color-ink)]/70 p-2 text-[var(--color-wall)] backdrop-blur transition hover:bg-[var(--color-ink)]"
+              onClick={() => setViewMode('mosaic')}
+              aria-label="Single view — switch to see every picture at once"
+              title="Single view — switch to mosaic"
+              className="flex items-center gap-1.5 rounded-full bg-[var(--color-ink)]/70 px-3 py-2 text-xs text-[var(--color-wall)] backdrop-blur transition hover:bg-[var(--color-ink)]"
             >
               <SingleIcon />
+              Single view
             </button>
-          )}
+          ) : (
+            <button
+              onClick={() => setViewMode('slideshow')}
+              aria-label="Mosaic — switch back to one picture"
+              title="Mosaic — switch to single view"
+              className="flex items-center gap-1.5 rounded-full bg-[var(--color-ink)]/70 px-3 py-2 text-xs text-[var(--color-wall)] backdrop-blur transition hover:bg-[var(--color-ink)]"
+            >
+              <MosaicIcon />
+              Mosaic
+            </button>
+          ))}
+      </div>
+      )}
+
+      {canBrowse && viewMode === 'slideshow' && !showingBack && (
+        <div className={`absolute right-3 top-3 z-10 flex gap-1.5 ${chrome}`}>
+          <button
+            onClick={() => switchPlayMode(playMode === 'shuffle' ? 'chronological' : 'shuffle')}
+            aria-label={playMode === 'shuffle' ? 'Shuffle: on — switch to linear order' : 'Linear order — switch to shuffle'}
+            title={playMode === 'shuffle' ? 'Shuffle: on' : 'Linear order'}
+            className="relative flex items-center gap-1.5 rounded-full bg-[var(--color-ink)]/70 px-3 py-2 text-xs backdrop-blur transition hover:bg-[var(--color-ink)]"
+          >
+            <ShuffleIcon className={playMode === 'shuffle' ? 'text-[var(--color-accent)]' : 'text-[var(--color-wall)]'} />
+            <span className={playMode === 'shuffle' ? 'text-[var(--color-accent)]' : 'text-[var(--color-wall)]'}>
+              {playMode === 'shuffle' ? 'Shuffle' : 'Linear'}
+            </span>
+            {playMode === 'shuffle' && (
+              <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[var(--color-accent)]" />
+            )}
+          </button>
         </div>
       )}
 
-      {mode === 'mosaic' ? (
-        <Mosaic items={ds.items} onOpenItem={(i) => { onOpenIndex(i); setMode('single'); }} />
+      {viewMode === 'mosaic' ? (
+        <Mosaic items={ds.items} onOpenItem={openItemIndex} />
       ) : (
         <>
-          <div className="absolute bottom-3 left-3 z-10 max-w-[70%] truncate rounded-full bg-[var(--color-ink)]/60 px-3 py-1 text-xs text-[var(--color-wall)] backdrop-blur">
-            {item.name}
-            {item.year ? ` · ${item.year}` : ''}
+          <div className="relative h-full w-full overflow-hidden bg-[var(--color-ink)]">
+            {slide && (
+              <div
+                key={`out-${slide.prevPos}`}
+                onAnimationEnd={() => setSlide(null)}
+                className={`absolute inset-0 ${slide.dir === 1 ? 'embed-slide-exit-next' : 'embed-slide-exit-prev'}`}
+              >
+                <Photo
+                  src={ds.items[order[slide.prevPos]].image}
+                  alt={ds.items[order[slide.prevPos]].name}
+                  className="h-full w-full"
+                  sizes={SINGLE_SIZES}
+                />
+              </div>
+            )}
+            <div
+              key={`in-${pos}`}
+              className={`absolute inset-0 embed-flip-perspective ${slide ? (slide.dir === 1 ? 'embed-slide-enter-next' : 'embed-slide-enter-prev') : ''}`}
+            >
+              <div
+                className={`embed-flip-inner ${animating ? 'embed-flip-anim' : ''}`}
+                style={
+                  animating
+                    ? ({
+                        '--flip-from': `${restAngle}deg`,
+                        '--flip-mid': `${restAngle + 90}deg`,
+                        '--flip-to': `${restAngle + 180}deg`,
+                      } as React.CSSProperties)
+                    : { transform: `rotateY(${restAngle}deg)` }
+                }
+                onAnimationEnd={() => {
+                  setRestAngle((a) => (a + 180) % 360);
+                  setAnimating(false);
+                }}
+              >
+                {/* Front: the picture itself. Click anywhere on it to flip. */}
+                <button
+                  onClick={() => flipTo(true)}
+                  aria-label="Show this picture's details"
+                  title="Click for details"
+                  className="embed-flip-face block h-full w-full cursor-pointer"
+                >
+                  <Photo src={current.image} alt={current.name} className="h-full w-full" sizes={SINGLE_SIZES} />
+                </button>
+
+                {/* Back: read-mode info + a way to flag a problem with this item. Click
+                    anywhere on it (like the front) to flip back — the report controls
+                    below stop that click from bubbling up, so using them doesn't also
+                    flip the card back over. */}
+                <div
+                  onClick={() => flipTo(false)}
+                  role="button"
+                  aria-label="Back to the picture"
+                  title="Click for the picture"
+                  className="embed-flip-face embed-flip-face-back flex cursor-pointer flex-col overflow-y-auto bg-[var(--color-wall)] p-6 text-[var(--color-ink)]"
+                >
+                  <h2 className="serif text-xl leading-tight">{current.name || 'Untitled'}</h2>
+                  <p className="mt-1 text-sm text-[var(--color-muted)]">
+                    {[current.year ?? undefined, current.brand].filter(Boolean).join(' · ') || '—'}
+                  </p>
+
+                  {(current.description || current.definingFact) && (
+                    <div className="mt-4 space-y-2 text-sm leading-relaxed text-[var(--color-ink)]/90">
+                      {current.description && <p>{current.description}</p>}
+                      {current.definingFact && (
+                        <p className="italic text-[var(--color-muted)]">{current.definingFact}</p>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="mt-auto pt-6" onClick={(e) => e.stopPropagation()}>
+                    {reportState === 'sent' ? (
+                      <p className="text-sm text-[var(--color-ink)]/80">
+                        Thanks — this has been flagged for the curator to look at.
+                      </p>
+                    ) : reportOpen ? (
+                      <div className="space-y-2">
+                        <textarea
+                          autoFocus
+                          value={reportText}
+                          onChange={(e) => setReportText(e.target.value)}
+                          placeholder="What's wrong with this one? Wrong picture, wrong year, wrong name…"
+                          rows={4}
+                          maxLength={2000}
+                          className="w-full resize-none rounded-lg border border-[var(--color-line)] bg-[var(--color-ink)]/5 p-2.5 text-sm text-[var(--color-ink)] placeholder:text-[var(--color-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+                        />
+                        {reportState === 'error' && (
+                          <p className="text-xs text-[var(--color-accent)]">{reportError}</p>
+                        )}
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => submitReport(current.id)}
+                            disabled={!reportText.trim() || reportState === 'sending'}
+                            className="rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-xs text-white disabled:opacity-40"
+                          >
+                            {reportState === 'sending' ? 'Sending…' : 'Send report'}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setReportOpen(false);
+                              setReportText('');
+                              setReportState('idle');
+                            }}
+                            disabled={reportState === 'sending'}
+                            className="rounded-full border border-[var(--color-line)] px-4 py-1.5 text-xs text-[var(--color-ink)] disabled:opacity-40"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setReportOpen(true)}
+                        className="rounded-full border border-[var(--color-line)] px-4 py-1.5 text-xs text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
+                      >
+                        Report a problem
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
-          <button onClick={onShuffle} className="block h-full w-full cursor-pointer" aria-label="Shuffle">
-            <Photo src={item.image} alt={item.name} className="h-full w-full" sizes={SINGLE_SIZES} />
-          </button>
+
+          {!showingBack && (
+            <div
+              className={`absolute bottom-3 left-3 z-10 max-w-[70%] truncate rounded-full bg-[var(--color-ink)]/60 px-3 py-1 text-xs text-[var(--color-wall)] backdrop-blur ${chrome}`}
+            >
+              {current.name}
+              {current.year ? ` · ${current.year}` : ''}
+            </div>
+          )}
+
+          {canBrowse && !showingBack && (
+            <>
+              <button
+                onClick={goPrev}
+                aria-label="Previous picture"
+                title="Previous"
+                className={`absolute left-3 top-1/2 z-10 -translate-y-1/2 rounded-full bg-[var(--color-ink)]/60 p-2.5 text-[var(--color-wall)] backdrop-blur hover:bg-[var(--color-ink)] ${chrome}`}
+              >
+                <ChevronIcon direction="left" />
+              </button>
+              <button
+                onClick={goNext}
+                aria-label="Next picture"
+                title="Next"
+                className={`absolute right-3 top-1/2 z-10 -translate-y-1/2 rounded-full bg-[var(--color-ink)]/60 p-2.5 text-[var(--color-wall)] backdrop-blur hover:bg-[var(--color-ink)] ${chrome}`}
+              >
+                <ChevronIcon direction="right" />
+              </button>
+            </>
+          )}
         </>
       )}
     </div>
   );
 }
 
-function ShuffleIcon() {
+function ShuffleIcon({ className = '' }: { className?: string }) {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className}>
       <path d="M16 3h5v5" />
       <path d="M4 20 21 3" />
       <path d="M21 16v5h-5" />
       <path d="M15 15l6 6" />
       <path d="M4 4l5 5" />
+    </svg>
+  );
+}
+
+function ChevronIcon({ direction }: { direction: 'left' | 'right' }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d={direction === 'left' ? 'M15 5l-7 7 7 7' : 'M9 5l7 7-7 7'} />
     </svg>
   );
 }

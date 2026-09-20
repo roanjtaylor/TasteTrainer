@@ -127,7 +127,7 @@ Propose (staged into the run's changeset, never written directly):
 
 Each propose tool **validates and answers Claude**: "staged 9 of 10 — 'Dive Watches' is not
 a subtopic of this dataset; the options are …". Claude fixes it in the same run. This
-replaces the parse-then-hope JSON handling in `services/claude.ts`. It is the one place
+replaced the parse-then-hope JSON handling the old curation endpoints used. It is the one place
 structure stays, and it is structure around *writes*, not around *what you may ask*.
 
 Merge/split/rename of fields needs no special flow: it is `dataset.create` + `item.move` +
@@ -220,7 +220,7 @@ Nothing is deleted up front. `/api/chat` and every `runJson` call keep working t
 
 - **Review / Find what I'm missing / Expand** → become **preset prompts** (one tap, opens
   the dock prefilled). The presets are editable text, not code.
-- **New-dataset wizard** (`Curate.tsx`) → stays until chat can match it; then a preset.
+- **New-dataset wizard** (`Curate.tsx`) → **retired 2026-09-20.** Claude's `propose_create_dataset` + `propose_add_items` cover it, so the wizard, its two SSE endpoints and the durable-job plumbing are gone. `/personal/new` stays: that world is hand-built.
 - **World map review** → stays for now; its output feeds the canvas. Map ops come later.
 - **`BrainPanel`** → gains the agent prompt, tool list, presets.
 - Retire the old calls one at a time, only after you've used the chat version and prefer it.

@@ -22,3 +22,12 @@ export function LegacyMapRedirect() {
   const { domain = '' } = useParams();
   return <Navigate to={`/${domain}`} replace />;
 }
+
+/** `/:domain/new` and `/:domain/:slug/new` were the curate wizard — name a field, let
+ *  Claude map and research it, review the grid, save. Starting or filling a field in the
+ *  researched worlds is a conversation with Claude now, so these land back on whatever
+ *  the URL was about. (`/personal/new` is a real screen and outranks this route.) */
+export function LegacyCurateRedirect() {
+  const { domain = '', slug } = useParams();
+  return <Navigate to={slug ? `/${domain}/${slug}` : `/${domain}`} replace />;
+}

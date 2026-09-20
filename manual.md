@@ -18,9 +18,9 @@ Every dataset belongs to one of three **worlds**, chosen on the landing screen:
 
 Then (steps 0–1 are the researched worlds; the personal world skips straight to building and browsing):
 
-0. **Review the world** — ask Claude in the chat dock (bottom-left) from a world's shelf: "Review this world" is a preset. It reads every field you have, tells you how that world really divides, and **proposes** the changes as a diff you accept or discard: fields you have no dataset for (favouring the ones you wouldn't think of), boundaries drawn wrong (merge / split / rename — staged as create, move items, delete the emptied field), and changes to the map. Nothing is written until you accept, and an accepted changeset can be undone. It exists because a map built one topic at a time inherits the blind spots you had when you named the topics.
-0b. **The map** — the world's shelf *is* its map, and Claude draws it ("Draw the map of this world"). Fields sit in named regions on two meaningful axes (for objects, roughly *held → inhabited* across and *practical → expressive* up), sized by how deep they are, and fields you don't have yet appear as **dashed holes** where they belong — click one to start that dataset. The map is stored, not regenerated: it only changes when you accept map changes Claude proposed (new regions, a field moved, a missing field added), so it stays something you can learn rather than something that rearranges itself.
-1. **Curate** — name a field; Claude maps its subtopics, then researches the defining work breadth-first — across makers, movements, regions and time — countering popularity bias. Items carry the year they were made; there are no named eras. You review and edit before saving.
+0. **Review the world** — ask Claude in the chat dock (bottom-left) from a world's shelf; "Review this world" is one of the prompts it offers. It reads every field you have, tells you how that world really divides, and **proposes** the changes as a diff you accept or discard: fields you have no dataset for (favouring the ones you wouldn't think of), boundaries drawn wrong (merge / split / rename — staged as create, move items, delete the emptied field), and changes to the map. Nothing is written until you accept, and an accepted changeset can be undone. It exists because a map built one topic at a time inherits the blind spots you had when you named the topics.
+0b. **The map** — the world's shelf *is* its map, and Claude draws it ("Draw the map of this world"). Fields sit in named regions on two meaningful axes (for objects, roughly *held → inhabited* across and *practical → expressive* up), sized by how deep they are, and fields you don't have yet appear as **dashed holes** where they belong — click one to ask Claude to build that field. The map is stored, not regenerated: it only changes when you accept map changes Claude proposed (new regions, a field moved, a missing field added), so it stays something you can learn rather than something that rearranges itself.
+1. **Build a field** — ask Claude for it, from the map's gaps or in your own words. It works out the subtopics the field divides into, researches the defining work breadth-first — across makers, movements, regions and time — countering popularity bias, sources a picture for each, and stages the whole thing as a diff you accept or discard. Items carry the year they were made; there are no named eras. There is no wizard: the only form left is the personal world's, where the collection is yours to name.
 2. **Browse** — explore a dataset as one wall of images, oldest first — no filters; the mosaic itself shows how the field moved. To grow or fix a dataset, **ask Claude** in the chat dock (bottom-left): it sees the dataset and filter on screen, researches, and stages its changes as a diff you accept or discard. "What is this dataset missing?" is one of its presets.
 
 Datasets live in Supabase. Images are stored as **URLs only**, never downloaded — except files you upload into the personal world, which have no public URL to point at.
@@ -31,8 +31,8 @@ TypeScript everywhere. **Frontend:** React + Vite + Tailwind v4. **Backend:** No
 
 ```
 shared/    shared TypeScript types (the data model)
-server/    Express API: storage, Claude curation, image sourcing
-web/       React app: domain gate, shelf, field map, Curate flow, Dataset view
+server/    Express API: storage, the Claude agent + its tools, image sourcing
+web/       React app: domain gate, shelf, field map, Dataset view, Claude dock
 supabase/  SQL migrations — run these once each in the Supabase SQL editor
 stevejobs.md the core idea this app is built from
 ```
@@ -40,7 +40,7 @@ stevejobs.md the core idea this app is built from
 ## Prerequisites
 
 - **Node 20+** (Node 22 recommended — global `fetch` is used).
-- **Claude access.** The backend calls Claude through a **self-hosted Hugging Face Space proxy** (`HF_BASE_URL`, authenticated with `HF_APP_SECRET`), which uses the owner's Claude subscription rather than metered API credits. The Space streams SSE deltas; `server/src/services/claude.ts` accumulates them and extracts the JSON. `CLAUDE_MODEL` overrides the model.
+- **Claude access.** The backend calls Claude through a **self-hosted Hugging Face Space proxy** (`HF_BASE_URL`, authenticated with `HF_APP_SECRET`), which uses the owner's Claude subscription rather than metered API credits. The Space runs the Claude Agent SDK and relays tool calls back to the API (`server/src/services/agentRun.ts`). `CLAUDE_MODEL` overrides the model.
   - This replaced an earlier Claude Agent SDK integration, which required a login on the machine running the server — workable locally, not once the app was deployed to Render.
   - No key is hardcoded anywhere.
 
@@ -106,6 +106,6 @@ The app is read-heavy over data that barely changes, so caching is layered rathe
 ## Notes / known edges
 
 - The physical world's image **swap picker** scrapes an unofficial DuckDuckGo endpoint (chosen for cleaner results, no API key), falling back to the official Wikimedia Commons search API when that scrape breaks. If both come back empty, paste an image URL directly.
-- Digital-world screenshots are rendered by **our own headless Chromium** against the Wayback Machine, with every non-`archive.org` request blocked so an archived page can't re-hydrate from the live web. When no usable snapshot exists it falls back to a screenshot of the **live site** — which is not the design of that year, so the item is badged **not period-accurate** in the review grid and the gallery rather than passing silently. Swap the image to pick a nearer snapshot.
+- Digital-world screenshots are rendered by **our own headless Chromium** against the Wayback Machine, with every non-`archive.org` request blocked so an archived page can't re-hydrate from the live web. When no usable snapshot exists it falls back to a screenshot of the **live site** — which is not the design of that year, so the item is badged **not period-accurate** in the gallery rather than passing silently. Swap the image to pick a nearer snapshot.
 - Personal uploads are **images only** for now (JPEG, PNG, WebP, GIF, AVIF; 25 MB each) — an item is shown by an `<img>`. A book, film or album is represented by its cover (upload it, paste a URL, or use the image search), with an optional link to where it lives.
 - UI is intentionally a **simple MVP** in the gallery aesthetic (warm beige, pill nav).

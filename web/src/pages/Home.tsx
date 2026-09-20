@@ -69,18 +69,9 @@ export function Home() {
     // wanted a heading of its own.
     <div>
       {!curated && (
-        // The researched worlds start a field from the map's gaps or by asking Claude;
-        // here there is no map, so the shelf itself needs the way in.
-        <NavActions>
-          <Link
-            to={`/${domain}/new`}
-            className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
-          >
-            + New dataset
-          </Link>
-        </NavActions>
-      )}
-      {curated && !loading && !error && (datasets?.length ?? 0) > 0 && (
+        // Only the personal world has a form to fill: its collections are hand-built,
+        // and there is no map here whose gaps could start one. In the researched worlds
+        // a new field comes from asking Claude, so there is no button to add.
         <NavActions>
           <Link
             to={`/${domain}/new`}
@@ -100,23 +91,24 @@ export function Home() {
           <p className="text-[var(--color-muted)]">No datasets yet.</p>
           <p className="mx-auto mt-1 max-w-md text-sm text-[var(--color-muted)]">
             {curated
-              ? 'Name a field yourself, or let Claude map this world first and pick from the fields it finds.'
+              ? 'Ask Claude to map this world and pick from the fields it finds.'
               : 'Start a collection of your own — books, films, albums, family memories — and fill it with your files. Everything here stays private to you.'}
           </p>
           <div className="mt-4 flex justify-center gap-2">
-            <Link
-              to={`/${domain}/new`}
-              className="rounded-full bg-[var(--color-ink)] px-5 py-2 text-sm text-[var(--color-wall)]"
-            >
-              + New dataset
-            </Link>
-            {curated && (
+            {curated ? (
               <button
                 onClick={() => ask(WORLD_PROMPTS.fields)}
-                className="rounded-full border border-[var(--color-line)] px-5 py-2 text-sm"
+                className="rounded-full bg-[var(--color-ink)] px-5 py-2 text-sm text-[var(--color-wall)]"
               >
                 Ask Claude to map this world →
               </button>
+            ) : (
+              <Link
+                to={`/${domain}/new`}
+                className="rounded-full bg-[var(--color-ink)] px-5 py-2 text-sm text-[var(--color-wall)]"
+              >
+                + New dataset
+              </Link>
             )}
           </div>
         </div>

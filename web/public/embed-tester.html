@@ -176,10 +176,6 @@
     </div>
     <div id="dock">
       <h3>Starting view</h3>
-      <div class="field toggleRow">
-        <input id="pickerToggle" type="checkbox" />
-        <label for="pickerToggle" style="margin:0;font-weight:400;">Show the world/topic picker first</label>
-      </div>
       <div id="deepLinkFields">
         <div class="field">
           <label for="worldSelect">World</label>
@@ -238,7 +234,6 @@
   var reloadBtn = document.getElementById('reloadBtn');
   var openBtn = document.getElementById('openBtn');
   var sizeReadout = document.getElementById('sizeReadout');
-  var pickerToggle = document.getElementById('pickerToggle');
   var deepLinkFields = document.getElementById('deepLinkFields');
   var worldSelect = document.getElementById('worldSelect');
   var topicSelect = document.getElementById('topicSelect');
@@ -283,9 +278,10 @@
 
   // ---- Building the src from the attributes (world + topic), the same shape the
   // production app's own deep links use: /embed/:domain/:slug, resolved server-side
-  // by dataset slug regardless of domain (server/src/storage.ts#getDataset). ----
+  // by dataset slug regardless of domain (server/src/storage.ts#getDataset). Always
+  // explicit — no "show the picker first" fallback, so the dock always states which
+  // world/topic is being looked at rather than leaving it ambiguous. ----
   function computeUrl() {
-    if (pickerToggle.checked) return window.location.origin + '/embed';
     var domain = worldSelect.value;
     var slug = topicSelect.value;
     if (!slug) return window.location.origin + '/embed';
@@ -303,11 +299,11 @@
   function syncFromAttributes(reload) {
     var url = computeUrl();
     urlInput.value = url;
-    deepLinkHint.textContent = pickerToggle.checked
-      ? 'Opens on the world picker, like a fresh visitor.'
-      : (topicSelect.value ? 'Opens straight into this topic’s pictures.' : 'Pick a topic above once the list has loaded.');
+    deepLinkHint.textContent = topicSelect.value
+      ? 'Opens straight into this topic’s pictures.'
+      : 'Pick a topic above once the list has loaded.';
     refreshEmbedCode();
-    saveState({ world: worldSelect.value, topicSlug: topicSelect.value, showPicker: pickerToggle.checked, url: url });
+    saveState({ world: worldSelect.value, topicSlug: topicSelect.value, url: url });
     if (reload) loadUrl(url);
   }
 
@@ -349,11 +345,6 @@
     populateTopics(worldSelect.value, null);
   });
   topicSelect.addEventListener('change', function () { syncFromAttributes(true); });
-  pickerToggle.addEventListener('change', function () {
-    deepLinkFields.style.opacity = pickerToggle.checked ? '0.45' : '1';
-    deepLinkFields.style.pointerEvents = pickerToggle.checked ? 'none' : 'auto';
-    syncFromAttributes(true);
-  });
 
   advToggle.addEventListener('click', function () {
     advBody.classList.toggle('open');
@@ -433,9 +424,6 @@
   openBtn.addEventListener('click', function () { window.open(urlInput.value.trim() || computeUrl(), '_blank'); });
 
   // ---- Restore prior attributes ----
-  pickerToggle.checked = !!state.showPicker;
-  deepLinkFields.style.opacity = pickerToggle.checked ? '0.45' : '1';
-  deepLinkFields.style.pointerEvents = pickerToggle.checked ? 'none' : 'auto';
   worldSelect.value = state.world || 'physical';
   urlInput.value = state.url || (window.location.origin + '/embed');
   populateTopics(worldSelect.value, state.topicSlug || null);
