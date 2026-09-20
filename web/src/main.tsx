@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import './index.css';
 import { Nav } from './components/Nav';
 import { TaskNotifications } from './components/TaskNotifications';
+import { AccountButton } from './components/AccountButton';
 import { BrainButton } from './components/BrainPanel';
 import { EmbedTesterButton } from './components/EmbedTesterButton';
 import { AuthProvider, PersonalGate } from './lib/auth';
@@ -49,13 +50,19 @@ function AppShell() {
             prompts Claude (components/BrainPanel.tsx). Only from `xl`, where the margin
             is wide enough to clear the nav's own actions; Nav carries it below that. The
             notification rail shares this margin and stops below it (`xl:top-14`). */}
-        <div className="fixed right-3 top-3 z-40 hidden xl:block">
-          <BrainButton className="flex border border-[var(--color-line)] bg-[var(--color-card)]/90 shadow-sm backdrop-blur" />
-        </div>
-        {/* Bottom-left of the cog above — same fixed corner, one row down and shifted
-            left so it reads as the cog's neighbour rather than competing with it. */}
-        <div className="fixed right-14 top-14 z-40 hidden xl:block">
+        {/* One shared container, not three separately-positioned ones: each button
+            used to sit in its own `fixed` wrapper `div`, which meant each also opened
+            its own stacking context — so the account menu's z-50 only out-ranked
+            content *inside its own wrapper*, not the embed-tester button sitting in
+            its neighbour, which painted over it regardless. A single row fixes both
+            the layout (three buttons in line, embed tester leftmost) and the
+            stacking (the account menu now out-ranks its literal siblings). The cog
+            stays flush with the container's own right edge, so it's still exactly
+            where BrainPanel's close button expects it (components/BrainPanel.tsx). */}
+        <div className="fixed right-3 top-3 z-40 hidden items-center gap-2 xl:flex">
           <EmbedTesterButton className="flex border border-[var(--color-line)] bg-[var(--color-card)]/90 shadow-sm backdrop-blur" />
+          <AccountButton className="flex border border-[var(--color-line)] bg-[var(--color-card)]/90 shadow-sm backdrop-blur" />
+          <BrainButton className="flex border border-[var(--color-line)] bg-[var(--color-card)]/90 shadow-sm backdrop-blur" />
         </div>
         <Nav />
         {/* Below `lg` this is a plain `mx-auto max-w-6xl` block, unchanged from

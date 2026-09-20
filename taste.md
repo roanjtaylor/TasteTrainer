@@ -142,3 +142,49 @@ Taste is not innate — it is **cultivated** by repeatedly exposing yourself to 
 has made, learning to perceive the subtlety in it, and then carrying those ideas across domains
 into your own craft. That loop — *expose → perceive → internalize → apply* — is exactly what
 this taste-trainer is built to create.
+
+---
+
+## 9. The Personal Vision — Why I'm Building This
+
+> Make and browse datasets, both objective and subjective.
+>
+> To form my own playlists (paintings, books, films).
+>
+> Capture the spirit and culture behind great things, to develop my sense of what makes me
+> passionate about life and why.
+>
+> Allows consumed content to be measured, to thus improve aim for what to consume next (e.g.
+> reading lists, youtube topics/channels, role models/makers, fields).
+
+This is the throughline made personal. "Objective" datasets (watches, cars, architecture — the
+**physical** world) are the Jobs exercise directly: expose yourself to the best your species has
+made, curated with Claude's help. "Subjective" datasets (books, films, music — the **personal**
+world) are the same exercise turned inward: the things that already moved *me*, deliberately
+collected instead of left to scatter across memory, so the pattern in what I love becomes
+visible and repeatable.
+
+**Takeaway:** The two curated worlds (physical, digital) build taste by exposure to the best of
+a field. The personal world builds self-knowledge by exposure to the best of *my own life* — and
+both feed the same loop: expose → perceive → internalize → apply.
+
+### Features this implies
+
+- **Embeddable mosaic** (ship porthole — zoom around) — the gallery-wall aesthetic made
+  shareable and explorable, not just browsable.
+- **Music, films, books, nature, family, diary entries** (e.g. school years) as personal-world
+  domains — the raw material of "what made me who I am."
+- **Browseable photos etc. in one place** — to actively shuffle through my own life effortlessly,
+  rather than have it surfaced back to me by someone else's algorithm.
+- **Input hopper for content** (e.g. startup-wisdom tweets) — a low-friction inbox for things
+  worth keeping before they're lost in the scroll.
+- **Output magic-8-ball / Minecraft-loading-screen / Spotify-shuffle view** — a deliberate,
+  one-at-a-time surfacing of stored items (a book, a band's music video) so patterns and lessons
+  can actually be drawn, rather than dumped in a grid and skimmed. Paired with **notes on
+  things** — e.g. what a novel's twists taught, why a record still matters — capturing not just
+  *what* was consumed but *what it meant*.
+
+These aren't separate from the Elo-ranking / curated-dataset mechanics already decided for the
+physical and digital worlds — they're the same machine (`Dataset`/`Item`, browse, rank,
+leaderboard) pointed at the subjective, personally-authored end of the spectrum. The mosaic and
+shuffle views are new *presentation* modes for that same underlying data, not a new pillar.

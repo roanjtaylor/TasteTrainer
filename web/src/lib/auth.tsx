@@ -89,34 +89,22 @@ const FIELD =
   'w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-wall)] px-4 py-3 outline-none placeholder:text-[var(--color-muted)] focus:border-[var(--color-accent)]';
 
 function SignIn() {
-  // Creating the account happens here too, once, rather than in the Supabase
-  // dashboard. It can afford to be open: an account only gets past the server if its
-  // email is on ALLOWED_EMAILS, so a stranger who signs up has an account and nothing else.
-  const [mode, setMode] = useState<'in' | 'up'>('in');
+  // Sign-in only — this is a single-tenant personal world, not a multi-user product.
+  // The account is created once, outside the app (Supabase dashboard), and new sign-ups
+  // are disabled at the Supabase project level. ALLOWED_EMAILS (server/src/config.ts)
+  // is the second layer, in case that project setting is ever loosened.
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
 
   async function submit() {
     if (!supabase) return;
     setBusy(true);
     setError('');
-    setNotice('');
     try {
-      if (mode === 'in') {
-        const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-        if (error) setError(error.message);
-        return;
-      }
-      const { data, error } = await supabase.auth.signUp({ email: email.trim(), password });
+      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       if (error) setError(error.message);
-      // No session back means the project requires the address to be confirmed first.
-      else if (!data.session) {
-        setNotice('Check your email for a confirmation link, then sign in here.');
-        setMode('in');
-      }
     } finally {
       setBusy(false);
     }
@@ -126,11 +114,7 @@ function SignIn() {
     <div className="flex min-h-full items-center justify-center p-6">
       <div className="w-full max-w-sm rounded-2xl border border-[var(--color-line)] bg-[var(--color-card)] p-8 text-center">
         <h1 className="serif text-3xl">Your personal world</h1>
-        <p className="mt-2 text-sm text-[var(--color-muted)]">
-          {mode === 'in'
-            ? 'Private to you — sign in to enter.'
-            : 'Create your account.'}
-        </p>
+        <p className="mt-2 text-sm text-[var(--color-muted)]">Private to you — sign in to enter.</p>
         <form
           className="mt-6 flex flex-col gap-3"
           onSubmit={(e) => {
@@ -151,9 +135,8 @@ function SignIn() {
           />
           <input
             type="password"
-            autoComplete={mode === 'in' ? 'current-password' : 'new-password'}
+            autoComplete="current-password"
             required
-            minLength={mode === 'up' ? 8 : undefined}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Password"
@@ -161,24 +144,14 @@ function SignIn() {
             className={FIELD}
           />
           {error && <p className="text-sm text-[var(--color-accent)]">{error}</p>}
-          {notice && <p className="text-sm text-[var(--color-muted)]">{notice}</p>}
           <button
             type="submit"
             disabled={busy || !email.trim() || !password}
             className="rounded-full bg-[var(--color-accent)] px-6 py-2.5 text-sm text-white disabled:opacity-40"
           >
-            {busy ? 'One moment…' : mode === 'in' ? 'Sign in →' : 'Create account →'}
+            {busy ? 'One moment…' : 'Sign in →'}
           </button>
         </form>
-        <button
-          onClick={() => {
-            setMode(mode === 'in' ? 'up' : 'in');
-            setError('');
-          }}
-          className="mt-4 text-xs text-[var(--color-muted)] underline underline-offset-2 hover:text-[var(--color-ink)]"
-        >
-          {mode === 'in' ? 'First time here? Create your account' : 'Already have one? Sign in'}
-        </button>
       </div>
     </div>
   );

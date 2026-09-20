@@ -452,6 +452,9 @@ function Browse({
   const [editing, setEditing] = useState<Item | null>(null);
   const [picker, setPicker] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Only one card's details are ever open at a time — expanding one collapses whatever
+  // else was open, so the wall of images doesn't fill up with expanded panels.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // The personal world is built by hand (9-personal-and-auth.md), so its browse view
   // doubles as the builder: add one item, drop in a batch of files, delete, and edit
@@ -647,7 +650,18 @@ function Browse({
             ) : (
               <div key={item.id} className="relative">
                 {/* The card itself opens the editor — works on touch, not just hover. */}
-                <ItemCard item={item} onClick={() => setEditing({ ...item })} />
+                <ItemCard
+                  item={item}
+                  expanded={expandedId === item.id}
+                  onToggle={() =>
+                    setExpandedId((id) => (id === item.id ? null : item.id))
+                  }
+                  onEdit={() => setEditing({ ...item })}
+                  onSwapImage={() => {
+                    setEditing({ ...item });
+                    setPicker(true);
+                  }}
+                />
               </div>
             ),
           )}

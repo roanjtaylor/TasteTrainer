@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type { BrainCall, BrainSetup } from '../../../shared/types';
 import { api } from '../lib/api';
 
@@ -51,30 +52,44 @@ function BrainPanel({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  return (
+  // Portalled straight to <body>: the cog that opens this panel is itself mounted
+  // inside a `fixed`, z-indexed wrapper (main.tsx's right-margin corner, or the nav
+  // pill), which creates its own stacking context — rendered as an ordinary child,
+  // this panel's z-50 would only out-rank siblings *within* that wrapper, not the
+  // other fixed buttons sharing the corner (account, embed tester), which sit later
+  // in the DOM and would paint over it. A portal escapes that context entirely, so
+  // the panel is compared against the whole page and always wins.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex justify-end bg-black/40" onClick={onClose}>
+      {/* Same fixed corner, same h-9 w-9 rounded circle, same border/background as the
+          cog button that opens this panel (main.tsx's fixed placement) — so opening
+          and closing reads as one button changing icon in place, not two different
+          buttons swapping around. z-[60]: above the panel's own z-50. */}
+      <button
+        onClick={onClose}
+        aria-label="Close"
+        className="fixed right-3 top-3 z-[60] flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[var(--color-line)] bg-[var(--color-card)]/90 text-[var(--color-muted)] shadow-sm backdrop-blur transition-colors hover:text-[var(--color-ink)]"
+      >
+        <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M18 6 6 18" />
+          <path d="M6 6l12 12" />
+        </svg>
+      </button>
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Claude setup"
-        className="h-full w-full max-w-3xl overflow-y-auto border-l border-[var(--color-line)] bg-[var(--color-wall)] p-6"
+        className="custom-scroll h-full w-full max-w-3xl overflow-y-auto border-l border-[var(--color-line)] bg-[var(--color-wall)] p-6"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="serif text-2xl">How TasteTrainer thinks</h2>
-            <p className="mt-1 text-sm text-[var(--color-muted)]">
-              Every Claude call this app makes, what goes into it, and what the code checks
-              afterwards — read live from the server.
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-full border border-[var(--color-line)] px-3 py-1 text-sm hover:bg-[var(--color-wall-soft)]"
-          >
-            ✕
-          </button>
+        {/* pr-14: clears the fixed close button above, which sits outside this
+            padded flow and would otherwise overlap the title. */}
+        <div className="pr-14">
+          <h2 className="serif text-2xl">How TasteTrainer thinks</h2>
+          <p className="mt-1 text-sm text-[var(--color-muted)]">
+            Every Claude call this app makes, what goes into it, and what the code checks
+            afterwards — read live from the server.
+          </p>
         </div>
 
         {error && <p className="mt-6 text-sm text-[var(--color-accent)]">{error}</p>}
@@ -168,7 +183,8 @@ function BrainPanel({ onClose }: { onClose: () => void }) {
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

@@ -2,8 +2,8 @@ import { Link, useLocation } from 'react-router-dom';
 import { DOMAIN_LABELS, slugifyTopic } from '../../../shared/types';
 import { useDomain } from '../lib/domain';
 import { useDatasetList } from '../lib/data';
-import { useAuth } from '../lib/auth';
 import { NavActionsSlot } from '../lib/navActions';
+import { AccountButton } from './AccountButton';
 import { BrainButton } from './BrainPanel';
 import { EmbedTesterButton } from './EmbedTesterButton';
 
@@ -20,7 +20,6 @@ import { EmbedTesterButton } from './EmbedTesterButton';
 export function Nav() {
   const { pathname } = useLocation();
   const domain = useDomain();
-  const { email, signOut } = useAuth();
   // Only to turn a slug in the URL back into the field's real name. Cached and
   // usually already warm, since you nearly always arrive at a field from the shelf.
   const { data: datasets } = useDatasetList(domain);
@@ -88,28 +87,13 @@ export function Nav() {
             here, but it counted finished-but-undismissed jobs too and read as a
             confusing backlog rather than activity. */}
 
-        {/* The account, last and quiet: shown only once there's a session to sign out
-            of — most of a visit (the physical and digital worlds) never creates one.
-            Inside the pill rather than in the empty left track, which is where
-            DatasetView pins the field's title. */}
-        {email && (
-          <>
-            <span className="mx-1 h-5 w-px shrink-0 bg-[var(--color-line)]" />
-            <button
-              onClick={signOut}
-              title={`Signed in as ${email}`}
-              className="shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-xs text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)] hover:text-[var(--color-ink)]"
-            >
-              Sign out
-            </button>
-          </>
-        )}
-        {/* The settings cog's narrow-window home, and the embed tester just to its
-            left (its own fixed home sits bottom-left of the cog above `xl` — see
-            main.tsx). At `xl`+ both move out to the window's right margin; below
+        {/* The settings cog's narrow-window home, and the embed tester and account
+            control just to its left (their own fixed homes sit above `xl` — see
+            main.tsx). At `xl`+ all three move out to the window's right margin; below
             that there's no margin, and fixed buttons would sit on top of the nav
             actions to the right of this pill. */}
         <EmbedTesterButton className="flex hover:bg-[var(--color-wall-soft)] xl:hidden" />
+        <AccountButton className="flex hover:bg-[var(--color-wall-soft)] xl:hidden" />
         <BrainButton className="flex hover:bg-[var(--color-wall-soft)] xl:hidden" />
         </nav>
         {/* The page owning the current route portals its own action buttons in here
