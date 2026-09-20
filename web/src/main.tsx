@@ -9,6 +9,8 @@ import { BrainButton } from './components/BrainPanel';
 import { EmbedTesterButton } from './components/EmbedTesterButton';
 import { AuthProvider, PersonalGate } from './lib/auth';
 import { NavActionsProvider } from './lib/navActions';
+import { ChatViewProvider } from './lib/chatView';
+import { ChatDock } from './components/chat/ChatDock';
 import { DomainSelect } from './pages/DomainSelect';
 import { Home } from './pages/Home';
 import { CurateRoute } from './pages/Curate';
@@ -42,6 +44,9 @@ function AppShell() {
     // Tracks the session app-wide (lib/auth.tsx), but doesn't block rendering — only
     // the personal world (PersonalGate, below) is ever gated on being signed in.
     <AuthProvider>
+      {/* What Claude is told you are looking at (lib/chatView.tsx) — above the routes so
+          the screens can report into it, and the dock, below, can read it. */}
+      <ChatViewProvider>
       <NavActionsProvider>
         {/* Below `lg` there's no reliable margin for the gutter column below to sit
             in, so the queue falls back to a small floating box here. */}
@@ -136,7 +141,10 @@ function AppShell() {
             <TaskNotifications variant="rail" />
           </div>
         </div>
+        {/* Claude, bottom-left, on every screen (components/chat/ChatDock.tsx). */}
+        <ChatDock />
       </NavActionsProvider>
+      </ChatViewProvider>
     </AuthProvider>
   );
 }

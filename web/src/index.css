@@ -10,6 +10,8 @@
   --color-muted: #6c655b;
   --color-line: #e0d8c8;
   --color-accent: #b0552f;
+  /* The Claude dock and everything Claude is doing (components/chat). */
+  --color-claude: #d97757;
 
   --font-serif: 'Georgia', 'Times New Roman', serif;
 }

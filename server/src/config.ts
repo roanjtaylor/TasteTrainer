@@ -13,6 +13,18 @@ export const CLAUDE_MODEL = process.env.CLAUDE_MODEL ?? 'claude-opus-5';
 // backstop, not a budget. Override with CLAUDE_TIMEOUT_MS.
 export const CLAUDE_TIMEOUT_MS = Number(process.env.CLAUDE_TIMEOUT_MS) || 60 * 60_000;
 
+// The chat's run limits (services/agentRun.ts). These are THIS PRODUCT'S choices, sent
+// to the Space with every run — the Space itself imposes none of them. CHAT_MAX_TURNS is
+// how many tool round-trips one reply may take before Claude must answer: generous,
+// because reading a dataset, searching the web and staging batches are each a turn; it
+// exists so a run that has lost the plot stops on its own rather than on your Stop
+// button. 0 = no cap. The deadline is the same hour-scale backstop as every other call.
+export const CHAT_MAX_TURNS = Number(process.env.CHAT_MAX_TURNS ?? 150);
+export const CHAT_TIMEOUT_MS = Number(process.env.CHAT_TIMEOUT_MS) || 3 * 60 * 60_000;
+// The most one response may run to. The engine behind the Space defaults to 32k tokens
+// and tops out at 64k; a big batch of proposed items, or a long essay, wants the room.
+export const CHAT_MAX_OUTPUT_TOKENS = Number(process.env.CHAT_MAX_OUTPUT_TOKENS) || 64_000;
+
 // HF Space proxy — proxies Claude using the owner's subscription (no API credits consumed).
 export const HF_BASE_URL = process.env.HF_BASE_URL ?? 'https://roanjtaylor-claudesubscription.hf.space';
 export const HF_APP_SECRET = process.env.HF_APP_SECRET ?? '';

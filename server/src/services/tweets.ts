@@ -37,7 +37,7 @@ interface RawTweet {
   created_at?: string;
   display_text_range?: [number, number];
   in_reply_to_status_id_str?: string;
-  user?: { screen_name?: string; name?: string };
+  user?: { screen_name?: string; name?: string; profile_image_url_https?: string };
   entities?: {
     urls?: { url: string; expanded_url?: string }[];
     media?: { url: string }[];
@@ -91,6 +91,10 @@ function toTweet(raw: RawTweet): Tweet {
     text: cleanText(raw),
     author: raw.user?.screen_name ?? '',
     authorName: raw.user?.name ?? '',
+    // X hands out the 48px "_normal" size; "_bigger" (73px) stays sharp on a dense screen.
+    ...(raw.user?.profile_image_url_https
+      ? { avatar: raw.user.profile_image_url_https.replace(/_normal(\.\w+)$/, '_bigger$1') }
+      : {}),
     createdAt: raw.created_at ?? '',
     liked: false,
     ...(media.length ? { media } : {}),
@@ -213,6 +217,16 @@ export function itemFromThread(thread: TweetThread, keep?: Item): Item {
   };
 }
 
+/** A tweet that arrived without a face — pasted by hand, or deleted and known only from
+ *  the archive — borrows it from any other tweet here by the same author. */
+export function shareAvatars(items: Item[]): Item[] {
+  const known = new Map<string, string>();
+  const all = items.flatMap((it) => it.tweet?.tweets ?? []);
+  for (const t of all) if (t.avatar && t.author) known.set(t.author.toLowerCase(), t.avatar);
+  for (const t of all) if (!t.avatar && t.author) t.avatar = known.get(t.author.toLowerCase());
+  return items;
+}
+
 async function pooled<T, R>(inputs: T[], limit: number, fn: (input: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(inputs.length);
   let next = 0;
@@ -319,6 +333,7 @@ export async function mergeLikes(
         match.author ||= old.author;
         match.authorName ||= old.authorName;
         match.createdAt ||= old.createdAt;
+        match.avatar ||= old.avatar;
       } else merged.set(old.id || `pasted:${textKey(old.text)}`, { ...old });
     }
 
@@ -333,5 +348,5 @@ export async function mergeLikes(
     }
   }
 
-  return { dataset: { ...ds, items }, stats };
+  return { dataset: { ...ds, items: shareAvatars(items) }, stats };
 }

@@ -33,6 +33,7 @@ import { filesRouter } from './routes/files.ts';
 import { tweetsRouter } from './routes/tweets.ts';
 import { embedRouter } from './routes/embed.ts';
 import { brainRouter } from './routes/brain.ts';
+import { chatRouter } from './routes/chat.ts';
 
 const app = express();
 
@@ -82,6 +83,9 @@ app.use('/api/images', imagesRouter);
 app.use('/api/map', mapRouter);
 // The settings cog: the Claude setup itself, read-only (routes/brain.ts).
 app.use('/api/brain', brainRouter);
+// The Claude chat: freeform conversation with tools over the data, every change staged
+// for approval (routes/chat.ts, plan/claude-agent.md).
+app.use('/api/chat', chatRouter);
 // Uploads only ever serve the personal world, so this is the one router behind the
 // wall outright rather than checked per-dataset.
 app.use('/api/files', requireAuth, filesRouter);

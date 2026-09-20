@@ -175,6 +175,8 @@ export interface Tweet {
   /** Screen name, no "@". */
   author: string;
   authorName: string;
+  /** The author's profile picture — hotlinked from X like all media, never copied. */
+  avatar?: string;
   /** ISO timestamp; "" when unknown (a deleted tweet known only from the archive). */
   createdAt: string;
   /** One you actually liked, as opposed to one pulled in to complete its thread. */

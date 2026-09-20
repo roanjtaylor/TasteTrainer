@@ -63,7 +63,7 @@ import type {
  * is a plausible wrong image, not a missing one, and a fallback that reports nothing is
  * how 99 of 99 items ended up with third-party screenshots nobody noticed.
  */
-async function attachImages(
+export async function attachImages(
   proposed: ProposedItem[],
   domain: Domain,
   send: (event: 'progress' | 'done' | 'error', data: unknown) => void,

@@ -4,6 +4,7 @@ import { removeFiles, storagePathsIn, toServedImages, toStoredImages } from './s
 import { cached, invalidate, invalidatePrefix, keys, put } from './cache.ts';
 import { normalizeDomain, singleWordTopic, slugifyTopic } from '../../shared/types.ts';
 import type { Dataset, DatasetSummary, Domain, Job, WorldMap } from '../../shared/types.ts';
+import type { Changeset, ChatThread } from '../../shared/chat.ts';
 
 /**
  * "That table isn't there" — i.e. a migration hasn't been applied yet.
@@ -249,4 +250,84 @@ export async function deleteJob(id: string): Promise<void> {
   const { error } = await supabase.from('taste_jobs').delete().eq('id', id);
   if (missingRelation(error)) return;
   if (error) throw new Error(error.message);
+}
+
+// ---- Claude chat: threads and changesets (shared/chat.ts, migration 008) ----
+//
+// Not cached, for the same reason jobs aren't: a thread is read precisely because it
+// may have changed (a turn is running), and the traffic is one user's conversation.
+
+const CHAT_MIGRATION_HINT =
+  'The chat tables are missing. Run supabase/migrations/008_chat.sql in the Supabase SQL editor.';
+
+function rowToThread(row: any): ChatThread {
+  return { id: row.id, domain: row.domain ? normalizeDomain(row.domain) : null, ...row.data };
+}
+
+export async function saveThread(thread: ChatThread): Promise<void> {
+  const { id, domain, ...data } = thread;
+  const { error } = await supabase
+    .from('taste_chat_threads')
+    .upsert({ id, domain, data, updated_at: thread.updatedAt });
+  if (missingRelation(error)) throw new Error(CHAT_MIGRATION_HINT);
+  if (error) throw new Error(error.message);
+}
+
+export async function getThread(id: string): Promise<ChatThread | null> {
+  const { data, error } = await supabase.from('taste_chat_threads').select('*').eq('id', id).maybeSingle();
+  if (missingRelation(error)) throw new Error(CHAT_MIGRATION_HINT);
+  if (error) throw new Error(error.message);
+  return data ? rowToThread(data) : null;
+}
+
+/** Newest first. Whole rows: a summary needs the last message's status, and one
+ *  person's threads are few enough that a projection isn't worth a generated column. */
+export async function listThreads(limit = 40): Promise<ChatThread[]> {
+  const { data, error } = await supabase
+    .from('taste_chat_threads')
+    .select('*')
+    .order('updated_at', { ascending: false })
+    .limit(limit);
+  if (missingRelation(error)) throw new Error(CHAT_MIGRATION_HINT);
+  if (error) throw new Error(error.message);
+  return (data ?? []).map(rowToThread);
+}
+
+export async function deleteThread(id: string): Promise<void> {
+  const { error } = await supabase.from('taste_chat_threads').delete().eq('id', id);
+  if (error && !missingRelation(error)) throw new Error(error.message);
+  const { error: csError } = await supabase.from('taste_changesets').delete().eq('thread_id', id);
+  if (csError && !missingRelation(csError)) throw new Error(csError.message);
+}
+
+function rowToChangeset(row: any): Changeset {
+  return { id: row.id, threadId: row.thread_id, status: row.status, ...row.data };
+}
+
+export async function saveChangeset(cs: Changeset): Promise<void> {
+  const { id, threadId, status, ...data } = cs;
+  const { error } = await supabase
+    .from('taste_changesets')
+    .upsert({ id, thread_id: threadId, status, data, updated_at: cs.updatedAt });
+  if (missingRelation(error)) throw new Error(CHAT_MIGRATION_HINT);
+  if (error) throw new Error(error.message);
+}
+
+export async function getChangeset(id: string): Promise<Changeset | null> {
+  const { data, error } = await supabase.from('taste_changesets').select('*').eq('id', id).maybeSingle();
+  if (missingRelation(error)) throw new Error(CHAT_MIGRATION_HINT);
+  if (error) throw new Error(error.message);
+  return data ? rowToChangeset(data) : null;
+}
+
+/** Every changeset of a thread, oldest first — the open one (at most one) included. */
+export async function listChangesets(threadId: string): Promise<Changeset[]> {
+  const { data, error } = await supabase
+    .from('taste_changesets')
+    .select('*')
+    .eq('thread_id', threadId)
+    .order('updated_at', { ascending: true });
+  if (missingRelation(error)) throw new Error(CHAT_MIGRATION_HINT);
+  if (error) throw new Error(error.message);
+  return (data ?? []).map(rowToChangeset);
 }

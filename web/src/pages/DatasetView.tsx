@@ -14,6 +14,7 @@ import type {
 } from '../../../shared/types';
 import { api } from '../lib/api';
 import { saveDataset, useDataset } from '../lib/data';
+import { useReportChatView } from '../lib/chatView';
 import { dismissTask, finishTask, runTracked, startTask, updateTask } from '../lib/tasks';
 import { currentJob, groupKey, jobsFor, refreshJobs, useJobs } from '../lib/jobs';
 import { eraGroupsOf, itemsInGroup } from '../lib/format';
@@ -299,6 +300,16 @@ export function DatasetView() {
     return null;
   }, [searchParams, groups]);
 
+  // Tell the Claude dock what's on screen (lib/chatView.tsx): this dataset, and the
+  // filter in force — so "these" in a message means the items actually being shown.
+  useReportChatView({
+    datasetId: ds?.id,
+    datasetTopic: ds?.topic,
+    filters: filter
+      ? [filter.kind === 'subtopic' ? `Subtopic: ${filter.name}` : `Era: ${filter.group.label} (${filter.group.start}–${filter.group.end - 1})`]
+      : undefined,
+  });
+
   const pool = useMemo(() => {
     if (!ds) return [];
     if (!filter) {
@@ -466,6 +477,10 @@ function Browse({
   // Only one card's details are ever open at a time — expanding one collapses whatever
   // else was open, so the wall of images doesn't fill up with expanded panels.
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // The open item is part of what Claude is told you're looking at — "this" in a
+  // message then means it (lib/chatView.tsx).
+  const openForChat = expandedId ? ds.items.find((i) => i.id === expandedId) : undefined;
+  useReportChatView({ itemId: openForChat?.id, itemName: openForChat?.name });
   // General "click anything else closes it" rule: a mousedown outside the expanded
   // card's own DOM (tracked via this ref) collapses it, whatever that click turns out
   // to do — open the editor, open "+ Add item", swap the image, and so on. mousedown
@@ -573,6 +588,9 @@ function Browse({
     const openItem = pool.find((i) => i.id === expandedId);
     if (!openItem?.tweet) return;
     function onOutsideDown(e: MouseEvent) {
+      // The Claude dock is "outside" too, but clicking into it to ask about the open
+      // thread must not close the thread — that is the context being asked about.
+      if ((e.target as Element | null)?.closest?.('[data-chat-dock]')) return;
       if (expandedRef.current && !expandedRef.current.contains(e.target as Node)) {
         setExpandedId(null);
       }

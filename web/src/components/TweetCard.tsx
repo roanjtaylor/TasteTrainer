@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import type { Item, Tweet } from '../../../shared/types';
+import { NativeTweet } from './NativeTweet';
 
 // The card for an item that is a saved thread (Item.tweet — server/services/tweets.ts).
 //
@@ -7,9 +9,10 @@ import type { Item, Tweet } from '../../../shared/types';
 // IS its words, so the tile is the lead tweet's text rather than a photo, and opening it
 // unfolds the whole thread in order instead of a description.
 //
-// Drawn from the stored text rather than X's embed script: it opens instantly, matches
-// the rest of the wall, and still reads after the original is deleted. Pictures are
-// hotlinked from X, never copied.
+// The closed tile is drawn from the stored text: a wall of hundreds has to paint at once,
+// and an iframe per card wouldn't. Opened, each tweet that has an id becomes X's real
+// embed (NativeTweet.tsx), with the stored copy standing in until it loads — and for
+// good if the original is gone. Pictures are hotlinked from X, never copied.
 export function TweetCard({
   item,
   expanded,
@@ -101,21 +104,83 @@ function ThreadTweet({ tweet, fallback }: { tweet: Tweet; fallback: Item }) {
     : tweet.liked
       ? 'border-[var(--color-accent)]'
       : 'border-[var(--color-line)]';
+  // Our own drawing of the stored tweet. For a tweet with an id it is what shows while
+  // X's real embed loads, and what stays if that never arrives (NativeTweet.tsx).
+  const stored = (
+    <div className="flex gap-2.5">
+      <Avatar tweet={tweet} fallback={fallback} size={32} />
+      <div className="min-w-0 flex-1 space-y-1.5">
+        <Byline tweet={tweet} fallback={fallback} dated bare />
+        <p className="whitespace-pre-line break-words text-sm leading-snug">{tweet.text}</p>
+        {tweet.media?.map((src) => (
+          <img key={src} src={src} alt="" loading="lazy" className="w-full rounded-lg" />
+        ))}
+      </div>
+    </div>
+  );
   return (
-    <li className={`space-y-1.5 border-l-2 pl-3 ${tone}`}>
-      <Byline tweet={tweet} fallback={fallback} dated />
-      <p className="whitespace-pre-line break-words text-sm leading-snug">{tweet.text}</p>
-      {tweet.media?.map((src) => (
-        <img key={src} src={src} alt="" loading="lazy" className="w-full rounded-lg" />
-      ))}
+    <li className={`border-l-2 pl-3 ${tone}`}>
+      {tweet.id ? <NativeTweet id={tweet.id}>{stored}</NativeTweet> : stored}
     </li>
   );
 }
 
-function Byline({ tweet, fallback, dated }: { tweet?: Tweet; fallback: Item; dated?: boolean }) {
+// The author's face, as on X: round, left of the name. Hotlinked, so it can vanish (the
+// author changed it, or the tweet came in by hand with none) — an initial stands in.
+function Avatar({ tweet, fallback, size }: { tweet?: Tweet; fallback: Item; size: number }) {
+  const [broken, setBroken] = useState(false);
+  const label = tweet?.authorName || tweet?.author || fallback.creator || '?';
+  const box = { width: size, height: size };
+  return tweet?.avatar && !broken ? (
+    <img
+      src={tweet.avatar}
+      alt=""
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={() => setBroken(true)}
+      style={box}
+      className="shrink-0 rounded-full bg-[var(--color-wall-soft)] object-cover"
+    />
+  ) : (
+    <span
+      aria-hidden
+      style={box}
+      className="flex shrink-0 items-center justify-center rounded-full bg-[var(--color-wall-soft)] text-xs font-medium text-[var(--color-muted)]"
+    >
+      {label.replace(/^@/, '').charAt(0).toUpperCase()}
+    </span>
+  );
+}
+
+/** `bare` leaves the avatar to the caller (the open thread hangs it beside the whole
+ *  tweet); otherwise it leads the line, with the name stacked over the handle. */
+function Byline({
+  tweet,
+  fallback,
+  dated,
+  bare,
+}: {
+  tweet?: Tweet;
+  fallback: Item;
+  dated?: boolean;
+  bare?: boolean;
+}) {
   const name = tweet?.authorName || (tweet?.context ? '' : fallback.creator);
   const handle = tweet?.author ? `@${tweet.author}` : tweet?.context ? '' : fallback.brand;
   const date = dated && tweet?.createdAt ? formatDate(tweet.createdAt) : '';
+  if (!bare) {
+    return (
+      <div className="flex shrink-0 items-center gap-2.5">
+        <Avatar tweet={tweet} fallback={fallback} size={36} />
+        <p className="min-w-0 text-xs leading-tight text-[var(--color-muted)]">
+          <span className="block truncate text-sm font-medium text-[var(--color-ink)]">
+            {name || handle || 'Unknown'}
+          </span>
+          {name && handle && <span className="block truncate">{handle}</span>}
+        </p>
+      </div>
+    );
+  }
   const inner = (
     <>
       <span className="truncate font-medium text-[var(--color-ink)]">{name || handle || 'Unknown'}</span>
@@ -123,10 +188,10 @@ function Byline({ tweet, fallback, dated }: { tweet?: Tweet; fallback: Item; dat
       {date && <span className="shrink-0">· {date}</span>}
     </>
   );
-  const cls = 'flex shrink-0 items-baseline gap-1.5 text-xs text-[var(--color-muted)]';
+  const cls = 'flex items-baseline gap-1.5 text-xs text-[var(--color-muted)]';
   // In the open thread each tweet links to itself, so any one of them can be opened on
   // X — not just the one the card as a whole points at.
-  return dated && tweet?.id ? (
+  return tweet?.id ? (
     <a
       href={`https://x.com/${tweet.author || 'i'}/status/${tweet.id}`}
       target="_blank"

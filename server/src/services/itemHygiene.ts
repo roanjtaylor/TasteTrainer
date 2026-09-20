@@ -16,7 +16,7 @@ import type { Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
  * likes to add ("Guernica (1937)") are all noise here — they're the shapes a repeat
  * actually arrives in. What's left is compared exactly.
  */
-function nameKey(name: string): string {
+export function nameKey(name: string): string {
   return name
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')

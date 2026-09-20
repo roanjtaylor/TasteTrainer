@@ -20,6 +20,16 @@ import type {
   ProposedItem,
   WorldMap,
 } from '../../../shared/types';
+import type {
+  Changeset,
+  ChangesetResult,
+  ChatEffort,
+  ChatModel,
+  ChatStreamEvent,
+  ChatThread,
+  ChatThreadSummary,
+  ChatView,
+} from '../../../shared/chat';
 import { accessToken } from './supabase';
 
 // In dev the Vite proxy forwards /api to localhost:5174 (vite.config.ts).
@@ -325,4 +335,64 @@ export const api = {
   // The settings cog (components/BrainPanel.tsx): how the server prompts Claude —
   // model, rulebook, every call and its last real run. Read-only.
   getBrain: () => http<BrainSetup>('/api/brain'),
+
+  // The Claude chat (server/src/routes/chat.ts). Sending returns as soon as the turn
+  // has STARTED; the reply is watched with `watchChat` below.
+  chatModels: () => http<{ models: ChatModel[]; defaultModel: string }>('/api/chat/models'),
+  chatThreads: () => http<ChatThreadSummary[]>('/api/chat/threads'),
+  chatThread: (id: string) =>
+    http<{ thread: ChatThread; changesets: Changeset[]; running: boolean }>(`/api/chat/threads/${id}`),
+  deleteChatThread: (id: string) => http<void>(`/api/chat/threads/${id}`, { method: 'DELETE' }),
+  sendChat: (body: { threadId?: string; text: string; view: ChatView; model?: string; effort?: ChatEffort }) =>
+    http<{ thread: ChatThread }>('/api/chat/messages', { method: 'POST', body: JSON.stringify(body) }),
+  stopChat: (id: string) => http<{ stopped: boolean }>(`/api/chat/threads/${id}/stop`, { method: 'POST' }),
+  getChangeset: (id: string) => http<Changeset>(`/api/chat/changesets/${id}`),
+  applyChangeset: (id: string, body: { opIds?: string[]; force?: boolean }) =>
+    http<ChangesetResult>(`/api/chat/changesets/${id}/apply`, { method: 'POST', body: JSON.stringify(body) }),
+  discardChangeset: (id: string, body: { opIds?: string[] }) =>
+    http<ChangesetResult>(`/api/chat/changesets/${id}/discard`, { method: 'POST', body: JSON.stringify(body) }),
+  revertChangeset: (id: string) =>
+    http<ChangesetResult>(`/api/chat/changesets/${id}/revert`, { method: 'POST' }),
 };
+
+/**
+ * Watch a conversation: a `snapshot` of it as it stands, then every event of the turn
+ * running in it, until `end`. Resolves when the stream closes. fetch + a reader rather
+ * than EventSource, because EventSource can't send the Authorization header.
+ */
+export async function watchChat(
+  threadId: string,
+  onEvent: (event: ChatStreamEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/chat/threads/${threadId}/stream`, {
+    headers: await authHeaders(),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    let message = `Request failed (${res.status})`;
+    try {
+      const b = await res.json();
+      if (b?.error) message = b.error;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(message);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep: number;
+    while ((sep = buffer.indexOf('\n\n')) !== -1) {
+      const chunk = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      // Comment lines (": ping") keep the connection warm and carry nothing.
+      if (!chunk.startsWith('data:')) continue;
+      onEvent(JSON.parse(chunk.slice(5)) as ChatStreamEvent);
+    }
+  }
+}
