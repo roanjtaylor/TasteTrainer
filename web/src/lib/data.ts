@@ -41,7 +41,7 @@ export function prefetchDataset(idOrSlug: string): void {
 /** Cache a dataset under both addresses it answers to. A screen reached by slug and
  *  a save made by id are the same dataset; writing one key would leave the other
  *  serving the pre-save copy. */
-function publish(ds: Dataset): void {
+export function publishDataset(ds: Dataset): void {
   write(cacheKeys.dataset(ds.id), ds);
   write(cacheKeys.dataset(slugifyTopic(ds.topic)), ds);
 }
@@ -83,14 +83,14 @@ export async function saveDataset(idOrSlug: string, body: Partial<Dataset>): Pro
   // Renaming a dataset changes its slug, so the address it was saved through can be
   // an address it no longer answers to. Drop it before republishing the live ones.
   drop(cacheKeys.dataset(idOrSlug));
-  publish(updated);
+  publishDataset(updated);
   drop(cacheKeys.datasetListPrefix, { prefix: true });
   return updated;
 }
 
 export async function createDataset(body: Parameters<typeof api.createDataset>[0]): Promise<Dataset> {
   const created = await api.createDataset(body);
-  publish(created);
+  publishDataset(created);
   drop(cacheKeys.datasetListPrefix, { prefix: true });
   return created;
 }
@@ -115,7 +115,7 @@ export async function deleteDataset(id: string, topic: string): Promise<void> {
  */
 export function publishBoundaryFix(result: BoundaryFixResult): void {
   for (const ds of result.updated) {
-    publish(ds);
+    publishDataset(ds);
   }
   for (const topic of result.deletedTopics) {
     drop(cacheKeys.dataset(slugifyTopic(topic)));

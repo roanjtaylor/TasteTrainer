@@ -112,15 +112,22 @@ export function ImagePicker({
 
   return (
     <div
-      className="fixed inset-0 z-30 flex items-center justify-center bg-black/30 p-4"
+      // Higher than ItemModal's z-50: swapping an image can now be opened from inside
+      // that modal (its own "Swap image" button in edit mode), and this has to paint
+      // on top of it rather than being smothered underneath.
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 p-4"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl rounded-2xl border border-[var(--color-line)] bg-[var(--color-card)] p-5"
+        // Capped to the viewport height (with room to spare for the surrounding
+        // padding) and laid out as a column so the search bar and paste-url footer
+        // stay put while only the candidate grid scrolls — otherwise a tall grid
+        // pushes the footer below the fold with no way to reach it.
+        className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-[var(--color-line)] bg-[var(--color-card)] p-5"
         onClick={(e) => e.stopPropagation()}
       >
         {target.kind === 'search' ? (
-          <div className="mb-3 flex gap-2">
+          <div className="mb-3 flex shrink-0 gap-2">
             <input
               className="flex-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-2 text-sm"
               value={query}
@@ -136,7 +143,7 @@ export function ImagePicker({
             </button>
           </div>
         ) : (
-          <div className="mb-3 flex gap-2">
+          <div className="mb-3 flex shrink-0 gap-2">
             <input
               className="flex-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-2 text-sm"
               value={siteUrl}
@@ -159,6 +166,7 @@ export function ImagePicker({
           </div>
         )}
 
+        <div className="min-h-0 flex-1 overflow-y-auto">
         {loading ? (
           <p className="py-10 text-center text-sm text-[var(--color-muted)]">
             {target.kind === 'screenshot' ? 'Capturing…' : 'Searching…'}
@@ -193,8 +201,9 @@ export function ImagePicker({
               : 'No results — try a different search, or paste a URL below.'}
           </p>
         )}
+        </div>
 
-        <div className="mt-4 flex gap-2 border-t border-[var(--color-line)] pt-4">
+        <div className="mt-4 flex shrink-0 gap-2 border-t border-[var(--color-line)] pt-4">
           <input
             className="flex-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-2 text-sm"
             value={manual}

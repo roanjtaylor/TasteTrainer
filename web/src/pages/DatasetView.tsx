@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { slugifyTopic } from '../../../shared/types';
 import type {
@@ -18,8 +18,10 @@ import { dismissTask, finishTask, runTracked, startTask, updateTask } from '../l
 import { currentJob, groupKey, jobsFor, refreshJobs, useJobs } from '../lib/jobs';
 import { eraGroupsOf, itemsInGroup } from '../lib/format';
 import { physicalImageQuery } from '../lib/image';
-import { IMAGE_ACCEPT, nameFromFile, uploadImage } from '../lib/files';
 import { ItemCard } from '../components/ItemCard';
+import { ItemModal } from '../components/ItemModal';
+import { TweetCard } from '../components/TweetCard';
+import { TweetImportPanel } from '../components/TweetImportPanel';
 import { ImagePicker } from '../components/ImagePicker';
 import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
@@ -38,6 +40,15 @@ type ActiveFilter =
 
 /** A freeform ask from the review dialog, on its way to GapPanel's research call. */
 type DirectRequest = { prompt: string; count: number; nonce: number };
+
+// ---- Grid zoom ----
+// How many cards sit across the row: 1 (one card filling the width) to 10 (a tight
+// mosaic). Deliberately NOT persisted — every fresh load (including a plain refresh)
+// starts back at DEFAULT_COLS, so the desktop default is always the three-wide view
+// rather than whatever size a previous session happened to leave it zoomed to.
+const MIN_COLS = 1;
+const MAX_COLS = 10;
+const DEFAULT_COLS = 3;
 
 // The Dataset view (6-ui.md): browse the items and pick a scope — all one screen.
 export function DatasetView() {
@@ -455,13 +466,130 @@ function Browse({
   // Only one card's details are ever open at a time — expanding one collapses whatever
   // else was open, so the wall of images doesn't fill up with expanded panels.
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // General "click anything else closes it" rule: a mousedown outside the expanded
+  // card's own DOM (tracked via this ref) collapses it, whatever that click turns out
+  // to do — open the editor, open "+ Add item", swap the image, and so on. mousedown
+  // (not click) so this runs before the target's own click handler, letting a click on
+  // a *different* image collapse this one and expand that one in the same gesture
+  // rather than closing then failing to reopen.
+  const expandedRef = useRef<HTMLDivElement | null>(null);
+  // Cards-per-row, driven by the zoom control fixed in the window's right margin below
+  // — replaces the old fixed 1/2/3-column breakpoints with one continuous dial. Starts
+  // at DEFAULT_COLS every mount (see the comment on it above) — a refresh, or coming
+  // back from another dataset, always lands on the three-wide default.
+  const [cols, setCols] = useState(DEFAULT_COLS);
+  const setZoom = (next: number | ((c: number) => number)) =>
+    setCols((c) => Math.max(MIN_COLS, Math.min(MAX_COLS, typeof next === 'function' ? next(c) : next)));
+
+  // Zoom keeps whichever card you're focused on in place, rather than the reflow
+  // yanking the whole page back to the top-left corner — a wall of a hundred cards is
+  // otherwise unnavigable at speed, since every zoom step loses your place. `itemNodesRef`
+  // is every rendered card's own DOM node, keyed by item id, kept live by the ref
+  // callback below; `hoveredIdRef` is whichever one the pointer is over right now, kept
+  // live by the onMouseEnter on each card wrapper. `anchorRef` is the card + its
+  // on-screen position captured the instant BEFORE a zoom change is applied, so the
+  // layout effect below can measure where that same card landed AFTER the reflow and
+  // scroll by the difference — same trick a map or PDF viewer uses to zoom "into" a point.
+  const itemNodesRef = useRef(new Map<string, HTMLElement>());
+  const hoveredIdRef = useRef<string | null>(null);
+  const anchorRef = useRef<{ id: string; top: number } | null>(null);
+
+  // `point`, when given (the wheel/pinch case), pins the anchor to whatever card is
+  // literally under the pointer at that instant — more precise than the last
+  // mouseenter, since a fast pinch can arrive before the enter event does. Without a
+  // point (a zoom-control button or the slider, where the pointer is over the control,
+  // not a card), it falls back to `hoveredIdRef` — the last card the mouse was over.
+  function captureZoomAnchor(point?: { x: number; y: number }) {
+    let id = hoveredIdRef.current;
+    if (point) {
+      const hit = document.elementFromPoint(point.x, point.y)?.closest<HTMLElement>('[data-item-id]');
+      if (hit?.dataset.itemId) id = hit.dataset.itemId;
+    }
+    const el = id ? itemNodesRef.current.get(id) : undefined;
+    anchorRef.current = el ? { id: id as string, top: el.getBoundingClientRect().top } : null;
+  }
+
+  function zoomBy(next: number | ((c: number) => number)) {
+    captureZoomAnchor();
+    setZoom(next);
+  }
+
+  // Runs after the reflow but before the browser paints it, so the correction itself
+  // is never visible — only the zoom is.
+  useLayoutEffect(() => {
+    const anchor = anchorRef.current;
+    anchorRef.current = null;
+    if (!anchor) return;
+    const el = itemNodesRef.current.get(anchor.id);
+    if (!el) return;
+    const delta = el.getBoundingClientRect().top - anchor.top;
+    if (delta) window.scrollBy(0, delta);
+  }, [cols]);
+
+  // Pinch-to-zoom, trackpad or mouse: both a trackpad pinch gesture and a ctrl/⌘+scroll
+  // on a mouse wheel arrive in the browser as the same thing — a `wheel` event with
+  // `ctrlKey` set (there's no separate pinch event on the web platform). Listened for
+  // on the whole page, not just the grid, so it works the moment the cursor is
+  // anywhere over the card wall, not just exactly between two cards. A plain,
+  // unmodified scroll is left alone — that's still just scrolling the page.
+  // Native addEventListener with `{ passive: false }`, not React's onWheel: the browser
+  // treats wheel listeners as passive by default, which silently drops preventDefault
+  // and lets the page itself zoom instead.
+  const wheelAccumRef = useRef(0);
+  useEffect(() => {
+    function onWheel(e: WheelEvent) {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      // Anchor to whatever card is under the pointer right now — captured once per
+      // event, before any of the steps below, so it reflects the card's position
+      // before this event's reflow rather than a stale one from a previous step.
+      captureZoomAnchor({ x: e.clientX, y: e.clientY });
+      // A pinch fires a flurry of tiny deltas; accumulating and stepping in whole
+      // columns keeps the grid from jittering between sizes on every event.
+      wheelAccumRef.current += e.deltaY;
+      const STEP = 12;
+      // Pinching/scrolling "out" (deltaY > 0, same direction as zooming a page out)
+      // shrinks the cards — more, smaller columns; the reverse zooms in.
+      while (wheelAccumRef.current >= STEP) {
+        wheelAccumRef.current -= STEP;
+        setZoom((c) => c + 1);
+      }
+      while (wheelAccumRef.current <= -STEP) {
+        wheelAccumRef.current += STEP;
+        setZoom((c) => c - 1);
+      }
+    }
+    window.addEventListener('wheel', onWheel, { passive: false });
+    return () => window.removeEventListener('wheel', onWheel);
+  }, []);
+  // Tweets still expand in place (TweetCard), so a click outside the open thread
+  // collapses it. A non-tweet item instead opens ItemModal below, which owns its own
+  // closing (backdrop click, Escape, ✕) — this guard would otherwise fight it: the
+  // modal's own buttons live outside `expandedRef` (the grid cell, not the modal), so
+  // this listener would collapse `expandedId` out from under a click on them before
+  // their own onClick ever ran.
+  useEffect(() => {
+    if (!expandedId) return;
+    const openItem = pool.find((i) => i.id === expandedId);
+    if (!openItem?.tweet) return;
+    function onOutsideDown(e: MouseEvent) {
+      if (expandedRef.current && !expandedRef.current.contains(e.target as Node)) {
+        setExpandedId(null);
+      }
+    }
+    document.addEventListener('mousedown', onOutsideDown);
+    return () => document.removeEventListener('mousedown', onOutsideDown);
+  }, [expandedId, pool]);
 
   // The personal world is built by hand (9-personal-and-auth.md), so its browse view
   // doubles as the builder: add one item, drop in a batch of files, delete, and edit
   // the dataset's own shape. None of it shows in the researched worlds.
   const personal = ds.domain === 'personal';
   const [editingField, setEditingField] = useState(false);
-  const [uploadError, setUploadError] = useState('');
+  // Offered where it makes sense: a dataset that already holds tweets, or an empty one
+  // that could become one — not on a shelf of book covers.
+  const [importingTweets, setImportingTweets] = useState(false);
+  const takesTweets = personal && (ds.items.length === 0 || ds.items.some((i) => i.tweet));
   // A draft from "+ Add item" isn't in the dataset until it's saved — so it isn't in
   // `pool` either, and is drawn ahead of the grid instead (see `isNew` below).
   const isNew = !!editing && !ds.items.some((i) => i.id === editing.id);
@@ -515,44 +643,6 @@ function Browse({
     }
   }
 
-  /**
-   * Drop in a batch of files: each becomes an item named after its file, saved in one
-   * write. Everything else about it — year, who made it, why it matters — is filled in
-   * afterwards by clicking the card, because making you complete a form per photo
-   * before you can see any of them is how a 200-photo import never gets finished.
-   */
-  async function uploadFiles(files: File[]) {
-    if (!files.length) return;
-    setUploadError('');
-    try {
-      const updated = await runTracked(
-        ds.topic,
-        async (onProgress) => {
-          const added: Item[] = [];
-          const failed: string[] = [];
-          // One at a time: a phone-sized photo is several megabytes, and a batch sent
-          // in parallel mostly just contends with itself for the same uplink.
-          for (const [i, file] of files.entries()) {
-            onProgress(`Uploading ${i + 1} of ${files.length} — ${file.name}`);
-            try {
-              added.push(blankItem({ name: nameFromFile(file), image: await uploadImage(file) }));
-            } catch (e: any) {
-              failed.push(e?.message ?? file.name);
-            }
-          }
-          if (failed.length) setUploadError(`Couldn’t upload: ${failed.join('; ')}`);
-          if (!added.length) return null;
-          onProgress(`Saving ${added.length} item${added.length === 1 ? '' : 's'}…`);
-          return saveDataset(ds.id, { items: [...ds.items, ...added] });
-        },
-        { group: groupKey(ds.domain, ds.topic), stage: 'Upload' },
-      );
-      if (updated) onChanged(updated);
-    } catch (e: any) {
-      setUploadError(e?.message ?? 'Upload failed');
-    }
-  }
-
   return (
     <div className="space-y-4">
       {/* A sweep in progress (or the resume-from-job case below) is already announced
@@ -577,49 +667,50 @@ function Browse({
       />
 
       {personal && (
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => setEditing(blankItem())}
-            disabled={!!editing}
-            className="rounded-full bg-[var(--color-ink)] px-4 py-1.5 text-sm text-[var(--color-wall)] disabled:opacity-40"
-          >
-            + Add item
-          </button>
-          <label className="cursor-pointer rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm hover:bg-[var(--color-wall-soft)]">
-            Upload files
-            <input
-              type="file"
-              multiple
-              accept={IMAGE_ACCEPT}
-              className="hidden"
-              onChange={(e) => {
-                uploadFiles([...(e.target.files ?? [])]);
-                // Reset, or choosing the same file twice in a row fires no change event.
-                e.target.value = '';
-              }}
-            />
-          </label>
+        <NavActions>
           <button
             onClick={() => setEditingField((v) => !v)}
             className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
           >
             Edit dataset
           </button>
-          {uploadError && <span className="text-sm text-[var(--color-accent)]">{uploadError}</span>}
-        </div>
+          {takesTweets && (
+            <button
+              onClick={() => setImportingTweets((v) => !v)}
+              className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
+            >
+              Import tweets
+            </button>
+          )}
+          <button
+            onClick={() => setEditing(blankItem())}
+            disabled={!!editing}
+            aria-label="Add item"
+            title="Add item"
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--color-ink)] text-lg leading-none text-[var(--color-wall)] disabled:opacity-40"
+          >
+            +
+          </button>
+        </NavActions>
       )}
       {personal && editingField && (
         <PersonalFieldEditor ds={ds} onChanged={onChanged} onClose={() => setEditingField(false)} />
+      )}
+      {takesTweets && importingTweets && (
+        <TweetImportPanel ds={ds} onChanged={onChanged} onClose={() => setImportingTweets(false)} />
       )}
 
       {pool.length === 0 && !isNew ? (
         <p className="text-[var(--color-muted)]">
           {personal && ds.items.length === 0
-            ? 'Nothing here yet — add an item, or upload a batch of files to start the collection.'
+            ? 'Nothing here yet — add an item to start the collection.'
             : 'No items in this scope.'}
         </p>
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div
+          className="grid gap-1"
+          style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+        >
           {isNew && editing && (
             <ItemEditorCard
               key={editing.id}
@@ -648,25 +739,61 @@ function Browse({
                 onDelete={personal ? deleteEditing : undefined}
               />
             ) : (
-              <div key={item.id} className="relative">
-                {/* The card itself opens the editor — works on touch, not just hover. */}
-                <ItemCard
-                  item={item}
-                  expanded={expandedId === item.id}
-                  onToggle={() =>
-                    setExpandedId((id) => (id === item.id ? null : item.id))
-                  }
-                  onEdit={() => setEditing({ ...item })}
-                  onSwapImage={() => {
-                    setEditing({ ...item });
-                    setPicker(true);
-                  }}
-                />
+              <div
+                key={item.id}
+                data-item-id={item.id}
+                ref={(el) => {
+                  if (el) itemNodesRef.current.set(item.id, el);
+                  else itemNodesRef.current.delete(item.id);
+                  if (expandedId === item.id) expandedRef.current = el;
+                }}
+                onMouseEnter={() => {
+                  hoveredIdRef.current = item.id;
+                }}
+                onMouseLeave={() => {
+                  if (hoveredIdRef.current === item.id) hoveredIdRef.current = null;
+                }}
+                className="relative"
+                // An open thread is for reading, and a tenth of the row isn't a readable
+                // measure — so it takes about a third of the width whatever the zoom.
+                style={
+                  item.tweet && expandedId === item.id
+                    ? { gridColumn: `span ${Math.max(1, Math.ceil(cols / 3))}` }
+                    : undefined
+                }
+              >
+                {item.tweet ? (
+                  <TweetCard
+                    item={item}
+                    expanded={expandedId === item.id}
+                    onToggle={() => setExpandedId((id) => (id === item.id ? null : item.id))}
+                    onEdit={() => setEditing({ ...item })}
+                  />
+                ) : (
+                /* The card itself opens the full-screen modal below — works on touch,
+                   not just hover. */
+                <ItemCard item={item} onOpen={() => setExpandedId(item.id)} />
+                )}
               </div>
             ),
           )}
         </div>
       )}
+
+      {expandedId &&
+        !editing &&
+        (() => {
+          const openItem = pool.find((i) => i.id === expandedId);
+          if (!openItem || openItem.tweet) return null;
+          return (
+            <ItemModal
+              ds={ds}
+              item={openItem}
+              onClose={() => setExpandedId(null)}
+              onChanged={onChanged}
+            />
+          );
+        })()}
 
       {picker && editing && (
         <ImagePicker
@@ -692,6 +819,75 @@ function Browse({
           onClose={() => setPicker(false)}
         />
       )}
+
+      {pool.length > 0 && <ZoomControl cols={cols} onChange={zoomBy} />}
+    </div>
+  );
+}
+
+// A vertical slider fixed in the window's right margin — the same home the settings
+// cog and account button already keep there (main.tsx) — so scrolling a long wall of
+// cards always leaves one dial in reach for how much of it is on screen at once.
+// Dragging up = fewer, bigger cards (zoomed in, down to one filling the row); dragging
+// down = more, smaller ones (zoomed out, up to a ten-wide mosaic). Continuous, so it
+// replaces the old fixed sm/lg breakpoints with a real dial rather than three stops.
+function ZoomControl({
+  cols,
+  onChange,
+}: {
+  cols: number;
+  /** Clamps to [MIN_COLS, MAX_COLS] itself — callers can freely pass cols ± 1. */
+  onChange: (next: number | ((c: number) => number)) => void;
+}) {
+  // The <input> itself always runs low-to-high bottom-to-top; the zoom LEVEL (big cards
+  // = high zoom) is the inverse of the column count, so the thumb sits high when cards
+  // are big and low when they're tiny, matching how a zoom slider reads everywhere else.
+  const zoomLevel = MAX_COLS + MIN_COLS - cols;
+  return (
+    <div
+      className="fixed bottom-6 right-3 z-30 flex flex-col items-center gap-1.5 rounded-2xl border border-[var(--color-line)] bg-[var(--color-card)]/90 px-2 py-3 text-[var(--color-muted)] shadow-sm backdrop-blur"
+      title={`${cols} across — drag, click ±, or pinch/ctrl+scroll over the grid`}
+    >
+      {/* Fewer, bigger cards. Disabled at one-across rather than hidden, so the
+          button's position — and the dial below it — never jumps around. */}
+      <button
+        type="button"
+        onClick={() => onChange((c) => c - 1)}
+        disabled={cols <= MIN_COLS}
+        aria-label="Zoom in (fewer, bigger cards)"
+        className="select-none text-sm leading-none hover:text-[var(--color-ink)] disabled:opacity-30"
+      >
+        ＋
+      </button>
+      <input
+        type="range"
+        min={MIN_COLS}
+        max={MAX_COLS}
+        step={1}
+        value={zoomLevel}
+        onChange={(e) => onChange(MAX_COLS + MIN_COLS - Number(e.target.value))}
+        aria-label="Zoom: cards per row"
+        className="h-32 w-5 cursor-pointer accent-[var(--color-accent)]"
+        style={{
+          WebkitAppearance: 'slider-vertical',
+          writingMode: 'vertical-lr',
+          direction: 'rtl',
+        } as React.CSSProperties}
+        // Firefox's own vertical-range mechanism (ignores writing-mode on range inputs).
+        // Not a real DOM attribute React knows about, so it's passed through untyped.
+        {...{ orient: 'vertical' }}
+      />
+      {/* More, smaller cards. */}
+      <button
+        type="button"
+        onClick={() => onChange((c) => c + 1)}
+        disabled={cols >= MAX_COLS}
+        aria-label="Zoom out (more, smaller cards)"
+        className="select-none text-sm leading-none hover:text-[var(--color-ink)] disabled:opacity-30"
+      >
+        －
+      </button>
+      <span className="mt-0.5 select-none text-[10px] tabular-nums">{cols}×</span>
     </div>
   );
 }
@@ -721,8 +917,8 @@ function ItemEditorCard({
   onDelete?: () => void;
 }) {
   return (
-    <div className="space-y-2 rounded-xl border border-[var(--color-accent)] bg-[var(--color-card)] p-3">
-      <div className="relative aspect-[4/3] overflow-hidden rounded-lg bg-[var(--color-wall-soft)]">
+    <div className="space-y-2 border border-[var(--color-accent)] bg-[var(--color-card)] p-3">
+      <div className="relative aspect-[4/3] overflow-hidden bg-[var(--color-wall-soft)]">
         <Photo src={draft.image} alt={draft.name} />
         <button
           onClick={onSwapImage}
@@ -1122,7 +1318,7 @@ function GapPanel({
               Nothing to add — see the note above for why.
             </p>
           ) : (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-1 md:grid-cols-2 lg:grid-cols-3">
               {pending.map((it, i) => (
                 <ReviewCard
                   key={i}

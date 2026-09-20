@@ -160,6 +160,36 @@ export function isPeriodAccurate(capture: Capture | undefined, year: number | nu
   return capture.year == null || Math.abs(capture.year - year) <= 2;
 }
 
+/**
+ * One post in a saved thread (personal world — server/src/services/tweets.ts).
+ *
+ * The text is stored, not just the link: a few hundred characters per tweet is nothing,
+ * and it is what makes the collection searchable, sortable, and still readable after
+ * the original is deleted. Media is the opposite — hotlinked, never copied.
+ */
+export interface Tweet {
+  /** The status id. "" for a tweet pasted in by hand before an import could name it —
+   *  the importer matches those by text and fills the id in (mergeLikes). */
+  id: string;
+  text: string;
+  /** Screen name, no "@". */
+  author: string;
+  authorName: string;
+  /** ISO timestamp; "" when unknown (a deleted tweet known only from the archive). */
+  createdAt: string;
+  /** One you actually liked, as opposed to one pulled in to complete its thread. */
+  liked: boolean;
+  /** Somebody else's tweet that the thread is replying to — shown for context only. */
+  context?: boolean;
+  /** Hotlinked picture urls (a video contributes its poster frame). */
+  media?: string[];
+}
+
+/** A thread, oldest first: the optional context tweet, then the author's own chain. */
+export interface TweetThread {
+  tweets: Tweet[];
+}
+
 /** A single piece of work in a dataset. */
 export interface Item {
   id: string;
@@ -204,10 +234,38 @@ export interface Item {
    */
   imageQuery?: string;
   wikipediaTitle?: string;
+  /**
+   * Personal world: this item IS a saved thread. `name`/`description`/`creator`/`year`/
+   * `url` are derived from it on import so browse, filter and rank work unchanged; the
+   * card draws the thread itself instead of a picture (components/TweetCard.tsx).
+   */
+  tweet?: TweetThread;
   createdAt: string;
 }
 
-/** A dataset = a macro topic (the field you're cataloguing). One JSON file per dataset. */
+/** A like as the X data archive lists it (data/like.js) — or a bare id from a pasted
+ *  link, in which case there is no text to fall back on if the tweet is gone. */
+export interface LikedTweetRef {
+  id: string;
+  text?: string;
+}
+
+/** What one import batch did, so the UI can say it rather than just finish. */
+export interface TweetImportStats {
+  /** New thread items created. */
+  added: number;
+  /** Likes folded into a thread that was already there. */
+  merged: number;
+  /** Likes already in the dataset. */
+  skipped: number;
+  /** Deleted/protected tweets kept from the archive's text alone. */
+  unavailable: number;
+  /** Couldn't be fetched this time (X rate-limited or errored) — NOT saved, so
+   *  importing the same file again retries exactly these. */
+  failed: number;
+}
+
+/** A dataset =a macro topic (the field you're cataloguing). One JSON file per dataset. */
 export interface Dataset {
   id: string;
   /** Which world this field belongs to (7-software-design.md, 9-personal-and-auth.md). */

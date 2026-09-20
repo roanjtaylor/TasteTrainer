@@ -30,6 +30,7 @@ import { jobsRouter } from './routes/jobs.ts';
 import { imagesRouter } from './routes/images.ts';
 import { mapRouter } from './routes/map.ts';
 import { filesRouter } from './routes/files.ts';
+import { tweetsRouter } from './routes/tweets.ts';
 import { embedRouter } from './routes/embed.ts';
 import { brainRouter } from './routes/brain.ts';
 
@@ -84,6 +85,8 @@ app.use('/api/brain', brainRouter);
 // Uploads only ever serve the personal world, so this is the one router behind the
 // wall outright rather than checked per-dataset.
 app.use('/api/files', requireAuth, filesRouter);
+// Same wall, same reason: liked tweets only ever go into a personal dataset.
+app.use('/api/tweets', requireAuth, tweetsRouter);
 
 // Turn anything a route throws into JSON the client can display, not a bare 500.
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

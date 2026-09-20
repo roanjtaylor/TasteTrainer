@@ -597,7 +597,7 @@ function Curate() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-1 md:grid-cols-2 lg:grid-cols-3">
             {items.map((it, i) => (
               <ReviewCard
                 key={i}
@@ -660,8 +660,8 @@ export function ReviewCard({
   onRemove: () => void;
 }) {
   return (
-    <div className="space-y-2 rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-3">
-      <div className="relative aspect-[4/3] overflow-hidden rounded-lg bg-[var(--color-wall-soft)]">
+    <div className="space-y-2 border border-[var(--color-line)] bg-[var(--color-card)] p-3">
+      <div className="relative aspect-[4/3] overflow-hidden bg-[var(--color-wall-soft)]">
         <Photo src={item.image} alt={item.name} />
         {/* Review is the moment to catch a screenshot that isn't of the era —
             "Swap image" opens the nearby-snapshot picker. */}

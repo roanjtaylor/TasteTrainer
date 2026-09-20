@@ -37,6 +37,12 @@ const inflight = new Map<string, Promise<unknown>>();
 /** Subscribers per key, so a refresh in one component updates every component showing it. */
 const listeners = new Map<string, Set<(data: unknown) => void>>();
 
+/** Mounted `useCached` instances per key, so `drop()` can make them refetch — without
+ *  this, a screen that's been open since before a write (the shelf left sitting on
+ *  /personal while a dataset gets created elsewhere) never learns its cached list was
+ *  invalidated: nothing re-runs its fetch until it happens to unmount and remount. */
+const watchers = new Map<string, Set<() => void>>();
+
 function storageKey(key: string): string {
   return PREFIX + key;
 }
@@ -113,19 +119,31 @@ export function write<T>(key: string, data: T): void {
 /** Forget one key, or every key starting with `key` when `prefix` is set. */
 export function drop(key: string, { prefix = false } = {}): void {
   const matches = (candidate: string) => (prefix ? candidate.startsWith(key) : candidate === key);
+  const dropped: string[] = [];
 
   for (const candidate of [...memory.keys()]) {
-    if (matches(candidate)) memory.delete(candidate);
+    if (matches(candidate)) {
+      memory.delete(candidate);
+      dropped.push(candidate);
+    }
   }
   try {
     for (let i = localStorage.length - 1; i >= 0; i -= 1) {
       const full = localStorage.key(i);
       if (full?.startsWith(PREFIX) && matches(full.slice(PREFIX.length))) {
         localStorage.removeItem(full);
+        const bare = full.slice(PREFIX.length);
+        if (!dropped.includes(bare)) dropped.push(bare);
       }
     }
   } catch {
     /* storage unavailable — memory eviction above is enough */
+  }
+
+  // Anything currently mounted and showing one of these keys is stale right now, not
+  // just next time it mounts — kick it into an immediate refetch.
+  for (const droppedKey of dropped) {
+    watchers.get(droppedKey)?.forEach((refetch) => refetch());
   }
 }
 
@@ -246,11 +264,18 @@ export function useCached<T>(
     set.add(notify);
     listeners.set(key, set);
 
+    const refetch = () => void run(true);
+    const watcherSet = watchers.get(key) ?? new Set();
+    watcherSet.add(refetch);
+    watchers.set(key, watcherSet);
+
     run(false);
 
     return () => {
       set.delete(notify);
       if (!set.size) listeners.delete(key);
+      watcherSet.delete(refetch);
+      if (!watcherSet.size) watchers.delete(key);
     };
   }, [key, run]);
 

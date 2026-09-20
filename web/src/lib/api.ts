@@ -14,7 +14,9 @@ import type {
   ImageKind,
   Item,
   Job,
+  LikedTweetRef,
   Subtopic,
+  TweetImportStats,
   ProposedItem,
   WorldMap,
 } from '../../../shared/types';
@@ -304,6 +306,14 @@ export const api = {
     }),
   signFile: (path: string) =>
     http<{ url: string }>('/api/files/signed', { method: 'POST', body: JSON.stringify({ path }) }),
+
+  // Liked tweets into a personal dataset (server/src/routes/tweets.ts) — one batch;
+  // components/TweetImportPanel.tsx loops it over a whole archive.
+  importTweets: (datasetId: string, likes: LikedTweetRef[]) =>
+    http<{ dataset: Dataset; stats: TweetImportStats }>('/api/tweets/import', {
+      method: 'POST',
+      body: JSON.stringify({ datasetId, likes }),
+    }),
 
   // Durable curation jobs (web/lib/jobs.ts) — what survives a refresh mid-Claude-call,
   // and what the resume banner reads. `domain` omitted lists across both worlds.
