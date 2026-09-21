@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { DOMAINS, DOMAIN_LABELS, isCuratedDomain } from '../../../shared/types';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { DOMAINS, DOMAIN_LABELS, isCuratedDomain, slugifyTopic } from '../../../shared/types';
 import type { DatasetSummary, Domain, EmbedDataset, EmbedItem } from '../../../shared/types';
 import { api } from '../lib/api';
 import { thumbSrcSet } from '../lib/image';
@@ -55,8 +55,10 @@ function buildOrder(items: EmbedItem[], mode: PlayMode): number[] {
  * that always wants the same field, e.g. a permanent "wallpaper" of one collection.
  */
 export function Embed() {
-  const { datasetId, slug } = useParams();
+  const { datasetId, slug, domain: domainParam } = useParams();
   const deepLink = slug ?? datasetId ?? '';
+  const [searchParams] = useSearchParams();
+  const editing = searchParams.get('mode') === 'edit';
 
   const [step, setStep] = useState<Step>({ kind: 'world' });
   const [datasets, setDatasets] = useState<DatasetSummary[] | null>(null);
@@ -73,6 +75,7 @@ export function Embed() {
   // A deep-linked embed skips straight to browsing — no picker shown at all.
   useEffect(() => {
     if (deepLink) openDataset(deepLink);
+    else setStep({ kind: 'world' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLink]);
 
@@ -111,6 +114,133 @@ export function Embed() {
       {step.kind === 'browse' && (
         <Browse ds={step.ds} onBack={deepLink ? undefined : () => setStep({ kind: 'world' })} />
       )}
+      {editing && <EditPanel domainParam={domainParam} slug={slug ?? ''} />}
+    </div>
+  );
+}
+
+/** The message a host editor listens for (`window.addEventListener('message', …)`):
+ * persist `src` for view mode and apply `width`/`height` to the iframe element — an
+ * iframe can't resize itself, so the size fields are requests the host carries out. */
+const EMBED_CONFIG_MESSAGE = 'tastetrainer:embed-config';
+
+// ---- Edit mode (`?mode=edit`): the host editor's settings panel, inside the iframe ----
+function EditPanel({ domainParam, slug }: { domainParam?: string; slug: string }) {
+  const navigate = useNavigate();
+  const initialWorld = WORLDS.find((w) => w === domainParam) ?? WORLDS[0];
+  const [world, setWorld] = useState<Domain>(initialWorld);
+  const [topics, setTopics] = useState<DatasetSummary[] | null>(null);
+  const [open, setOpen] = useState(true);
+  const [width, setWidth] = useState(String(window.innerWidth));
+  const [height, setHeight] = useState(String(window.innerHeight));
+
+  useEffect(() => {
+    setTopics(null);
+    api.listDatasets(world).catch(() => [] as DatasetSummary[]).then(setTopics);
+  }, [world]);
+
+  const post = useCallback(
+    (size?: { width: number; height: number }) => {
+      if (window.parent === window) return;
+      const src = `${window.location.origin}/embed${slug ? `/${domainParam}/${slug}` : ''}`;
+      window.parent.postMessage(
+        {
+          type: EMBED_CONFIG_MESSAGE,
+          world: slug ? domainParam : null,
+          topic: slug || null,
+          src,
+          width: size?.width ?? window.innerWidth,
+          height: size?.height ?? window.innerHeight,
+        },
+        // The host's origin is unknowable from in here, and nothing in this is secret.
+        '*',
+      );
+    },
+    [domainParam, slug],
+  );
+
+  useEffect(() => post(), [post]);
+
+  // The fields mirror the iframe's real size, so a host that resizes it by dragging
+  // stays in sync with what's typed here.
+  useEffect(() => {
+    const onResize = () => {
+      setWidth(String(window.innerWidth));
+      setHeight(String(window.innerHeight));
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  function commitSize() {
+    const w = Math.round(Number(width));
+    const h = Math.round(Number(height));
+    if (w > 0 && h > 0) post({ width: w, height: h });
+  }
+
+  function pickTopic(nextSlug: string) {
+    navigate(`/embed${nextSlug ? `/${world}/${nextSlug}` : ''}?mode=edit`, { replace: true });
+  }
+
+  const field = 'w-full rounded border border-[var(--color-line)] bg-[var(--color-card)] px-2 py-1.5 text-xs text-[var(--color-ink)]';
+  const label = 'mb-1 block text-[0.7rem] font-semibold text-[var(--color-muted)]';
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="absolute bottom-3 right-3 z-20 rounded-full bg-[var(--color-ink)] px-3 py-1.5 text-xs text-[var(--color-wall)] shadow"
+      >
+        Edit embed
+      </button>
+    );
+  }
+
+  return (
+    <div className="absolute inset-y-0 right-0 z-20 flex w-60 max-w-full flex-col gap-3 overflow-y-auto border-l border-[var(--color-line)] bg-[var(--color-wall)] p-3 shadow-lg">
+      <div className="flex items-center justify-between">
+        <span className="text-[0.7rem] uppercase tracking-wide text-[var(--color-muted)]">Starting view</span>
+        <button onClick={() => setOpen(false)} aria-label="Hide settings" title="Hide settings" className="text-sm text-[var(--color-muted)] hover:text-[var(--color-ink)]">
+          ✕
+        </button>
+      </div>
+      <div>
+        <label className={label} htmlFor="embed-world">World</label>
+        <select id="embed-world" className={field} value={world} onChange={(e) => setWorld(e.target.value as Domain)}>
+          {WORLDS.map((w) => (
+            <option key={w} value={w}>{DOMAIN_LABELS[w].title}</option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <label className={label} htmlFor="embed-topic">Topic</label>
+        <select
+          id="embed-topic"
+          className={field}
+          value={world === domainParam ? slug : ''}
+          disabled={topics === null}
+          onChange={(e) => pickTopic(e.target.value)}
+        >
+          <option value="">{topics === null ? 'Loading…' : 'Visitor picks (no fixed topic)'}</option>
+          {topics?.map((d) => (
+            <option key={d.id} value={slugifyTopic(d.topic)}>{d.topic}</option>
+          ))}
+        </select>
+      </div>
+      <div className="flex gap-2">
+        <div className="flex-1">
+          <label className={label} htmlFor="embed-width">Width (px)</label>
+          <input id="embed-width" type="number" min={220} step={10} className={field} value={width}
+            onChange={(e) => setWidth(e.target.value)} onBlur={commitSize}
+            onKeyDown={(e) => e.key === 'Enter' && commitSize()} />
+        </div>
+        <div className="flex-1">
+          <label className={label} htmlFor="embed-height">Height (px)</label>
+          <input id="embed-height" type="number" min={160} step={10} className={field} value={height}
+            onChange={(e) => setHeight(e.target.value)} onBlur={commitSize}
+            onKeyDown={(e) => e.key === 'Enter' && commitSize()} />
+        </div>
+      </div>
     </div>
   );
 }

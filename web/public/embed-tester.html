@@ -220,6 +220,7 @@
   </div>
 </div>
 
+<script src="/embed-config.js"></script>
 <script>
 (function () {
   var STORE_KEY = 'embedTester.v2';
@@ -313,7 +314,7 @@
       renderTopicOptions(domain, selectSlug);
       return;
     }
-    fetch('/api/datasets?domain=' + domain)
+    fetch((window.__API_BASE__ || '') + '/api/datasets?domain=' + domain)
       .then(function (r) { if (!r.ok) throw new Error('failed'); return r.json(); })
       .then(function (list) {
         topicsByWorld[domain] = list.map(function (d) {
@@ -322,7 +323,8 @@
         renderTopicOptions(domain, selectSlug);
       })
       .catch(function () {
-        topicSelect.innerHTML = '<option value="">Could not load — is the dev server running?</option>';
+        topicSelect.innerHTML = '<option value="">Could not load topics — is the API up?</option>';
+        syncFromAttributes(false);
       });
   }
 

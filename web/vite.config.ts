@@ -1,10 +1,32 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwind from '@tailwindcss/vite';
 import path from 'node:path';
 
+// public/embed-tester.html is plain static HTML outside the bundle, so it can't read
+// import.meta.env. This serves/emits /embed-config.js carrying the same API base the
+// app uses (empty in dev, where the /api proxy below applies).
+function embedTesterConfig(): Plugin {
+  let body = '';
+  return {
+    name: 'embed-tester-config',
+    configResolved(config) {
+      body = `window.__API_BASE__=${JSON.stringify(config.env.VITE_API_BASE_URL ?? '')};`;
+    },
+    configureServer(server) {
+      server.middlewares.use('/embed-config.js', (_req, res) => {
+        res.setHeader('Content-Type', 'text/javascript');
+        res.end(body);
+      });
+    },
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'embed-config.js', source: body });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), tailwind()],
+  plugins: [react(), tailwind(), embedTesterConfig()],
   server: {
     port: 5173,
     // Auto-open the app in the default browser on `npm run dev` (once, on first
