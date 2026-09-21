@@ -13,15 +13,14 @@ import { api, watchChat } from './api';
 import { publishDataset, publishWorldMap } from './data';
 import { cacheKeys, drop } from './store';
 
-// The chat dock's state (components/chat/ChatDock.tsx).
+// One chat TAB's state (components/chat/ChatDock.tsx, lib/chatTabs.ts owns the set of
+// open tabs and which thread each one points at).
 //
 // A conversation is owned by the SERVER, not this tab: sending only starts a turn, and
 // everything after that — this tab's own reply included — arrives by watching the
 // thread's stream. That's what makes the three cases one case: a reply you're watching
 // live, one you come back to after a refresh, and one another device started all go
 // through `snapshot, then events, then end`.
-
-const LAST_THREAD_KEY = 'tt:chat:thread';
 
 /** After a decision, publish exactly what the server says changed, so every screen
  *  showing those datasets updates at once without refetching (lib/data.ts). */
@@ -40,8 +39,6 @@ export interface ChatState {
   error: string;
   send: (text: string, view: ChatView, opts: { model?: string; effort?: ChatEffort }) => Promise<void>;
   stop: () => void;
-  newThread: () => void;
-  openThread: (id: string) => void;
   decide: (
     changesetId: string,
     action: 'apply' | 'discard' | 'revert',
@@ -49,10 +46,10 @@ export interface ChatState {
   ) => Promise<void>;
 }
 
-export function useChat(enabled: boolean): ChatState {
-  const [threadId, setThreadId] = useState<string | null>(() => {
-    try { return localStorage.getItem(LAST_THREAD_KEY); } catch { return null; }
-  });
+/** One tab's live conversation. `threadId` is owned by the tab (lib/chatTabs.ts) —
+ *  null until the first message mints one, at which point `onThreadId` reports it
+ *  back up so the tab can remember it (and so closing the tab knows what to delete). */
+export function useChatThread(threadId: string | null, enabled: boolean, onThreadId: (id: string) => void): ChatState {
   // Bumped to re-open the stream on the SAME thread (a follow-up message).
   const [watchSeq, setWatchSeq] = useState(0);
   const [running, setRunning] = useState(false);
@@ -77,13 +74,6 @@ export function useChat(enabled: boolean): ChatState {
     changesetsRef.current = i === -1 ? [...list, cs] : list.map((c) => (c.id === cs.id ? cs : c));
     paint();
   }, [paint]);
-
-  useEffect(() => {
-    try {
-      if (threadId) localStorage.setItem(LAST_THREAD_KEY, threadId);
-      else localStorage.removeItem(LAST_THREAD_KEY);
-    } catch { /* storage blocked — the dock just won't remember across reloads */ }
-  }, [threadId]);
 
   // The watcher. Only while the dock has been opened at least once (`enabled`): a
   // closed dock on every page load shouldn't hold a connection open.
@@ -115,13 +105,9 @@ export function useChat(enabled: boolean): ChatState {
 
     watchChat(threadId, onEvent, controller.signal).catch((e: any) => {
       if (controller.signal.aborted) return;
-      // A thread that no longer exists (deleted elsewhere) just resets the dock.
-      if (/not found/i.test(e?.message ?? '')) {
-        threadRef.current = null;
-        setThreadId(null);
-      } else {
-        setError(e?.message ?? 'Lost the connection to the conversation.');
-      }
+      // A thread that no longer exists (deleted elsewhere, or closed from another tab)
+      // just goes quiet — the tab that owns it is responsible for noticing and closing.
+      if (!/not found/i.test(e?.message ?? '')) setError(e?.message ?? 'Lost the connection to the conversation.');
       setRunning(false);
     });
     return () => controller.abort();
@@ -150,33 +136,17 @@ export function useChat(enabled: boolean): ChatState {
       const { thread } = await api.sendChat({ threadId: threadId ?? undefined, text, view, ...opts });
       threadRef.current = thread;
       setRunning(true);
-      setThreadId(thread.id);
-      setWatchSeq((n) => n + 1);
+      if (thread.id !== threadId) onThreadId(thread.id);
+      else setWatchSeq((n) => n + 1);
       paint();
     } catch (e: any) {
       setError(e?.message ?? 'Could not send.');
     }
-  }, [threadId, paint]);
+  }, [threadId, paint, onThreadId]);
 
   const stop = useCallback(() => {
     if (threadId) api.stopChat(threadId).catch(() => {});
   }, [threadId]);
-
-  const newThread = useCallback(() => {
-    threadRef.current = null;
-    changesetsRef.current = [];
-    setRunning(false);
-    setError('');
-    setThreadId(null);
-  }, []);
-
-  const openThread = useCallback((id: string) => {
-    threadRef.current = null;
-    changesetsRef.current = [];
-    setError('');
-    setThreadId(id);
-    setWatchSeq((n) => n + 1);
-  }, []);
 
   const decide = useCallback<ChatState['decide']>(async (changesetId, action, body = {}) => {
     setError('');
@@ -201,8 +171,6 @@ export function useChat(enabled: boolean): ChatState {
     error,
     send,
     stop,
-    newThread,
-    openThread,
     decide,
   };
 }

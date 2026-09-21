@@ -373,9 +373,15 @@ export function ChangesetReview({ changeset, decide, onClose }: { changeset: Cha
     if (pending.length > 0) return;
     setAwaitingApplySettle(false);
     setApplied(true);
+  }, [awaitingApplySettle, pending.length]);
+
+  // Separate from the effect above so that flipping `applied` doesn't re-run this one
+  // and cancel its own timeout via cleanup before it fires.
+  useEffect(() => {
+    if (!applied) return;
     const t = setTimeout(onClose, 1000);
     return () => clearTimeout(t);
-  }, [awaitingApplySettle, pending.length, onClose]);
+  }, [applied, onClose]);
 
   const tickAll = (ops: ChangeOp[], on: boolean) =>
     setTicked((prev) => {

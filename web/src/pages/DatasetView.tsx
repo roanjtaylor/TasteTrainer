@@ -131,11 +131,14 @@ function ReportsPanel({ datasetId }: { datasetId: string }) {
             </div>
             <div className="flex shrink-0 gap-2">
               <button
-                onClick={() =>
+                onClick={() => {
+                  // Handing it to Claude counts as dealt with — leaving it in the
+                  // list too would make the curator dismiss the same report twice.
                   ask(
                     `A visitor flagged a problem with "${r.itemName}" via the embed widget: "${r.text}". Please look into it and fix the dataset if something needs fixing.`,
-                  )
-                }
+                  );
+                  dismiss(r.id);
+                }}
                 title="Ask Claude about this"
                 className="rounded-full border border-[var(--color-claude)]/60 px-3 py-1 text-xs text-[var(--color-claude)] hover:bg-[var(--color-wall-soft)]"
               >
