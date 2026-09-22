@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { DOMAINS, DOMAIN_LABELS, slugifyTopic } from '../../../shared/types';
 import type { DatasetSummary, Domain, EmbedDataset, EmbedItem } from '../../../shared/types';
@@ -351,18 +351,76 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
   const [pos, setPos] = useState(0);
   // Set only while a next/prev transition is animating: the outgoing picture
   // (at `prevPos`) slides off in `dir` while the new current picture slides in.
-  const [slide, setSlide] = useState<{ prevPos: number; dir: 1 | -1 } | null>(null);
+  // `fromX` is how far a finger had already dragged the card when it let go (0 for
+  // a button/keyboard step), so the animation carries on from where the finger
+  // left it rather than jumping back to centre first.
+  const [slide, setSlide] = useState<{ prevPos: number; dir: 1 | -1; fromX: number } | null>(null);
 
   const goTo = useCallback(
-    (newPos: number, dir: 1 | -1) => {
+    (newPos: number, dir: 1 | -1, fromX = 0) => {
       if (order.length < 2 || slide) return;
-      setSlide({ prevPos: pos, dir });
+      setSlide({ prevPos: pos, dir, fromX });
       setPos(newPos);
     },
     [order.length, pos, slide],
   );
-  const goNext = useCallback(() => goTo((pos + 1) % order.length, 1), [goTo, pos, order.length]);
-  const goPrev = useCallback(() => goTo((pos - 1 + order.length) % order.length, -1), [goTo, pos, order.length]);
+  const goNext = useCallback((fromX = 0) => goTo((pos + 1) % order.length, 1, fromX), [goTo, pos, order.length]);
+  const goPrev = useCallback((fromX = 0) => goTo((pos - 1 + order.length) % order.length, -1, fromX), [goTo, pos, order.length]);
+
+  // Touch: swipe left for the next card, right for the previous one, tap to flip.
+  // The card follows the finger (`dragX`) and either snaps back or, past a
+  // threshold, completes the move via the same slide animation the buttons use.
+  // A swipe must not also count as the tap that flips the card: `swipedRef` is set
+  // once a horizontal drag is recognised and the click handlers check it, since
+  // the browser still fires `click` after a touch that moved. The container's
+  // `touch-action: pan-y` leaves vertical scrolling (a thread, the back of a card)
+  // to the browser, which cancels our pointer when it takes a vertical pan.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ id: number; startX: number; startY: number; dx: number; horizontal: boolean } | null>(null);
+  const swipedRef = useRef(false);
+  const [dragX, setDragX] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [swipeHint, setSwipeHint] = useState(true);
+
+  function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    // Any fresh press clears the last swipe — a mouse click that follows a touch
+    // swipe on a hybrid device should still flip.
+    swipedRef.current = false;
+    if (e.pointerType === 'mouse' || slide) return;
+    // Dragging inside the report form is selecting text, not browsing.
+    if ((e.target as Element).closest('textarea, input')) return;
+    dragRef.current = { id: e.pointerId, startX: e.clientX, startY: e.clientY, dx: 0, horizontal: false };
+  }
+  function onPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    const d = dragRef.current;
+    if (!d || d.id !== e.pointerId) return;
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    if (!d.horizontal) {
+      if (Math.abs(dx) < 8 || Math.abs(dx) < Math.abs(dy)) return;
+      d.horizontal = true;
+      swipedRef.current = true;
+      setDragging(true);
+    }
+    // With only one card there's nowhere to go: a stiff rubber band says so.
+    d.dx = canBrowse ? dx : dx / 4;
+    setDragX(d.dx);
+  }
+  function endDrag(e: React.PointerEvent<HTMLDivElement>, cancelled: boolean) {
+    const d = dragRef.current;
+    if (!d || d.id !== e.pointerId) return;
+    dragRef.current = null;
+    if (!d.horizontal) return;
+    setDragging(false);
+    const width = containerRef.current?.clientWidth ?? window.innerWidth;
+    const threshold = Math.min(80, width * 0.25);
+    if (!cancelled && canBrowse && Math.abs(d.dx) > threshold) {
+      setSwipeHint(false);
+      if (d.dx < 0) goNext(d.dx);
+      else goPrev(d.dx);
+    }
+    setDragX(0);
+  }
 
   // Switching shuffle/chronological rebuilds the order but stays on the same
   // picture — only where you go from here changes, not what's on screen.
@@ -425,7 +483,7 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
   // turn partway through.
   function flipTo(next: boolean) {
     // A thread has nothing to put on a back — its words are already the front.
-    if (animating || next === flipped || current.tweet) return;
+    if (swipedRef.current || animating || next === flipped || current.tweet) return;
     setAnimating(true);
   }
   // The chrome around the picture (top bars, caption, prev/next) hides for the whole
@@ -479,7 +537,9 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
   // `group` and only shows on hover — the photo itself displays uninterrupted
   // otherwise. `opacity-0`+`pointer-events-none` at rest so hidden controls can't
   // eat clicks meant for the image; hover reveals both together.
-  const chrome = 'opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto';
+  // On a touch screen there is no hover, so `embed-chrome` (index.css) keeps the
+  // controls visible there — except the prev/next arrows, which a swipe replaces.
+  const chrome = 'embed-chrome opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto';
 
   return (
     <div className="group relative h-full w-full">
@@ -544,11 +604,20 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
         <Mosaic items={ds.items} onOpenItem={openItemIndex} />
       ) : (
         <>
-          <div className="relative h-full w-full overflow-hidden bg-[var(--color-ink)]">
+          <div
+            ref={containerRef}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={(e) => endDrag(e, false)}
+            onPointerCancel={(e) => endDrag(e, true)}
+            style={{ touchAction: 'pan-y' }}
+            className="relative h-full w-full overflow-hidden bg-[var(--color-ink)]"
+          >
             {slide && (
               <div
                 key={`out-${slide.prevPos}`}
                 onAnimationEnd={() => setSlide(null)}
+                style={{ '--slide-from': `${slide.fromX}px` } as React.CSSProperties}
                 className={`absolute inset-0 ${slide.dir === 1 ? 'embed-slide-exit-next' : 'embed-slide-exit-prev'}`}
               >
                 <Slide item={ds.items[order[slide.prevPos]]} />
@@ -556,6 +625,14 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
             )}
             <div
               key={`in-${pos}`}
+              style={
+                slide
+                  ? ({ '--slide-from': `${slide.fromX}px` } as React.CSSProperties)
+                  : {
+                      transform: `translateX(${dragX}px)`,
+                      transition: dragging ? 'none' : 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+                    }
+              }
               className={`absolute inset-0 embed-flip-perspective ${slide ? (slide.dir === 1 ? 'embed-slide-enter-next' : 'embed-slide-enter-prev') : ''}`}
             >
               <div
@@ -679,21 +756,28 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
             </div>
           )}
 
+          {/* Touch-only (index.css) nudge for the gestures, gone after the first swipe. */}
+          {canBrowse && !showingBack && swipeHint && (
+            <div className="embed-touch-hint pointer-events-none absolute bottom-3 right-3 z-10 hidden rounded-full bg-[var(--color-ink)]/60 px-3 py-1 text-xs text-[var(--color-wall)] backdrop-blur">
+              Swipe · tap to flip
+            </div>
+          )}
+
           {canBrowse && !showingBack && (
             <>
               <button
-                onClick={goPrev}
+                onClick={() => goPrev()}
                 aria-label="Previous picture"
                 title="Previous"
-                className={`absolute left-3 top-1/2 z-10 -translate-y-1/2 rounded-full bg-[var(--color-ink)]/60 p-2.5 text-[var(--color-wall)] backdrop-blur hover:bg-[var(--color-ink)] ${chrome}`}
+                className={`embed-arrow absolute left-3 top-1/2 z-10 -translate-y-1/2 rounded-full bg-[var(--color-ink)]/60 p-2.5 text-[var(--color-wall)] backdrop-blur hover:bg-[var(--color-ink)] ${chrome}`}
               >
                 <ChevronIcon direction="left" />
               </button>
               <button
-                onClick={goNext}
+                onClick={() => goNext()}
                 aria-label="Next picture"
                 title="Next"
-                className={`absolute right-3 top-1/2 z-10 -translate-y-1/2 rounded-full bg-[var(--color-ink)]/60 p-2.5 text-[var(--color-wall)] backdrop-blur hover:bg-[var(--color-ink)] ${chrome}`}
+                className={`embed-arrow absolute right-3 top-1/2 z-10 -translate-y-1/2 rounded-full bg-[var(--color-ink)]/60 p-2.5 text-[var(--color-wall)] backdrop-blur hover:bg-[var(--color-ink)] ${chrome}`}
               >
                 <ChevronIcon direction="right" />
               </button>

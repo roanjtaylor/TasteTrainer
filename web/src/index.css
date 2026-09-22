@@ -66,21 +66,40 @@ h3,
 /* Embed slideshow (Embed.tsx): the incoming picture slides in over the outgoing
    one instead of a hard swap. "next" and "prev" travel in opposite directions,
    so entering and leaving each have a left- and a right-going variant. */
+/* `--slide-from` is how far a swipe had already dragged the outgoing card when the
+   finger let go (0 for a button step), so the move continues from there — the
+   incoming card starts one frame-width beyond the outgoing one, not from the edge. */
 @keyframes embed-slide-in-from-right {
-  from { transform: translateX(100%); }
+  from { transform: translateX(calc(100% + var(--slide-from, 0px))); }
   to { transform: translateX(0); }
 }
 @keyframes embed-slide-in-from-left {
-  from { transform: translateX(-100%); }
+  from { transform: translateX(calc(-100% + var(--slide-from, 0px))); }
   to { transform: translateX(0); }
 }
 @keyframes embed-slide-out-to-left {
-  from { transform: translateX(0); }
+  from { transform: translateX(var(--slide-from, 0px)); }
   to { transform: translateX(-100%); }
 }
 @keyframes embed-slide-out-to-right {
-  from { transform: translateX(0); }
+  from { transform: translateX(var(--slide-from, 0px)); }
   to { transform: translateX(100%); }
+}
+
+/* Touch screens have no hover to reveal the embed's controls, so they stay
+   visible there; the prev/next arrows go instead, since a swipe does their job
+   (Embed.tsx), and the one-time gesture hint shows only there. */
+@media (hover: none) {
+  .embed-chrome {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .embed-arrow {
+    display: none;
+  }
+  .embed-touch-hint {
+    display: block;
+  }
 }
 .embed-slide-enter-next {
   animation: embed-slide-in-from-right 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
