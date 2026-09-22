@@ -21,15 +21,17 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <BrowserRouter>
       <Routes>
-        {/* No Nav, no auth provider, no layout grid — this is what gets iframed on
-            someone else's site, so it has to be nothing but the widget. The bare
-            /embed is the one to hand out: it's a self-contained pick-a-world ->
-            pick-a-dataset -> browse widget with no dataset-specific URL to build.
-            /embed/:domain/:slug and /embed/:datasetId are deep links straight into
-            the browse step for one fixed dataset, skipping the picker (Embed.tsx). */}
-        <Route path="/embed" element={<Embed />} />
-        <Route path="/embed/:domain/:slug" element={<Embed />} />
-        <Route path="/embed/:datasetId" element={<Embed />} />
+        {/* No Nav, no layout grid — this is what gets iframed on someone else's
+            site, so it has to be nothing but the widget. It does track the session
+            (AuthProvider, no gate): a personal collection embeds too, behind the
+            widget's own sign-in form (Embed.tsx). The bare /embed is the one to hand
+            out: a self-contained pick-a-world -> pick-a-dataset -> browse widget with
+            no dataset-specific URL to build. /embed/:domain/:slug and
+            /embed/:datasetId are deep links straight into the browse step for one
+            fixed dataset, skipping the picker. */}
+        <Route path="/embed" element={<AuthProvider><Embed /></AuthProvider>} />
+        <Route path="/embed/:domain/:slug" element={<AuthProvider><Embed /></AuthProvider>} />
+        <Route path="/embed/:datasetId" element={<AuthProvider><Embed /></AuthProvider>} />
         <Route path="*" element={<AppShell />} />
       </Routes>
     </BrowserRouter>

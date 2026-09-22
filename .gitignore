@@ -9,3 +9,6 @@ build/
 
 # Local data (datasets + comparison results live on disk)
 data/
+
+# X data archive (DMs, IP log, phone number) — only ever the import's input
+tweets/

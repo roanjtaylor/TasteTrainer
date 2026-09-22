@@ -43,6 +43,17 @@ async function authHeaders(): Promise<Record<string, string>> {
   };
 }
 
+/** A failed request, with the status kept so a caller can tell "sign in" (401) apart
+ *  from "gone" (404) — the embed widget shows a different screen for each. */
+export class HttpError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 async function http<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(API_BASE + url, {
     headers: await authHeaders(),
@@ -59,7 +70,7 @@ async function http<T>(url: string, options?: RequestInit): Promise<T> {
     } catch {
       if (raw) message = `Request failed (${res.status}): ${raw.slice(0, 200)}`;
     }
-    throw new Error(message);
+    throw new HttpError(res.status, message);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
@@ -139,13 +150,13 @@ export const api = {
   updateDataset: (id: string, body: Partial<Dataset>) =>
     http<Dataset>(`/api/datasets/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteDataset: (id: string) => http<void>(`/api/datasets/${id}`, { method: 'DELETE' }),
-  // Public embed widget (no auth — server/src/routes/embed.ts). Same `http()` helper
-  // as everything else; it's harmless that this also sends an auth header when one
-  // exists, the endpoint just ignores it.
+  // Embed widget (server/src/routes/embed.ts). Public for the researched worlds; a
+  // personal dataset needs the session token `http()` already sends, and answers 401
+  // without one.
   getEmbed: (id: string) => http<EmbedDataset>(`/api/embed/${id}`),
-  // Flip a picture, flag it wrong (Embed.tsx's card back). Same reach as getEmbed —
-  // public, no auth — and stored durably (server/src/routes/reports.ts) for the
-  // curator to review and hand to the Claude agent.
+  // Flip a picture, flag it wrong (Embed.tsx's card back). Same reach as getEmbed,
+  // and stored durably (server/src/routes/reports.ts) for the curator to review and
+  // hand to the Claude agent.
   reportItem: (datasetId: string, itemId: string, text: string) =>
     http<{ ok: true }>(`/api/embed/${datasetId}/report`, {
       method: 'POST',

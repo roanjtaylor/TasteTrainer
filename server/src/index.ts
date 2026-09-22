@@ -68,8 +68,9 @@ app.get('/api/health', (_req, res) => res.json({ ok: true }));
 // 9-personal-and-auth.md). Registered after the health check and before every
 // router, so `req.user` is available wherever a route needs it.
 app.use('/api', attachUser);
-// Public embed widget (no auth, personal domain excluded — routes/embed.ts). Mounted
-// ahead of /api/datasets purely for readability; the two prefixes don't overlap.
+// Embed widget (routes/embed.ts): public for the researched worlds, and a personal
+// dataset only for a signed-in caller — attachUser above has already read the token.
+// Mounted ahead of /api/datasets purely for readability; the two prefixes don't overlap.
 app.use('/api/embed', embedRouter);
 // Visitor-flagged item problems (routes/reports.ts) — read/resolve from inside the
 // app; the flagging itself happens through embedRouter above, from the public widget.

@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { DOMAINS, DOMAIN_LABELS, isCuratedDomain, slugifyTopic } from '../../../shared/types';
+import { DOMAINS, DOMAIN_LABELS, slugifyTopic } from '../../../shared/types';
 import type { DatasetSummary, Domain, EmbedDataset, EmbedItem } from '../../../shared/types';
-import { api } from '../lib/api';
+import { api, HttpError } from '../lib/api';
+import { Misconfigured, SignIn, useAuth } from '../lib/auth';
+import { supabase } from '../lib/supabase';
 import { thumbSrcSet } from '../lib/image';
 import { Photo } from '../components/Photo';
 import { Mosaic } from '../components/Mosaic';
+import { TweetThreadList } from '../components/TweetCard';
 
-// The worlds this widget will ever offer — personal is hand-built and never public
-// (9-personal-and-auth.md; the server 404s it outright, see routes/embed.ts).
-const WORLDS = DOMAINS.filter(isCuratedDomain);
+// Every world, the personal one included: it's hand-built and private, so the server
+// answers 401 for it until the viewer signs in (routes/embed.ts) and the widget puts
+// its sign-in form up in place of the collection (the `signin` step below).
+const WORLDS = DOMAINS;
 
 /** The single-picture view fills the iframe, so the iframe's width is the slot. */
 const SINGLE_SIZES = '100vw';
@@ -17,7 +21,16 @@ const SINGLE_SIZES = '100vw';
 type Step =
   | { kind: 'world' }
   | { kind: 'dataset'; domain: Domain }
+  /** The server said 401: show the sign-in form, then do `retry` once signed in. */
+  | { kind: 'signin'; retry: () => void }
   | { kind: 'browse'; ds: EmbedDataset };
+
+/** Recover from a failed request: a 401 becomes the sign-in step (with the same call
+ *  to make again afterwards), anything else is an error to show. */
+function stepOrError(e: unknown, retry: () => void, setStep: (s: Step) => void, setError: (m: string) => void): void {
+  if (e instanceof HttpError && e.status === 401) setStep({ kind: 'signin', retry });
+  else setError((e as Error)?.message ?? 'Could not load this');
+}
 
 /** How the slideshow steps through the dataset: a random pass, or oldest-first. */
 type PlayMode = 'shuffle' | 'chronological';
@@ -63,13 +76,14 @@ export function Embed() {
   const [step, setStep] = useState<Step>({ kind: 'world' });
   const [datasets, setDatasets] = useState<DatasetSummary[] | null>(null);
   const [error, setError] = useState('');
+  const { email } = useAuth();
 
   const openDataset = useCallback((id: string) => {
     setError('');
     api
       .getEmbed(id)
       .then((ds) => setStep({ kind: 'browse', ds }))
-      .catch((e: any) => setError(e?.message ?? 'Could not load this dataset'));
+      .catch((e) => stepOrError(e, () => openDataset(id), setStep, setError));
   }, []);
 
   // A deep-linked embed skips straight to browsing — no picker shown at all.
@@ -79,15 +93,20 @@ export function Embed() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLink]);
 
-  function openWorld(domain: Domain) {
+  const openWorld = useCallback((domain: Domain) => {
     setError('');
     setDatasets(null);
     setStep({ kind: 'dataset', domain });
-    api.listDatasets(domain).catch((e: any) => {
-      setError(e?.message ?? 'Could not load datasets');
-      return [] as DatasetSummary[];
-    }).then(setDatasets);
-  }
+    api
+      .listDatasets(domain)
+      .then(setDatasets)
+      .catch((e) => stepOrError(e, () => openWorld(domain), setStep, setError));
+  }, []);
+
+  // Signing in (in the form the `signin` step shows) makes the call that was refused.
+  useEffect(() => {
+    if (step.kind === 'signin' && email) step.retry();
+  }, [step, email]);
 
   // A deep-linked embed that failed to load shows only the error — never the picker,
   // which would just invite browsing to something else instead of what was linked.
@@ -102,6 +121,15 @@ export function Embed() {
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[var(--color-wall)]">
       {step.kind === 'world' && <WorldPicker onPick={openWorld} />}
+      {step.kind === 'signin' && (
+        <div className="h-full w-full overflow-y-auto">
+          {supabase ? (
+            <SignIn title="A private collection" blurb="Sign in to see what's here." />
+          ) : (
+            <Misconfigured />
+          )}
+        </div>
+      )}
       {step.kind === 'dataset' && (
         <DatasetPicker
           domain={step.domain}
@@ -133,11 +161,13 @@ function EditPanel({ domainParam, slug }: { domainParam?: string; slug: string }
   const [open, setOpen] = useState(true);
   const [width, setWidth] = useState(String(window.innerWidth));
   const [height, setHeight] = useState(String(window.innerHeight));
+  // The personal world lists nothing until signed in; re-asked once that happens.
+  const { email } = useAuth();
 
   useEffect(() => {
     setTopics(null);
     api.listDatasets(world).catch(() => [] as DatasetSummary[]).then(setTopics);
-  }, [world]);
+  }, [world, email]);
 
   const post = useCallback(
     (size?: { width: number; height: number }) => {
@@ -221,7 +251,13 @@ function EditPanel({ domainParam, slug }: { domainParam?: string; slug: string }
           disabled={topics === null}
           onChange={(e) => pickTopic(e.target.value)}
         >
-          <option value="">{topics === null ? 'Loading…' : 'Visitor picks (no fixed topic)'}</option>
+          <option value="">
+            {topics === null
+              ? 'Loading…'
+              : world === 'personal' && !email
+                ? 'Sign in (in the widget) to list yours'
+                : 'Visitor picks (no fixed topic)'}
+          </option>
           {topics?.map((d) => (
             <option key={d.id} value={slugifyTopic(d.topic)}>{d.topic}</option>
           ))}
@@ -388,7 +424,8 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
   // Ignoring a click mid-animation stops a fast double-click from restarting the
   // turn partway through.
   function flipTo(next: boolean) {
-    if (animating || next === flipped) return;
+    // A thread has nothing to put on a back — its words are already the front.
+    if (animating || next === flipped || current.tweet) return;
     setAnimating(true);
   }
   // The chrome around the picture (top bars, caption, prev/next) hides for the whole
@@ -514,12 +551,7 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
                 onAnimationEnd={() => setSlide(null)}
                 className={`absolute inset-0 ${slide.dir === 1 ? 'embed-slide-exit-next' : 'embed-slide-exit-prev'}`}
               >
-                <Photo
-                  src={ds.items[order[slide.prevPos]].image}
-                  alt={ds.items[order[slide.prevPos]].name}
-                  className="h-full w-full"
-                  sizes={SINGLE_SIZES}
-                />
+                <Slide item={ds.items[order[slide.prevPos]]} />
               </div>
             )}
             <div
@@ -542,15 +574,22 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
                   setAnimating(false);
                 }}
               >
-                {/* Front: the picture itself. Click anywhere on it to flip. */}
-                <button
-                  onClick={() => flipTo(true)}
-                  aria-label="Show this picture's details"
-                  title="Click for details"
-                  className="embed-flip-face block h-full w-full cursor-pointer"
-                >
-                  <Photo src={current.image} alt={current.name} className="h-full w-full" sizes={SINGLE_SIZES} />
-                </button>
+                {/* Front: the picture itself. Click anywhere on it to flip. A thread
+                    is read in place instead (it scrolls; there's nothing to flip to). */}
+                {current.tweet ? (
+                  <div className="embed-flip-face h-full w-full">
+                    <Slide item={current} />
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => flipTo(true)}
+                    aria-label="Show this picture's details"
+                    title="Click for details"
+                    className="embed-flip-face block h-full w-full cursor-pointer"
+                  >
+                    <Slide item={current} />
+                  </button>
+                )}
 
                 {/* Back: read-mode info + a way to flag a problem with this item. Click
                     anywhere on it (like the front) to flip back — the report controls
@@ -662,6 +701,32 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+/** One item filling the frame: its picture, or — for a saved thread — the thread
+ *  itself, read top to bottom, with the same X embeds the app's own wall opens. */
+function Slide({ item }: { item: EmbedItem }) {
+  if (!item.tweet) {
+    return <Photo src={item.image} alt={item.name} className="h-full w-full" sizes={SINGLE_SIZES} />;
+  }
+  const lead = item.tweet.tweets.find((t) => !t.context) ?? item.tweet.tweets[0];
+  return (
+    <div className="h-full w-full overflow-y-auto bg-[var(--color-wall)] text-[var(--color-ink)]">
+      <div className="mx-auto max-w-xl space-y-3 p-6">
+        <TweetThreadList tweets={item.tweet.tweets} fallback={item} />
+        {lead?.id && (
+          <a
+            href={`https://x.com/${lead.author || 'i'}/status/${lead.id}`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-block text-xs text-[var(--color-accent)] hover:underline"
+          >
+            Open on X ↗
+          </a>
+        )}
+      </div>
     </div>
   );
 }

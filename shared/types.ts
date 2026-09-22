@@ -449,11 +449,12 @@ export interface EmbedItem {
   /** Shown on the card's flipped-over back, not the front — the widget's read mode. */
   description: string;
   definingFact: string;
+  /** A saved thread (personal world) — the widget shows the thread instead of a picture. */
+  tweet?: TweetThread;
 }
 
-/** What GET /api/embed/:id returns. Never issued for the personal domain — the
- *  server 404s that id rather than saying "this one's private" (9-personal-and-auth.md:
- *  no confirming even the existence of a personal dataset to an unauthenticated caller). */
+/** What GET /api/embed/:id returns. A personal dataset is issued only to a signed-in
+ *  caller — the server answers 401 otherwise, and the widget shows its sign-in form. */
 export interface EmbedDataset {
   id: string;
   topic: string;
@@ -464,8 +465,7 @@ export interface EmbedDataset {
 // ---- Item reports ----
 //
 // A viewer flips a picture in the embed widget and, if something's wrong with it,
-// leaves a freeform note. Never issued for the personal domain (embed.ts 404s that
-// id before a report could ever name one). Stored durably so it survives the
+// leaves a freeform note. Stored durably so it survives the
 // anonymous visitor's tab closing, and read by the Claude agent's get_item_reports
 // tool so the curator can ask it to act on what was flagged.
 

@@ -88,7 +88,15 @@ export function PersonalGate({ children }: { children: ReactNode }) {
 const FIELD =
   'w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-wall)] px-4 py-3 outline-none placeholder:text-[var(--color-muted)] focus:border-[var(--color-accent)]';
 
-function SignIn() {
+/** The sign-in form. Also the embed widget's front door for a personal collection
+ *  (pages/Embed.tsx), where the copy says what's on the other side of it. */
+export function SignIn({
+  title = 'Your personal world',
+  blurb = 'Private to you — sign in to enter.',
+}: {
+  title?: string;
+  blurb?: string;
+} = {}) {
   // Sign-in only — this is a single-tenant personal world, not a multi-user product.
   // The account is created once, outside the app (Supabase dashboard), and new sign-ups
   // are disabled at the Supabase project level. ALLOWED_EMAILS (server/src/config.ts)
@@ -113,8 +121,8 @@ function SignIn() {
   return (
     <div className="flex min-h-full items-center justify-center p-6">
       <div className="w-full max-w-sm rounded-2xl border border-[var(--color-line)] bg-[var(--color-card)] p-8 text-center">
-        <h1 className="serif text-3xl">Your personal world</h1>
-        <p className="mt-2 text-sm text-[var(--color-muted)]">Private to you — sign in to enter.</p>
+        <h1 className="serif text-3xl">{title}</h1>
+        <p className="mt-2 text-sm text-[var(--color-muted)]">{blurb}</p>
         <form
           className="mt-6 flex flex-col gap-3"
           onSubmit={(e) => {
@@ -157,7 +165,7 @@ function SignIn() {
   );
 }
 
-function Misconfigured() {
+export function Misconfigured() {
   return (
     <div className="flex min-h-full items-center justify-center p-6">
       <div className="max-w-md rounded-2xl border border-[var(--color-line)] bg-[var(--color-card)] p-8">

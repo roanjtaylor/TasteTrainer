@@ -4,6 +4,22 @@ import { Photo } from './Photo';
 
 const TILE = 220; // px, at scale 1 — the mosaic's native grid unit.
 
+/** A saved thread's tile: its words are its picture (as on the app's wall, TweetCard). */
+function TweetTile({ item }: { item: EmbedItem }) {
+  const tweets = item.tweet?.tweets ?? [];
+  const lead = tweets.find((t) => !t.context) ?? tweets[0];
+  return (
+    <div className="flex h-full w-full flex-col gap-2 overflow-hidden bg-[var(--color-card)] p-4 text-left">
+      <p className="truncate text-xs text-[var(--color-muted)]">
+        {lead?.authorName || (lead?.author ? `@${lead.author}` : item.name)}
+      </p>
+      <p className="serif min-h-0 flex-1 overflow-hidden whitespace-pre-line text-[15px] leading-snug text-[var(--color-ink)]">
+        {lead?.text ?? item.name}
+      </p>
+    </div>
+  );
+}
+
 /**
  * A zoomable, pannable grid of every picture in the dataset at once — "a portal"
  * onto the whole field rather than one picture at a time (Embed.tsx's other mode,
@@ -247,7 +263,11 @@ export function Mosaic({ items, onOpenItem }: { items: EmbedItem[]; onOpenItem: 
             >
               {/* Sized to the tile, not to the zoom: every tile loads at once here, so a
                   thumbnail each is the whole budget. Tapping one opens it full-size. */}
-              <Photo src={item.image} alt={item.name} className="h-full w-full" sizes={`${TILE}px`} />
+              {item.tweet ? (
+                <TweetTile item={item} />
+              ) : (
+                <Photo src={item.image} alt={item.name} className="h-full w-full" sizes={`${TILE}px`} />
+              )}
             </button>
           ))}
         </div>

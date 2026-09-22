@@ -115,18 +115,29 @@ export function TweetCard({
               )}
             </div>
           </div>
-          <ol className="space-y-3">
-            {tweets.map((t, i) => (
-              <ThreadTweet key={t.id || i} tweet={t} fallback={item} />
-            ))}
-          </ol>
+          <TweetThreadList tweets={tweets} fallback={item} />
         </div>
       )}
     </figure>
   );
 }
 
-function ThreadTweet({ tweet, fallback }: { tweet: Tweet; fallback: Item }) {
+/** What a tweet falls back on when it carries no author of its own: the item it
+ *  belongs to. Structural so the embed widget's slimmer items (EmbedItem) fit too. */
+type Fallback = Pick<Item, 'name' | 'brand'> & { creator?: string };
+
+/** The open thread, oldest first — shared with the embed widget's tweet slide. */
+export function TweetThreadList({ tweets, fallback }: { tweets: Tweet[]; fallback: Fallback }) {
+  return (
+    <ol className="space-y-3">
+      {tweets.map((t, i) => (
+        <ThreadTweet key={t.id || i} tweet={t} fallback={fallback} />
+      ))}
+    </ol>
+  );
+}
+
+function ThreadTweet({ tweet, fallback }: { tweet: Tweet; fallback: Fallback }) {
   // The liked tweets are why the thread is here; the rest is what they were said in
   // reply to. The accent rule marks the former, and context is set back further still.
   const tone = tweet.context
@@ -157,7 +168,7 @@ function ThreadTweet({ tweet, fallback }: { tweet: Tweet; fallback: Item }) {
 
 // The author's face, as on X: round, left of the name. Hotlinked, so it can vanish (the
 // author changed it, or the tweet came in by hand with none) — an initial stands in.
-function Avatar({ tweet, fallback, size }: { tweet?: Tweet; fallback: Item; size: number }) {
+function Avatar({ tweet, fallback, size }: { tweet?: Tweet; fallback: Fallback; size: number }) {
   const [broken, setBroken] = useState(false);
   const label = tweet?.authorName || tweet?.author || fallback.creator || '?';
   const box = { width: size, height: size };
@@ -191,7 +202,7 @@ function Byline({
   bare,
 }: {
   tweet?: Tweet;
-  fallback: Item;
+  fallback: Fallback;
   dated?: boolean;
   bare?: boolean;
 }) {
