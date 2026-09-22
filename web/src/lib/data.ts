@@ -1,40 +1,50 @@
 import { slugifyTopic } from '../../../shared/types';
 import type { Dataset, DatasetSummary, Domain, WorldMap } from '../../../shared/types';
 import { api } from './api';
+import * as db from './db';
 import { cacheKeys, drop, prefetch, useCached, write, type CachedResource } from './store';
 
-// The read/write seam between the API and the client cache (lib/store.ts).
+// The read/write seam between the data and the client cache (lib/store.ts).
 //
-// Reads go through `useCached`, so a screen paints from the last known value and
-// corrects itself in the background. Writes go through the mutators below, which are
-// the only place cache invalidation happens — keeping "what changed" and "what to
-// forget" in one file rather than scattered across the components that happen to save.
+// Reads come straight from Supabase (lib/db.ts) through `useCached`, so a screen
+// paints from the last known value and corrects itself in the background. Writes go
+// through the API (lib/api.ts) via the mutators below, which are the only place cache
+// invalidation happens — keeping "what changed" and "what to forget" in one file
+// rather than scattered across the components that happen to save.
 
 /** The shelf. Barely changes between visits, so it revalidates lazily. */
 export function useDatasetList(domain: Domain | null): CachedResource<DatasetSummary[]> {
   return useCached(
     domain ? cacheKeys.datasetList(domain) : null,
-    () => api.listDatasets(domain as Domain),
+    () => db.listDatasets(domain as Domain),
     { maxAgeMs: 60_000 },
   );
 }
 
 /**
- * One dataset in full, addressed by slug (the URL: /physical/ships) or by id — the
- * server resolves either. The cache is what makes returning to a dataset free.
+ * One dataset in full, addressed by slug (the URL: /physical/ships) or by id — either
+ * resolves. The cache is what makes returning to a dataset free.
  */
 export function useDataset(idOrSlug: string | null): CachedResource<Dataset> {
   return useCached(
     idOrSlug ? cacheKeys.dataset(idOrSlug) : null,
-    () => api.getDataset(idOrSlug as string),
+    () => readDataset(idOrSlug as string),
     { maxAgeMs: 60_000 },
   );
+}
+
+/** A missing dataset is an error, not a value: the cache must never store "nothing
+ *  here" and go on painting it after the dataset appears (or the curator signs in). */
+async function readDataset(idOrSlug: string): Promise<Dataset> {
+  const ds = await db.getDataset(idOrSlug);
+  if (!ds) throw new Error('Dataset not found');
+  return ds;
 }
 
 /** Warm a dataset before it's needed — called on shelf-card hover, so the click
  *  usually lands on an already-loaded screen. */
 export function prefetchDataset(idOrSlug: string): void {
-  prefetch(cacheKeys.dataset(idOrSlug), () => api.getDataset(idOrSlug));
+  prefetch(cacheKeys.dataset(idOrSlug), () => readDataset(idOrSlug));
 }
 
 /** Cache a dataset under both addresses it answers to. A screen reached by slug and
@@ -53,7 +63,7 @@ export function publishDataset(ds: Dataset): void {
 export function useWorldMap(domain: Domain | null): CachedResource<WorldMap | null> {
   return useCached(
     domain ? cacheKeys.worldMap(domain) : null,
-    () => api.getWorldMap(domain as Domain).then((r) => r.map),
+    () => db.getWorldMap(domain as Domain),
     { maxAgeMs: 5 * 60_000 },
   );
 }

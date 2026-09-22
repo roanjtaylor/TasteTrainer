@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import type { Dataset, Domain, Item, ItemReport, Subtopic } from '../../../shared/types';
 import { saveDataset, useDataset } from '../lib/data';
-import { api } from '../lib/api';
+import * as db from '../lib/db';
 import { useChatView, useReportChatView } from '../lib/chatView';
 import { physicalImageQuery } from '../lib/image';
 import { ItemCard } from '../components/ItemCard';
@@ -82,17 +82,17 @@ export function DatasetView() {
 }
 
 // ---- Reports: what visitors flagged from the public embed widget's card-back
-// (Embed.tsx's flip), read through server/src/routes/reports.ts. Shown only while
-// there's something open to look at — most datasets most of the time have nothing
-// here, and an empty "0 reports" strip would just be permanent clutter. ----
+// (Embed.tsx's flip), read straight from the table (lib/db.ts) — the curator alone
+// can. Shown only while there's something open to look at — most datasets most of
+// the time have nothing here, and an empty "0 reports" strip would just be permanent
+// clutter. ----
 function ReportsPanel({ datasetId }: { datasetId: string }) {
   const [reports, setReports] = useState<ItemReport[] | null>(null);
   const { ask } = useChatView();
 
   useEffect(() => {
     let cancelled = false;
-    api
-      .listReports(datasetId)
+    db.listOpenReports(datasetId)
       .then((r) => {
         if (!cancelled) setReports(r);
       })
@@ -109,7 +109,7 @@ function ReportsPanel({ datasetId }: { datasetId: string }) {
     // before they move on.
     setReports((r) => r?.filter((x) => x.id !== id) ?? r);
     try {
-      await api.dismissReport(id);
+      await db.deleteReport(id);
     } catch {
       /* stays dismissed in this view either way */
     }

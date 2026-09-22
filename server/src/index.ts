@@ -1,6 +1,8 @@
-// TasteTrainer backend: serves the API and reads/writes datasets on disk.
-// The browser can't safely write to disk or hold credentials, so this small
-// local server does that work (1-setup.md).
+// TasteTrainer backend: the part of the app that needs a server — the Claude agent,
+// image sourcing, tweet import, uploads, and the hand-made dataset writes. Reading
+// is NOT its job: the browser reads Supabase directly (web/src/lib/db.ts, row level
+// security in supabase/migrations/011_browser_reads.sql), so a page view never has
+// to wake this from the Render free tier's spin-down.
 //
 // ‼️ DEV RUNNER — run with plain `tsx` (NO watch). See server/package.json.
 // This was hard-won; do not "improve" it by re-adding a file watcher:
@@ -25,11 +27,8 @@ import { attachUser, requireAuth } from './auth.ts';
 import { datasetsRouter } from './routes/datasets.ts';
 import { curationRouter } from './routes/curation.ts';
 import { imagesRouter } from './routes/images.ts';
-import { mapRouter } from './routes/map.ts';
 import { filesRouter } from './routes/files.ts';
 import { tweetsRouter } from './routes/tweets.ts';
-import { embedRouter } from './routes/embed.ts';
-import { reportsRouter } from './routes/reports.ts';
 import { chatRouter } from './routes/chat.ts';
 
 const app = express();
@@ -68,17 +67,9 @@ app.get('/api/health', (_req, res) => res.json({ ok: true }));
 // 9-personal-and-auth.md). Registered after the health check and before every
 // router, so `req.user` is available wherever a route needs it.
 app.use('/api', attachUser);
-// Embed widget (routes/embed.ts): public for the researched worlds, and a personal
-// dataset only for a signed-in caller — attachUser above has already read the token.
-// Mounted ahead of /api/datasets purely for readability; the two prefixes don't overlap.
-app.use('/api/embed', embedRouter);
-// Visitor-flagged item problems (routes/reports.ts) — read/resolve from inside the
-// app; the flagging itself happens through embedRouter above, from the public widget.
-app.use('/api/reports', reportsRouter);
 app.use('/api/datasets', datasetsRouter);
 app.use('/api/curation', curationRouter);
 app.use('/api/images', imagesRouter);
-app.use('/api/map', mapRouter);
 // The Claude chat: freeform conversation with tools over the data, every change staged
 // for approval (routes/chat.ts, plan/claude-agent.md).
 app.use('/api/chat', chatRouter);

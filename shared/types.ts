@@ -438,11 +438,11 @@ export function mapSlug(name: string): string {
 
 // ---- Public embed (iframe widget) ----
 //
-// A stripped-down, unauthenticated view of a dataset for embedding elsewhere as an
-// iframe — a shuffleable picture viewer. Deliberately thin: only what the widget
-// draws (the picture, its caption, and the read-mode "back of the card"), never the
-// curation-side fields (capture, candidates, etc.), so a site embedding it can't
-// scrape more than that.
+// A stripped-down view of a dataset for embedding elsewhere as an iframe — a
+// shuffleable picture viewer. Thin by choice: only what the widget draws (the
+// picture, its caption, and the read-mode "back of the card"), never the
+// curation-side fields (capture, candidates, etc.) — it's what the widget needs, not
+// a secrecy boundary, since the browser reads the dataset row itself (web/src/lib/db.ts).
 
 /** One picture in an embed widget. */
 export interface EmbedItem {
@@ -458,10 +458,12 @@ export interface EmbedItem {
   tweet?: TweetThread;
 }
 
-/** What GET /api/embed/:id returns. A personal dataset is issued only to a signed-in
- *  caller — the server answers 401 otherwise, and the widget shows its sign-in form. */
+/** What the widget browses (web/src/lib/db.ts#getEmbed). A private personal dataset
+ *  reads as absent until the viewer signs in, and the widget shows its sign-in form. */
 export interface EmbedDataset {
   id: string;
+  /** Carried so a report filed from the widget can name the dataset's world. */
+  domain: Domain;
   topic: string;
   description: string;
   items: EmbedItem[];

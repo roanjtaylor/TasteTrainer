@@ -1,33 +1,15 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
-import {
-  deleteDataset,
-  getDataset,
-  getWorldMap,
-  listDatasets,
-  saveDataset,
-  saveWorldMap,
-} from '../storage.ts';
+import { deleteDataset, getDataset, getWorldMap, saveDataset, saveWorldMap } from '../storage.ts';
 import { absorbGhost } from '../services/worldMap.ts';
 import { canonicalSubtopic } from '../services/itemHygiene.ts';
 import { removeFiles, storagePathsIn } from '../services/personalFiles.ts';
 import { newId, now } from '../util.ts';
-import { normalizeDomain, optionalDomain, slugifyTopic } from '../../../shared/types.ts';
+import { normalizeDomain, slugifyTopic } from '../../../shared/types.ts';
 import type { Dataset, Domain, Item, ProposedItem, Subtopic } from '../../../shared/types.ts';
 
+// The hand-made writes: creating, editing and deleting a dataset from the app's own
+// editor (the personal world). Reading is the browser's own business (web/src/lib/db.ts).
 export const datasetsRouter = Router();
-
-/**
- * Let the browser reuse a dataset response instead of re-fetching it.
- *
- * `max-age` is short because you edit datasets in-app and expect to see it; the real
- * saving is the ETag Express attaches to every JSON body — after the max-age lapses
- * the browser re-validates and almost always gets an empty 304 back, so a revisit
- * costs a few hundred bytes rather than the whole dataset. `private` keeps it in the
- * user's own cache only, never a shared proxy's.
- */
-function cacheable(res: Response, seconds: number): void {
-  res.set('Cache-Control', `private, max-age=${seconds}, stale-while-revalidate=300`);
-}
 
 // `subtopics` is the field's canonical list: an item's subtopic is corrected to that
 // spelling on the way in, so a "Portraits"/"portraits" drift can't produce an item the
@@ -62,35 +44,7 @@ function toItem(raw: Partial<Item> & Partial<ProposedItem>, subtopics: Subtopic[
   };
 }
 
-datasetsRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    // optionalDomain accepts the legacy hardware/software spellings too, so a client
-    // that hasn't reloaded since the rename still gets the right shelf.
-    const domain = optionalDomain(req.query.domain);
-    const summaries = await listDatasets(domain);
-    // A signed-out visitor sees every non-personal dataset, plus any personal one that
-    // isn't marked private — only datasets explicitly walled off stay hidden.
-    const visible = req.user ? summaries : summaries.filter((d) => d.domain !== 'personal' || !d.private);
-    // Set only once the read succeeded — a header applied before the await would
-    // still be attached if it threw, telling the browser to cache a 500.
-    cacheable(res, 30);
-    res.json(visible);
-  } catch (err) { next(err); }
-});
-
-datasetsRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const ds = await getDataset(req.params.id);
-    if (!ds) return res.status(404).json({ error: 'Dataset not found' });
-    if (ds.domain === 'personal' && ds.private && !req.user) {
-      return res.status(401).json({ error: 'Sign in to access your personal world.' });
-    }
-    cacheable(res, 30);
-    res.json(ds);
-  } catch (err) { next(err); }
-});
-
-datasetsRouter.post('/', async (req: Request, res: Response, next: NextFunction) => {
+datasetsRouter.post('/',async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { topic, description, subtopics, items, domain } = req.body as {
       topic: string;

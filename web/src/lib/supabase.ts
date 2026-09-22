@@ -1,11 +1,12 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-// The browser's Supabase client — used for exactly two things: signing in
-// (lib/auth.tsx) and sending a file straight to Storage with a single-use token the
-// server issued (lib/files.ts). It never reads or writes a table: every `taste_*`
-// table has RLS on with no policies, so this key couldn't if it tried. All data still
-// goes through our own API, which is where the access token this client holds is
-// actually checked (server/src/auth.ts).
+// The browser's Supabase client: signing in (lib/auth.tsx), every read the app makes
+// (lib/db.ts — the shelf, datasets, maps, the embed widget), the small visitor/curator
+// writes (item reports), and sending a file straight to Storage with a single-use
+// token the server issued (lib/files.ts). What this key may see is decided by row
+// level security (supabase/migrations/011_browser_reads.sql), which reads the session
+// token the client holds. Everything that needs a server (the Claude agent, image
+// sourcing, tweet import, uploads) goes through our own API instead (lib/api.ts).
 //
 // Both values are PUBLIC by design — the publishable key identifies the project, it
 // doesn't authorise anything — so they are safe in the bundle and in Vercel's env.

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { DOMAINS, DOMAIN_LABELS, slugifyTopic } from '../../../shared/types';
 import type { DatasetSummary, Domain, EmbedDataset, EmbedItem } from '../../../shared/types';
-import { api, HttpError } from '../lib/api';
+import * as db from '../lib/db';
 import { Misconfigured, SignIn, useAuth } from '../lib/auth';
 import { supabase } from '../lib/supabase';
 import { thumbSrcSet } from '../lib/image';
@@ -10,9 +10,9 @@ import { Photo } from '../components/Photo';
 import { Mosaic } from '../components/Mosaic';
 import { TweetThreadList } from '../components/TweetCard';
 
-// Every world, the personal one included: it's hand-built and private, so the server
-// answers 401 for it until the viewer signs in (routes/embed.ts) and the widget puts
-// its sign-in form up in place of the collection (the `signin` step below).
+// Every world, the personal one included. A personal topic marked private reads as
+// absent until the viewer signs in (row level security, lib/db.ts), so the widget
+// puts its sign-in form up in place of the collection (the `signin` step below).
 const WORLDS = DOMAINS;
 
 /** The single-picture view fills the iframe, so the iframe's width is the slot. */
@@ -21,16 +21,10 @@ const SINGLE_SIZES = '100vw';
 type Step =
   | { kind: 'world' }
   | { kind: 'dataset'; domain: Domain }
-  /** The server said 401: show the sign-in form, then do `retry` once signed in. */
+  /** Nothing came back and nobody's signed in — it may be a private collection: show
+   *  the sign-in form, then do `retry` once signed in. */
   | { kind: 'signin'; retry: () => void }
   | { kind: 'browse'; ds: EmbedDataset };
-
-/** Recover from a failed request: a 401 becomes the sign-in step (with the same call
- *  to make again afterwards), anything else is an error to show. */
-function stepOrError(e: unknown, retry: () => void, setStep: (s: Step) => void, setError: (m: string) => void): void {
-  if (e instanceof HttpError && e.status === 401) setStep({ kind: 'signin', retry });
-  else setError((e as Error)?.message ?? 'Could not load this');
-}
 
 /** How the slideshow steps through the dataset: a random pass, or oldest-first. */
 type PlayMode = 'shuffle' | 'chronological';
@@ -78,13 +72,19 @@ export function Embed() {
   const [error, setError] = useState('');
   const { email } = useAuth();
 
-  const openDataset = useCallback((id: string) => {
-    setError('');
-    api
-      .getEmbed(id)
-      .then((ds) => setStep({ kind: 'browse', ds }))
-      .catch((e) => stepOrError(e, () => openDataset(id), setStep, setError));
-  }, []);
+  const openDataset = useCallback(
+    (id: string) => {
+      setError('');
+      db.getEmbed(id)
+        .then((ds) => {
+          if (ds) setStep({ kind: 'browse', ds });
+          else if (!email) setStep({ kind: 'signin', retry: () => openDataset(id) });
+          else setError('Dataset not found');
+        })
+        .catch((e: Error) => setError(e.message ?? 'Could not load this'));
+    },
+    [email],
+  );
 
   // A deep-linked embed skips straight to browsing — no picker shown at all.
   useEffect(() => {
@@ -97,10 +97,9 @@ export function Embed() {
     setError('');
     setDatasets(null);
     setStep({ kind: 'dataset', domain });
-    api
-      .listDatasets(domain)
+    db.listDatasets(domain)
       .then(setDatasets)
-      .catch((e) => stepOrError(e, () => openWorld(domain), setStep, setError));
+      .catch((e: Error) => setError(e.message ?? 'Could not load this'));
   }, []);
 
   // Signing in (in the form the `signin` step shows) makes the call that was refused.
@@ -166,7 +165,7 @@ function EditPanel({ domainParam, slug }: { domainParam?: string; slug: string }
 
   useEffect(() => {
     setTopics(null);
-    api.listDatasets(world).catch(() => [] as DatasetSummary[]).then(setTopics);
+    db.listDatasets(world).catch(() => [] as DatasetSummary[]).then(setTopics);
   }, [world, email]);
 
   const post = useCallback(
@@ -389,8 +388,10 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
     // swipe on a hybrid device should still flip.
     swipedRef.current = false;
     if (e.pointerType === 'mouse' || slide) return;
-    // Dragging inside the report form is selecting text, not browsing.
-    if ((e.target as Element).closest('textarea, input')) return;
+    // Dragging inside the report form is selecting text, not browsing. Dragging
+    // inside a thread's own scroll area is reading it — capturing the pointer here
+    // (below) would hijack that native vertical scroll before it can start.
+    if ((e.target as Element).closest('textarea, input, .tweet-scroll')) return;
     dragRef.current = { id: e.pointerId, startX: e.clientX, startY: e.clientY, dx: 0, horizontal: false };
     // Without this, once the finger moves over a child element with different hit
     // testing (the picture itself, which iOS also offers a native drag/callout on),
@@ -503,13 +504,13 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
   // front is still rotating past face-on.
   const showingBack = flipped || animating;
 
-  async function submitReport(itemId: string) {
+  async function submitReport(item: EmbedItem) {
     const text = reportText.trim();
     if (!text) return;
     setReportState('sending');
     setReportError('');
     try {
-      await api.reportItem(ds.id, itemId, text);
+      await db.createReport(ds, item, text);
       setReportState('sent');
     } catch (e: any) {
       setReportState('error');
@@ -647,39 +648,45 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
                       transition: dragging ? 'none' : 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1)',
                     }
               }
-              className={`absolute inset-0 embed-flip-perspective ${slide ? (slide.dir === 1 ? 'embed-slide-enter-next' : 'embed-slide-enter-prev') : ''}`}
+              className={`absolute inset-0 ${current.tweet ? '' : 'embed-flip-perspective'} ${slide ? (slide.dir === 1 ? 'embed-slide-enter-next' : 'embed-slide-enter-prev') : ''}`}
             >
-              <div
-                className={`embed-flip-inner ${animating ? 'embed-flip-anim' : ''}`}
-                style={
-                  animating
-                    ? ({
-                        '--flip-from': `${restAngle}deg`,
-                        '--flip-mid': `${restAngle + 90}deg`,
-                        '--flip-to': `${restAngle + 180}deg`,
-                      } as React.CSSProperties)
-                    : { transform: `rotateY(${restAngle}deg)` }
-                }
-                onAnimationEnd={() => {
-                  setRestAngle((a) => (a + 180) % 360);
-                  setAnimating(false);
-                }}
-              >
-                {/* Front: the picture itself. Click anywhere on it to flip. A thread
-                    is read in place instead (it scrolls; there's nothing to flip to) —
-                    tapping the tweet itself opens it on X, same as the picture's own
-                    tap-to-flip, so a swipe's trailing synthetic click (swipedRef, set
-                    in onPointerMove above) must not also be read as that tap. */}
-                {current.tweet ? (
-                  <div
-                    className="embed-flip-face h-full w-full"
-                    onClickCapture={(e) => {
-                      if (swipedRef.current) e.preventDefault();
-                    }}
-                  >
-                    <Slide item={current} />
-                  </div>
-                ) : (
+              {/* A thread has nothing to put on a back (it scrolls in place; there's
+                  nothing to flip to), so it skips the flip machinery entirely rather
+                  than just sitting on the front of it — WebKit has a long-standing bug
+                  where an `overflow-y: auto` descendant of a `perspective`/
+                  `preserve-3d` ancestor (the flip card below) stops responding to touch
+                  scrolling, which was cutting off the bottom of longer threads on
+                  mobile with no way to reach it. Tapping the tweet still opens it on X,
+                  same as the picture's own tap-to-flip, so a swipe's trailing synthetic
+                  click (swipedRef, set in onPointerMove above) must not also be read as
+                  that tap. */}
+              {current.tweet ? (
+                <div
+                  className="h-full w-full"
+                  onClickCapture={(e) => {
+                    if (swipedRef.current) e.preventDefault();
+                  }}
+                >
+                  <Slide item={current} />
+                </div>
+              ) : (
+                <div
+                  className={`embed-flip-inner ${animating ? 'embed-flip-anim' : ''}`}
+                  style={
+                    animating
+                      ? ({
+                          '--flip-from': `${restAngle}deg`,
+                          '--flip-mid': `${restAngle + 90}deg`,
+                          '--flip-to': `${restAngle + 180}deg`,
+                        } as React.CSSProperties)
+                      : { transform: `rotateY(${restAngle}deg)` }
+                  }
+                  onAnimationEnd={() => {
+                    setRestAngle((a) => (a + 180) % 360);
+                    setAnimating(false);
+                  }}
+                >
+                  {/* Front: the picture itself. Click anywhere on it to flip. */}
                   <button
                     onClick={() => flipTo(true)}
                     aria-label="Show this picture's details"
@@ -688,84 +695,84 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
                   >
                     <Slide item={current} />
                   </button>
-                )}
 
-                {/* Back: read-mode info + a way to flag a problem with this item. Click
-                    anywhere on it (like the front) to flip back — the report controls
-                    below stop that click from bubbling up, so using them doesn't also
-                    flip the card back over. */}
-                <div
-                  onClick={() => flipTo(false)}
-                  role="button"
-                  aria-label="Back to the picture"
-                  title="Click for the picture"
-                  className="embed-flip-face embed-flip-face-back flex cursor-pointer flex-col overflow-y-auto bg-[var(--color-wall)] p-6 text-[var(--color-ink)]"
-                >
-                  <h2 className="serif text-xl leading-tight">{current.name || 'Untitled'}</h2>
-                  <p className="mt-1 text-sm text-[var(--color-muted)]">
-                    {[current.year ?? undefined, current.brand].filter(Boolean).join(' · ') || '—'}
-                  </p>
+                  {/* Back: read-mode info + a way to flag a problem with this item. Click
+                      anywhere on it (like the front) to flip back — the report controls
+                      below stop that click from bubbling up, so using them doesn't also
+                      flip the card back over. */}
+                  <div
+                    onClick={() => flipTo(false)}
+                    role="button"
+                    aria-label="Back to the picture"
+                    title="Click for the picture"
+                    className="embed-flip-face embed-flip-face-back flex cursor-pointer flex-col overflow-y-auto bg-[var(--color-wall)] p-6 text-[var(--color-ink)]"
+                  >
+                    <h2 className="serif text-xl leading-tight">{current.name || 'Untitled'}</h2>
+                    <p className="mt-1 text-sm text-[var(--color-muted)]">
+                      {[current.year ?? undefined, current.brand].filter(Boolean).join(' · ') || '—'}
+                    </p>
 
-                  {(current.description || current.definingFact) && (
-                    <div className="mt-4 space-y-2 text-sm leading-relaxed text-[var(--color-ink)]/90">
-                      {current.description && <p>{current.description}</p>}
-                      {current.definingFact && (
-                        <p className="italic text-[var(--color-muted)]">{current.definingFact}</p>
+                    {(current.description || current.definingFact) && (
+                      <div className="mt-4 space-y-2 text-sm leading-relaxed text-[var(--color-ink)]/90">
+                        {current.description && <p>{current.description}</p>}
+                        {current.definingFact && (
+                          <p className="italic text-[var(--color-muted)]">{current.definingFact}</p>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="mt-auto pt-6" onClick={(e) => e.stopPropagation()}>
+                      {reportState === 'sent' ? (
+                        <p className="text-sm text-[var(--color-ink)]/80">
+                          Thanks — this has been flagged for the curator to look at.
+                        </p>
+                      ) : reportOpen ? (
+                        <div className="space-y-2">
+                          <textarea
+                            autoFocus
+                            value={reportText}
+                            onChange={(e) => setReportText(e.target.value)}
+                            placeholder="What's wrong with this one? Wrong picture, wrong year, wrong name…"
+                            rows={4}
+                            maxLength={2000}
+                            className="w-full resize-none rounded-lg border border-[var(--color-line)] bg-[var(--color-ink)]/5 p-2.5 text-sm text-[var(--color-ink)] placeholder:text-[var(--color-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+                          />
+                          {reportState === 'error' && (
+                            <p className="text-xs text-[var(--color-accent)]">{reportError}</p>
+                          )}
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => submitReport(current)}
+                              disabled={!reportText.trim() || reportState === 'sending'}
+                              className="rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-xs text-white disabled:opacity-40"
+                            >
+                              {reportState === 'sending' ? 'Sending…' : 'Send report'}
+                            </button>
+                            <button
+                              onClick={() => {
+                                setReportOpen(false);
+                                setReportText('');
+                                setReportState('idle');
+                              }}
+                              disabled={reportState === 'sending'}
+                              className="rounded-full border border-[var(--color-line)] px-4 py-1.5 text-xs text-[var(--color-ink)] disabled:opacity-40"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setReportOpen(true)}
+                          className="rounded-full border border-[var(--color-line)] px-4 py-1.5 text-xs text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
+                        >
+                          Report a problem
+                        </button>
                       )}
                     </div>
-                  )}
-
-                  <div className="mt-auto pt-6" onClick={(e) => e.stopPropagation()}>
-                    {reportState === 'sent' ? (
-                      <p className="text-sm text-[var(--color-ink)]/80">
-                        Thanks — this has been flagged for the curator to look at.
-                      </p>
-                    ) : reportOpen ? (
-                      <div className="space-y-2">
-                        <textarea
-                          autoFocus
-                          value={reportText}
-                          onChange={(e) => setReportText(e.target.value)}
-                          placeholder="What's wrong with this one? Wrong picture, wrong year, wrong name…"
-                          rows={4}
-                          maxLength={2000}
-                          className="w-full resize-none rounded-lg border border-[var(--color-line)] bg-[var(--color-ink)]/5 p-2.5 text-sm text-[var(--color-ink)] placeholder:text-[var(--color-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
-                        />
-                        {reportState === 'error' && (
-                          <p className="text-xs text-[var(--color-accent)]">{reportError}</p>
-                        )}
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => submitReport(current.id)}
-                            disabled={!reportText.trim() || reportState === 'sending'}
-                            className="rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-xs text-white disabled:opacity-40"
-                          >
-                            {reportState === 'sending' ? 'Sending…' : 'Send report'}
-                          </button>
-                          <button
-                            onClick={() => {
-                              setReportOpen(false);
-                              setReportText('');
-                              setReportState('idle');
-                            }}
-                            disabled={reportState === 'sending'}
-                            className="rounded-full border border-[var(--color-line)] px-4 py-1.5 text-xs text-[var(--color-ink)] disabled:opacity-40"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => setReportOpen(true)}
-                        className="rounded-full border border-[var(--color-line)] px-4 py-1.5 text-xs text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
-                      >
-                        Report a problem
-                      </button>
-                    )}
                   </div>
                 </div>
-              </div>
+              )}
             </div>
           </div>
 
@@ -905,7 +912,10 @@ function Slide({ item }: { item: EmbedItem }) {
     return <Photo src={item.image} alt={item.name} className="h-full w-full" sizes={SINGLE_SIZES} />;
   }
   return (
-    <div className="h-full w-full overflow-y-auto bg-[var(--color-wall)] text-[var(--color-ink)]">
+    <div
+      className="tweet-scroll custom-scroll h-full w-full overflow-y-auto overscroll-contain bg-[var(--color-wall)] text-[var(--color-ink)]"
+      style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
+    >
       <div className="space-y-3 p-4">
         <TweetThreadList tweets={item.tweet.tweets} fallback={item} plain />
       </div>

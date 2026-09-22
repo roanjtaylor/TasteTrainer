@@ -1,5 +1,5 @@
 import { supabase } from './supabase.ts';
-import { newId, now } from './util.ts';
+import { now } from './util.ts';
 import { removeFiles, storagePathsIn, toServedImages, toStoredImages } from './services/personalFiles.ts';
 import { cached, invalidate, invalidatePrefix, keys, put } from './cache.ts';
 import { normalizeDomain, singleWordTopic, slugifyTopic } from '../../shared/types.ts';
@@ -251,7 +251,9 @@ export async function listChangesets(threadId: string): Promise<Changeset[]> {
 }
 
 // ---- Item reports: visitor-flagged problems from the public embed widget
-// (shared/types.ts#ItemReport, migration 009) ----
+// (shared/types.ts#ItemReport, migration 009). Filed by the visitor and dismissed by
+// the curator straight from the browser (web/src/lib/db.ts); this side only reads
+// them, for the agent (agentRun.ts, agentTools.ts#get_item_reports). ----
 
 const REPORTS_MIGRATION_HINT =
   'The taste_item_reports table is missing. Run supabase/migrations/009_item_reports.sql in the Supabase SQL editor.';
@@ -269,29 +271,6 @@ function rowToReport(row: any): ItemReport {
   };
 }
 
-export async function createItemReport(input: {
-  datasetId: string;
-  itemId: string;
-  itemName: string;
-  domain: Domain;
-  text: string;
-}): Promise<ItemReport> {
-  const row = {
-    id: newId(),
-    dataset_id: input.datasetId,
-    item_id: input.itemId,
-    item_name: input.itemName,
-    domain: input.domain,
-    text: input.text,
-    status: 'open',
-    created_at: now(),
-  };
-  const { error } = await supabase.from('taste_item_reports').insert(row);
-  if (missingRelation(error)) throw new Error(REPORTS_MIGRATION_HINT);
-  if (error) throw new Error(error.message);
-  return rowToReport(row);
-}
-
 /** Newest first. `datasetId` narrows to one dataset; omit for every dataset. */
 export async function listItemReports(filter: {
   datasetId?: string;
@@ -304,15 +283,4 @@ export async function listItemReports(filter: {
   if (missingRelation(error)) throw new Error(REPORTS_MIGRATION_HINT);
   if (error) throw new Error(error.message);
   return (data ?? []).map(rowToReport);
-}
-
-export async function setItemReportStatus(id: string, status: ItemReportStatus): Promise<void> {
-  const { error } = await supabase.from('taste_item_reports').update({ status }).eq('id', id);
-  if (missingRelation(error)) throw new Error(REPORTS_MIGRATION_HINT);
-  if (error) throw new Error(error.message);
-}
-
-export async function deleteItemReport(id: string): Promise<void> {
-  const { error } = await supabase.from('taste_item_reports').delete().eq('id', id);
-  if (error && !missingRelation(error)) throw new Error(error.message);
 }

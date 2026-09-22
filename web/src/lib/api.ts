@@ -1,17 +1,13 @@
 import type {
   Dataset,
-  DatasetSummary,
   Domain,
-  EmbedDataset,
   ImageCandidate,
   ImageKind,
   Item,
-  ItemReport,
   LikedTweetRef,
   Subtopic,
   TweetImportStats,
   ProposedItem,
-  WorldMap,
 } from '../../../shared/types';
 import type {
   Changeset,
@@ -25,6 +21,11 @@ import type {
 } from '../../../shared/chat';
 import { accessToken } from './supabase';
 
+// The server's side of the app: only what needs a server — the Claude agent, image
+// sourcing, tweet import, uploads, and the hand-made dataset writes. Reading is not
+// on this list: every read goes straight to Supabase (lib/db.ts), so a page view
+// never has to wake the Render free tier from its spin-down.
+//
 // In dev the Vite proxy forwards /api to localhost:5174 (vite.config.ts).
 // In production VITE_API_BASE_URL points at the deployed backend on Render.
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
@@ -43,8 +44,7 @@ async function authHeaders(): Promise<Record<string, string>> {
   };
 }
 
-/** A failed request, with the status kept so a caller can tell "sign in" (401) apart
- *  from "gone" (404) — the embed widget shows a different screen for each. */
+/** A failed request, with the status kept. */
 export class HttpError extends Error {
   constructor(
     public readonly status: number,
@@ -136,10 +136,8 @@ async function streamSSE<T>(url: string, body: unknown, onProgress?: OnProgress)
 }
 
 export const api = {
-  // Datasets
-  listDatasets: (domain?: Domain) =>
-    http<DatasetSummary[]>(`/api/datasets${domain ? `?domain=${domain}` : ''}`),
-  getDataset: (id: string) => http<Dataset>(`/api/datasets/${id}`),
+  // Datasets — the hand-made writes (the personal world's own editor). Reads are
+  // lib/db.ts.
   createDataset: (body: {
     topic: string;
     description: string;
@@ -150,18 +148,6 @@ export const api = {
   updateDataset: (id: string, body: Partial<Dataset>) =>
     http<Dataset>(`/api/datasets/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteDataset: (id: string) => http<void>(`/api/datasets/${id}`, { method: 'DELETE' }),
-  // Embed widget (server/src/routes/embed.ts). Public for the researched worlds; a
-  // personal dataset needs the session token `http()` already sends, and answers 401
-  // without one.
-  getEmbed: (id: string) => http<EmbedDataset>(`/api/embed/${id}`),
-  // Flip a picture, flag it wrong (Embed.tsx's card back). Same reach as getEmbed,
-  // and stored durably (server/src/routes/reports.ts) for the curator to review and
-  // hand to the Claude agent.
-  reportItem: (datasetId: string, itemId: string, text: string) =>
-    http<{ ok: true }>(`/api/embed/${datasetId}/report`, {
-      method: 'POST',
-      body: JSON.stringify({ itemId, text }),
-    }),
 
   // "Re-fetch images" — run the current image pipeline over a dataset that is already
   // saved. Images used to be resolved only at curation time, so every sourcing
@@ -175,10 +161,6 @@ export const api = {
     body,
     onProgress,
   ),
-  // The world map (8-field-map.md). Read-only here: it changes only by accepting a
-  // changeset Claude staged in the chat.
-  getWorldMap: (domain: Domain) => http<{ map: WorldMap | null }>(`/api/map/${domain}`),
-
   // Images
   searchImages: (q: string) =>
     http<{ images: string[] }>(`/api/images/search?q=${encodeURIComponent(q)}`),
@@ -245,12 +227,6 @@ export const api = {
     http<ChangesetResult>(`/api/chat/changesets/${id}/discard`, { method: 'POST', body: JSON.stringify(body) }),
   revertChangeset: (id: string) =>
     http<ChangesetResult>(`/api/chat/changesets/${id}/revert`, { method: 'POST' }),
-
-  // Reviewing what visitors flagged (server/src/routes/reports.ts) — read side of the
-  // report a viewer files from the embed widget's card back.
-  listReports: (datasetId: string) => http<ItemReport[]>(`/api/reports?datasetId=${datasetId}`),
-  resolveReport: (id: string) => http<void>(`/api/reports/${id}/resolve`, { method: 'POST' }),
-  dismissReport: (id: string) => http<void>(`/api/reports/${id}`, { method: 'DELETE' }),
 };
 
 /**
