@@ -67,13 +67,10 @@ datasetsRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
     // optionalDomain accepts the legacy hardware/software spellings too, so a client
     // that hasn't reloaded since the rename still gets the right shelf.
     const domain = optionalDomain(req.query.domain);
-    if (domain === 'personal' && !req.user) {
-      return res.status(401).json({ error: 'Sign in to access your personal world.' });
-    }
     const summaries = await listDatasets(domain);
-    // No domain filter reads across every world — an unsigned-in visitor must not see
-    // even the existence of personal datasets in that combined list.
-    const visible = req.user ? summaries : summaries.filter((d) => d.domain !== 'personal');
+    // A signed-out visitor sees every non-personal dataset, plus any personal one that
+    // isn't marked private — only datasets explicitly walled off stay hidden.
+    const visible = req.user ? summaries : summaries.filter((d) => d.domain !== 'personal' || !d.private);
     // Set only once the read succeeded — a header applied before the await would
     // still be attached if it threw, telling the browser to cache a 500.
     cacheable(res, 30);
@@ -85,7 +82,7 @@ datasetsRouter.get('/:id', async (req: Request, res: Response, next: NextFunctio
   try {
     const ds = await getDataset(req.params.id);
     if (!ds) return res.status(404).json({ error: 'Dataset not found' });
-    if (ds.domain === 'personal' && !req.user) {
+    if (ds.domain === 'personal' && ds.private && !req.user) {
       return res.status(401).json({ error: 'Sign in to access your personal world.' });
     }
     cacheable(res, 30);
@@ -165,6 +162,7 @@ datasetsRouter.put('/:id', async (req: Request, res: Response, next: NextFunctio
       description: body.description?.trim() || existing.description,
       subtopics,
       items: (body.items ?? existing.items).map((it) => toItem(it, subtopics)),
+      private: body.private ?? existing.private,
     };
     // A topic edit is also a rename of the dataset's URL, so hand the old slug over
     // for invalidation (storage.saveDataset).

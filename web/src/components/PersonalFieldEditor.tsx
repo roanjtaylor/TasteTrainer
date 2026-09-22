@@ -27,6 +27,7 @@ export function PersonalFieldEditor({
   const navigate = useNavigate();
   const [topic, setTopic] = useState(ds.topic);
   const [description, setDescription] = useState(ds.description);
+  const [isPrivate, setIsPrivate] = useState(!!ds.private);
   const [rows, setRows] = useState<Row[]>(() => ds.subtopics.map((s) => ({ ...s, origin: s.name })));
   const [saving, setSaving] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -46,6 +47,7 @@ export function PersonalFieldEditor({
       const updated = await saveDataset(ds.id, {
         topic: topic.trim() || ds.topic,
         description: description.trim() || ds.description,
+        private: isPrivate,
         subtopics: namedSubtopics(rows),
         items: renamed.size
           ? ds.items.map((it) =>
@@ -96,6 +98,15 @@ export function PersonalFieldEditor({
           <input className={field} value={description} onChange={(e) => setDescription(e.target.value)} />
         </label>
       </div>
+
+      <label className="flex items-center gap-2 text-sm text-[var(--color-muted)]">
+        <input
+          type="checkbox"
+          checked={isPrivate}
+          onChange={(e) => setIsPrivate(e.target.checked)}
+        />
+        Private — require sign-in to view
+      </label>
 
       <div>
         <h3 className="mb-2 text-sm text-[var(--color-muted)]">Subtopics</h3>

@@ -86,19 +86,30 @@ h3,
   to { transform: translateX(100%); }
 }
 
-/* Touch screens have no hover to reveal the embed's controls, so they stay
-   visible there; the prev/next arrows go instead, since a swipe does their job
-   (Embed.tsx), and the one-time gesture hint shows only there. */
-@media (hover: none) {
-  .embed-chrome {
-    opacity: 1;
-    pointer-events: auto;
-  }
+/* Touch screens have no hover to reveal the embed's overlay controls, and an overlay
+   that's forced always-on top of the picture is exactly the clutter this is avoiding —
+   so there the overlay chrome (back/view-toggle/shuffle, the old arrows, the old
+   caption) hides completely and `.embed-utility-bar` (Embed.tsx), a row of the same
+   controls living in normal flow *below* the picture, takes over instead.
+   `(hover: none)` alone catches a real touchscreen, but nothing else — a narrow embed
+   opened on an ordinary desktop/laptop (a mouse present, so `hover: hover`) still
+   matches `(hover: hover)` and would otherwise get the full-size hover chrome crammed
+   into a phone-width iframe, which is both wrong to look at and, worse, not actually
+   testable by resizing this same window (the embed-tester's phone-size presets, e.g.,
+   never flip it into the mobile layout without also faking touch). `(max-width: 30rem)`
+   makes "narrow" its own trigger, independent of hover: a phone (always narrow) gets
+   the bottom bar either way, and so does any narrow desktop window testing the mobile
+   layout, which is exactly what the width alone should mean here. */
+.embed-utility-bar {
+  display: none;
+}
+@media (hover: none), (max-width: 30rem) {
+  .embed-chrome,
   .embed-arrow {
     display: none;
   }
-  .embed-touch-hint {
-    display: block;
+  .embed-utility-bar {
+    display: flex;
   }
 }
 .embed-slide-enter-next {
@@ -160,6 +171,12 @@ h3,
   inset: 0;
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
+  /* iOS offers a native press-and-hold callout (save/copy image) and drag on an
+     <img> inside here, either of which can hijack a horizontal swipe before our own
+     pointer handlers see it move. */
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
+  user-select: none;
 }
 .embed-flip-face-back {
   transform: rotateY(180deg);

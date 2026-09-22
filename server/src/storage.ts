@@ -44,7 +44,7 @@ export async function listDatasets(domain?: Domain): Promise<DatasetSummary[]> {
   return cached(keys.datasetList(domain), async () => {
     let query = supabase
       .from('taste_datasets')
-      .select('id, domain, topic, description, item_count, subtopic_count, updated_at')
+      .select('id, domain, topic, description, item_count, subtopic_count, updated_at, private')
       .order('updated_at', { ascending: false });
     if (domain) query = query.eq('domain', domain);
 
@@ -59,6 +59,7 @@ export async function listDatasets(domain?: Domain): Promise<DatasetSummary[]> {
       itemCount: row.item_count ?? 0,
       subtopicCount: row.subtopic_count ?? 0,
       updatedAt: row.updated_at ?? '',
+      private: !!row.private,
     }));
   });
 }

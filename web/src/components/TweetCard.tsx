@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { Item, Tweet } from '../../../shared/types';
 import { NativeTweet } from './NativeTweet';
 
@@ -126,32 +126,58 @@ export function TweetCard({
  *  belongs to. Structural so the embed widget's slimmer items (EmbedItem) fit too. */
 type Fallback = Pick<Item, 'name' | 'brand'> & { creator?: string };
 
-/** The open thread, oldest first — shared with the embed widget's tweet slide. */
-export function TweetThreadList({ tweets, fallback }: { tweets: Tweet[]; fallback: Fallback }) {
+/** The open thread, oldest first — shared with the embed widget's tweet slide.
+ *
+ * A single tweet (no thread at all) gets X's real embed (NativeTweet) for full
+ * fidelity — verified badge, video, live like count. A THREAD (more than one tweet)
+ * instead reads as one connected column, the way X itself shows a thread: one avatar
+ * rail with a line running through it, not a stack of separately-bordered cards. X's
+ * own widget can't do that — each `createTweet` call draws its own independent,
+ * self-bordered iframe, so stitching several of them into one continuous thread isn't
+ * possible — so a thread is drawn entirely from the stored copy instead (the same data
+ * NativeTweet falls back on for a single tweet).
+ *
+ * `plain` (the embed's slide) drops the byline's own link to X — the whole row becomes
+ * the link instead, and a link can't nest inside a link. */
+export function TweetThreadList({
+  tweets,
+  fallback,
+  plain,
+}: {
+  tweets: Tweet[];
+  fallback: Fallback;
+  plain?: boolean;
+}) {
+  if (tweets.length <= 1) {
+    const only = tweets[0];
+    if (!only) return null;
+    return (
+      <ol>
+        <SingleTweet tweet={only} fallback={fallback} plain={plain} />
+      </ol>
+    );
+  }
   return (
-    <ol className="space-y-3">
+    <ol className="flex flex-col">
       {tweets.map((t, i) => (
-        <ThreadTweet key={t.id || i} tweet={t} fallback={fallback} />
+        <ThreadRow
+          key={t.id || i}
+          tweet={t}
+          fallback={fallback}
+          plain={plain}
+          last={i === tweets.length - 1}
+        />
       ))}
     </ol>
   );
 }
 
-function ThreadTweet({ tweet, fallback }: { tweet: Tweet; fallback: Fallback }) {
-  // The liked tweets are why the thread is here; the rest is what they were said in
-  // reply to. The accent rule marks the former, and context is set back further still.
-  const tone = tweet.context
-    ? 'border-[var(--color-line)] opacity-70'
-    : tweet.liked
-      ? 'border-[var(--color-accent)]'
-      : 'border-[var(--color-line)]';
-  // Our own drawing of the stored tweet. For a tweet with an id it is what shows while
-  // X's real embed loads, and what stays if that never arrives (NativeTweet.tsx).
+function SingleTweet({ tweet, fallback, plain }: { tweet: Tweet; fallback: Fallback; plain?: boolean }) {
   const stored = (
     <div className="flex gap-2.5">
       <Avatar tweet={tweet} fallback={fallback} size={32} />
       <div className="min-w-0 flex-1 space-y-1.5">
-        <Byline tweet={tweet} fallback={fallback} dated bare />
+        <Byline tweet={tweet} fallback={fallback} dated bare link={!plain} />
         <p className="whitespace-pre-line break-words text-sm leading-snug">{tweet.text}</p>
         {tweet.media?.map((src) => (
           <img key={src} src={src} alt="" loading="lazy" className="w-full rounded-lg" />
@@ -159,10 +185,57 @@ function ThreadTweet({ tweet, fallback }: { tweet: Tweet; fallback: Fallback }) 
       </div>
     </div>
   );
+  const body = tweet.id ? <NativeTweet id={tweet.id}>{stored}</NativeTweet> : stored;
+  return <li>{linkable(body, tweet, plain)}</li>;
+}
+
+/** One row of a connected thread: an avatar on a rail, a line running from it down to
+ *  the next tweet's avatar (nothing below the last), and the tweet's own text beside
+ *  it — no card border, no boxed background, so consecutive rows read as one column
+ *  rather than a stack of separate tweets. A tweet only present as reply-chain
+ *  context (not itself liked) recedes at lower opacity, same as before. */
+function ThreadRow({
+  tweet,
+  fallback,
+  plain,
+  last,
+}: {
+  tweet: Tweet;
+  fallback: Fallback;
+  plain?: boolean;
+  last: boolean;
+}) {
+  const row = (
+    <div className={`flex gap-2.5 ${tweet.context ? 'opacity-60' : ''}`}>
+      <div className="flex shrink-0 flex-col items-center">
+        <Avatar tweet={tweet} fallback={fallback} size={32} />
+        {!last && <div className="my-1 w-0.5 flex-1 rounded-full bg-[var(--color-line)]" />}
+      </div>
+      <div className={`min-w-0 flex-1 space-y-1.5 ${last ? '' : 'pb-4'}`}>
+        <Byline tweet={tweet} fallback={fallback} dated bare link={!plain} />
+        <p className="whitespace-pre-line break-words text-sm leading-snug">{tweet.text}</p>
+        {tweet.media?.map((src) => (
+          <img key={src} src={src} alt="" loading="lazy" className="w-full rounded-lg" />
+        ))}
+      </div>
+    </div>
+  );
+  return <li>{linkable(row, tweet, plain)}</li>;
+}
+
+/** `plain` wraps a tweet in its own link to X (the embed's tap-to-open); otherwise the
+ *  byline's own link already covers it. */
+function linkable(body: ReactNode, tweet: Tweet, plain?: boolean) {
+  if (!plain || !tweet.id) return body;
   return (
-    <li className={`border-l-2 pl-3 ${tone}`}>
-      {tweet.id ? <NativeTweet id={tweet.id}>{stored}</NativeTweet> : stored}
-    </li>
+    <a
+      href={`https://x.com/${tweet.author || 'i'}/status/${tweet.id}`}
+      target="_blank"
+      rel="noreferrer"
+      className="block"
+    >
+      {body}
+    </a>
   );
 }
 
@@ -200,11 +273,15 @@ function Byline({
   fallback,
   dated,
   bare,
+  link = true,
 }: {
   tweet?: Tweet;
   fallback: Fallback;
   dated?: boolean;
   bare?: boolean;
+  /** false when an ancestor is already the tweet's link to X — a link can't nest
+   *  inside another link. */
+  link?: boolean;
 }) {
   const name = tweet?.authorName || (tweet?.context ? '' : fallback.creator);
   const handle = tweet?.author ? `@${tweet.author}` : tweet?.context ? '' : fallback.brand;
@@ -232,7 +309,7 @@ function Byline({
   const cls = 'flex items-baseline gap-1.5 text-xs text-[var(--color-muted)]';
   // In the open thread each tweet links to itself, so any one of them can be opened on
   // X — not just the one the card as a whole points at.
-  return tweet?.id ? (
+  return tweet?.id && link ? (
     <a
       href={`https://x.com/${tweet.author || 'i'}/status/${tweet.id}`}
       target="_blank"

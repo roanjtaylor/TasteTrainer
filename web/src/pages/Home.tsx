@@ -146,20 +146,38 @@ function ShelfCard({ ds, domain }: { ds: DatasetSummary; domain: string }) {
   const slug = slugifyTopic(ds.topic);
   return (
     <div
-      className={CARD}
+      className={`relative ${CARD}`}
       // Fetch the dataset while the pointer is on its way to the click — by the time
       // the route changes it's usually already cached, so the dataset view opens
       // without a loading state at all.
       onMouseEnter={() => prefetchDataset(slug)}
       onFocus={() => prefetchDataset(slug)}
     >
+      {ds.private && (
+        <span
+          className="absolute right-4 top-4 text-[var(--color-muted)]"
+          aria-label="Private — requires sign-in to view"
+          title="Private — requires sign-in to view"
+        >
+          <LockIcon />
+        </span>
+      )}
       <Link to={`/${domain}/${slug}`} className="block">
-        <h2 className="serif text-2xl leading-tight">{ds.topic}</h2>
+        <h2 className="serif text-2xl leading-tight pr-6">{ds.topic}</h2>
         <p className="mt-2 line-clamp-2 text-sm text-[var(--color-muted)]">{ds.description}</p>
         <p className="mt-4 text-xs text-[var(--color-muted)]">
           {ds.itemCount} items · {ds.subtopicCount} subtopics
         </p>
       </Link>
     </div>
+  );
+}
+
+function LockIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="11" width="16" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </svg>
   );
 }

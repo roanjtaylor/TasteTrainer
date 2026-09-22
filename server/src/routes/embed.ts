@@ -31,7 +31,7 @@ async function loadForViewer(req: Request, res: Response): Promise<Dataset | nul
     res.status(404).json({ error: 'Dataset not found' });
     return null;
   }
-  if (ds.domain === 'personal' && !req.user) {
+  if (ds.domain === 'personal' && ds.private && !req.user) {
     res.set('Cache-Control', 'no-store');
     res.status(401).json({ error: 'Sign in to view this collection.' });
     return null;
@@ -58,7 +58,7 @@ embedRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) 
         ...(it.tweet ? { tweet: it.tweet } : {}),
       })),
     };
-    cacheable(res, 300, ds.domain === 'personal');
+    cacheable(res, 300, ds.domain === 'personal' && !!ds.private);
     res.json(body);
   } catch (err) { next(err); }
 });

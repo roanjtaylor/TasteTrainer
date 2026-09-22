@@ -205,6 +205,20 @@
         </div>
       </div>
 
+      <div class="field">
+        <label>Device presets</label>
+        <div class="row" id="devicePresets" style="flex-wrap: wrap; gap: 0.35rem;">
+          <button type="button" class="action" data-w="390" data-h="844" style="width: auto; margin: 0;">Phone</button>
+          <button type="button" class="action" data-w="412" data-h="915" style="width: auto; margin: 0;">Phone (wide)</button>
+          <button type="button" class="action" data-w="768" data-h="1024" style="width: auto; margin: 0;">Tablet</button>
+          <button type="button" class="action" data-w="560" data-h="640" style="width: auto; margin: 0;">Reset</button>
+        </div>
+        <p class="hint">Sets the window to a phone/tablet size. For real touch/swipe
+          behaviour (not just the mobile layout), also turn on your browser DevTools'
+          device toolbar (Ctrl/Cmd+Shift+M) — it emulates touch inside this iframe too,
+          so swipe and the touch-only controls can be tested without a real phone.</p>
+      </div>
+
       <hr />
       <p class="hint" id="advToggle">▸ Advanced: raw src URL</p>
       <div id="advBody">
@@ -381,6 +395,20 @@
       copyBtn.textContent = 'Copied';
       setTimeout(function () { copyBtn.textContent = was; }, 1200);
     }).catch(function () { embedCode.select(); document.execCommand('copy'); });
+  });
+
+  document.querySelectorAll('#devicePresets button').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var r = win.getBoundingClientRect();
+      var w = parseInt(btn.dataset.w, 10);
+      var h = parseInt(btn.dataset.h, 10);
+      // Keep the window's top-left where it is rather than recentring — flipping
+      // between presets stays predictable instead of the window jumping around.
+      applyRect({ left: r.left, top: r.top, width: w, height: h });
+      refreshEmbedCode();
+      var r2 = win.getBoundingClientRect();
+      saveState({ rect: { left: r2.left, top: r2.top, width: r2.width, height: r2.height } });
+    });
   });
 
   widthInput.addEventListener('change', function () {

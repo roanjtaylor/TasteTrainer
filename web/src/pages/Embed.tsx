@@ -332,6 +332,9 @@ function DatasetPicker({
             onClick={() => onPick(d.id)}
             className="block w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-card)] px-3 py-2 text-left text-sm hover:bg-[var(--color-wall-soft)]"
           >
+            {d.private && (
+              <LockIcon className="mr-1.5 inline-block align-[-2px] text-[var(--color-muted)]" />
+            )}
             {d.topic}
             <span className="ml-1 text-xs text-[var(--color-muted)]">({d.itemCount})</span>
           </button>
@@ -380,7 +383,6 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
   const swipedRef = useRef(false);
   const [dragX, setDragX] = useState(0);
   const [dragging, setDragging] = useState(false);
-  const [swipeHint, setSwipeHint] = useState(true);
 
   function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
     // Any fresh press clears the last swipe — a mouse click that follows a touch
@@ -390,6 +392,17 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
     // Dragging inside the report form is selecting text, not browsing.
     if ((e.target as Element).closest('textarea, input')) return;
     dragRef.current = { id: e.pointerId, startX: e.clientX, startY: e.clientY, dx: 0, horizontal: false };
+    // Without this, once the finger moves over a child element with different hit
+    // testing (the picture itself, which iOS also offers a native drag/callout on),
+    // move/up events can stop reaching this handler and the browser can cancel the
+    // gesture outright — which is why swipe would work in some spots and not others.
+    // Pinning every subsequent pointer event to this element regardless of what's
+    // under the finger is what makes the drag reliable end to end.
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* unsupported in this engine — falls back to normal hit-testing */
+    }
   }
   function onPointerMove(e: React.PointerEvent<HTMLDivElement>) {
     const d = dragRef.current;
@@ -415,7 +428,6 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
     const width = containerRef.current?.clientWidth ?? window.innerWidth;
     const threshold = Math.min(80, width * 0.25);
     if (!cancelled && canBrowse && Math.abs(d.dx) > threshold) {
-      setSwipeHint(false);
       if (d.dx < 0) goNext(d.dx);
       else goPrev(d.dx);
     }
@@ -537,12 +549,14 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
   // `group` and only shows on hover — the photo itself displays uninterrupted
   // otherwise. `opacity-0`+`pointer-events-none` at rest so hidden controls can't
   // eat clicks meant for the image; hover reveals both together.
-  // On a touch screen there is no hover, so `embed-chrome` (index.css) keeps the
-  // controls visible there — except the prev/next arrows, which a swipe replaces.
+  // On a touch screen there is no hover to reveal any of this, so `embed-chrome`
+  // (index.css) hides it outright there — the utility bar below the picture (also
+  // this component, rendered further down) carries the same controls instead.
   const chrome = 'embed-chrome opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto';
 
   return (
-    <div className="group relative h-full w-full">
+    <div className="flex h-full w-full flex-col">
+    <div className="group relative min-h-0 flex-1">
       {!showingBack && (
       <div className={`absolute left-3 top-3 z-10 flex items-center gap-1.5 ${chrome}`}>
         {onBack && (
@@ -652,9 +666,17 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
                 }}
               >
                 {/* Front: the picture itself. Click anywhere on it to flip. A thread
-                    is read in place instead (it scrolls; there's nothing to flip to). */}
+                    is read in place instead (it scrolls; there's nothing to flip to) —
+                    tapping the tweet itself opens it on X, same as the picture's own
+                    tap-to-flip, so a swipe's trailing synthetic click (swipedRef, set
+                    in onPointerMove above) must not also be read as that tap. */}
                 {current.tweet ? (
-                  <div className="embed-flip-face h-full w-full">
+                  <div
+                    className="embed-flip-face h-full w-full"
+                    onClickCapture={(e) => {
+                      if (swipedRef.current) e.preventDefault();
+                    }}
+                  >
                     <Slide item={current} />
                   </div>
                 ) : (
@@ -756,13 +778,6 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
             </div>
           )}
 
-          {/* Touch-only (index.css) nudge for the gestures, gone after the first swipe. */}
-          {canBrowse && !showingBack && swipeHint && (
-            <div className="embed-touch-hint pointer-events-none absolute bottom-3 right-3 z-10 hidden rounded-full bg-[var(--color-ink)]/60 px-3 py-1 text-xs text-[var(--color-wall)] backdrop-blur">
-              Swipe · tap to flip
-            </div>
-          )}
-
           {canBrowse && !showingBack && (
             <>
               <button
@@ -786,6 +801,100 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
         </>
       )}
     </div>
+
+    {/* Narrow/touch only (index.css): the desktop hover-chrome above hides completely
+        there (a permanent overlay on top of the picture was the awkward part) — this
+        bar, in normal document flow below the picture rather than floating over it,
+        carries the same controls instead: prev/next pinned to the bar's own left/right
+        edges (a swipe's fallback belongs where a thumb expects it, not buried in the
+        middle), the view toggle dead centre (the one most worth a big, easy target),
+        the play-mode toggle right beside it, and the title, dropped only for a tweet —
+        there's nothing to caption; tapping the picture still flips it to the
+        description for anything that has one. A solid "metal" grey rather than the
+        picture's own warm wall colour, so it reads as a fixed control strip, not part
+        of the photo. */}
+    <div className="embed-utility-bar items-stretch justify-between gap-1 border-t border-[#2a2a2a] bg-[#3c3c3e] px-1 py-1.5 text-[#f2f2f2]">
+      {canBrowse && viewMode === 'slideshow' ? (
+        <button
+          onClick={() => goPrev()}
+          disabled={!!showingBack}
+          aria-label="Previous picture"
+          title="Previous"
+          className="flex shrink-0 items-center rounded-full px-1.5 hover:bg-white/10 disabled:opacity-40"
+        >
+          <ChevronIcon direction="left" />
+        </button>
+      ) : (
+        <span />
+      )}
+
+      <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-1 px-1">
+        <div className="flex w-full items-center justify-between">
+          {onBack ? (
+            <button
+              onClick={onBack}
+              aria-label="Choose a different dataset"
+              title="Choose a different dataset"
+              className="rounded-full p-1.5 hover:bg-white/10"
+            >
+              <ChevronIcon direction="left" />
+            </button>
+          ) : (
+            <span />
+          )}
+          {!current.tweet && !showingBack && viewMode === 'slideshow' && (
+            <span className="min-w-0 max-w-[55%] truncate text-[11px] text-[#d8d8d8]">
+              {current.name}
+              {current.year ? ` · ${current.year}` : ''}
+            </span>
+          )}
+          <span />
+        </div>
+
+        {/* The current mode is the only symbol shown — an outline marks it as a
+            button, and clicking it swaps in the icon for the mode it just switched
+            to. Showing both options side by side (an earlier version of this) read
+            as "which of these is on?" instead of "what will this button do?". */}
+        <div className="flex items-center gap-1.5">
+          {canBrowse && (
+            <button
+              onClick={() => setViewMode(viewMode === 'slideshow' ? 'mosaic' : 'slideshow')}
+              aria-label={viewMode === 'slideshow' ? 'Single view — switch to mosaic' : 'Mosaic — switch to single view'}
+              title={viewMode === 'slideshow' ? 'Single view' : 'Mosaic'}
+              className="flex items-center gap-1.5 rounded-full border border-white/25 px-2.5 py-1 text-[11px] hover:bg-white/10 active:bg-white/15"
+            >
+              {viewMode === 'slideshow' ? <SingleIcon size={14} /> : <MosaicIcon size={14} />}
+              {viewMode === 'slideshow' ? 'Image' : 'Mosaic'}
+            </button>
+          )}
+          {canBrowse && viewMode === 'slideshow' && (
+            <button
+              onClick={() => switchPlayMode(playMode === 'shuffle' ? 'chronological' : 'shuffle')}
+              aria-label={playMode === 'shuffle' ? 'Shuffle: on — switch to linear order' : 'Linear order — switch to shuffle'}
+              title={playMode === 'shuffle' ? 'Shuffle' : 'Linear order'}
+              className="flex items-center rounded-full border border-white/25 p-1.5 hover:bg-white/10 active:bg-white/15"
+            >
+              {playMode === 'shuffle' ? <ShuffleIcon className="h-3.5 w-3.5" /> : <LinearIcon />}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {canBrowse && viewMode === 'slideshow' ? (
+        <button
+          onClick={() => goNext()}
+          disabled={!!showingBack}
+          aria-label="Next picture"
+          title="Next"
+          className="flex shrink-0 items-center rounded-full px-1.5 hover:bg-white/10 disabled:opacity-40"
+        >
+          <ChevronIcon direction="right" />
+        </button>
+      ) : (
+        <span />
+      )}
+    </div>
+    </div>
   );
 }
 
@@ -795,21 +904,10 @@ function Slide({ item }: { item: EmbedItem }) {
   if (!item.tweet) {
     return <Photo src={item.image} alt={item.name} className="h-full w-full" sizes={SINGLE_SIZES} />;
   }
-  const lead = item.tweet.tweets.find((t) => !t.context) ?? item.tweet.tweets[0];
   return (
     <div className="h-full w-full overflow-y-auto bg-[var(--color-wall)] text-[var(--color-ink)]">
-      <div className="mx-auto max-w-xl space-y-3 p-6">
-        <TweetThreadList tweets={item.tweet.tweets} fallback={item} />
-        {lead?.id && (
-          <a
-            href={`https://x.com/${lead.author || 'i'}/status/${lead.id}`}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-block text-xs text-[var(--color-accent)] hover:underline"
-          >
-            Open on X ↗
-          </a>
-        )}
+      <div className="space-y-3 p-4">
+        <TweetThreadList tweets={item.tweet.tweets} fallback={item} plain />
       </div>
     </div>
   );
@@ -827,6 +925,26 @@ function ShuffleIcon({ className = '' }: { className?: string }) {
   );
 }
 
+function LockIcon({ className = '' }: { className?: string }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect x="4" y="11" width="16" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </svg>
+  );
+}
+
+/** A single straight path, in contrast to shuffle's crossed one — chronological
+ *  order, not a random pass. */
+function LinearIcon({ className = '' }: { className?: string }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M4 12h13" />
+      <path d="M12 6l6 6-6 6" />
+    </svg>
+  );
+}
+
 function ChevronIcon({ direction }: { direction: 'left' | 'right' }) {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -835,9 +953,9 @@ function ChevronIcon({ direction }: { direction: 'left' | 'right' }) {
   );
 }
 
-function MosaicIcon() {
+function MosaicIcon({ size = 18 }: { size?: number }) {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <rect x="3" y="3" width="7" height="7" rx="1" />
       <rect x="14" y="3" width="7" height="7" rx="1" />
       <rect x="3" y="14" width="7" height="7" rx="1" />
@@ -846,9 +964,9 @@ function MosaicIcon() {
   );
 }
 
-function SingleIcon() {
+function SingleIcon({ size = 18 }: { size?: number }) {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <rect x="4" y="4" width="16" height="16" rx="2" />
       <circle cx="9.5" cy="10" r="1.5" fill="currentColor" stroke="none" />
       <path d="m5 17 4.5-5 3 3 3.5-4 3 3.5" />

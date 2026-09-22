@@ -266,6 +266,10 @@ export interface Dataset {
   items: Item[];
   createdAt: string;
   updatedAt: string;
+  /** Personal-world only: requires sign-in to view (9-personal-and-auth.md). Absent
+   *  or false means public — everything else in `personal` is publicly viewable and
+   *  only topics explicitly marked this way sit behind the auth wall. */
+  private?: boolean;
 }
 
 /** A lightweight summary for the datasets home shelf. */
@@ -277,6 +281,7 @@ export interface DatasetSummary {
   itemCount: number;
   subtopicCount: number;
   updatedAt: string;
+  private?: boolean;
 }
 
 // ---- Curation request/response payloads (server <-> web) ----
