@@ -16,6 +16,7 @@ import { PersonalNew } from './pages/PersonalNew';
 import { DatasetView } from './pages/DatasetView';
 import { LegacyCurateRedirect, LegacyDatasetRedirect, LegacyMapRedirect } from './pages/LegacyRedirect';
 import { Embed } from './pages/Embed';
+import { IframeTester } from './pages/IframeTester';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
@@ -115,6 +116,7 @@ function AppShell() {
                     researched worlds have no wizard — you ask Claude in the dock, from
                     whatever world or field you're looking at. */}
                 <Route path="/personal/new" element={<PersonalNew />} />
+                <Route path="/iframe" element={<IframeTester />} />
                 {/* Static segments outrank ":slug", so these always win over a field
                     name. Retired addresses, kept alive for open tabs: the world's map
                     lives on the shelf itself (/physical), and the curate wizard is gone. */}

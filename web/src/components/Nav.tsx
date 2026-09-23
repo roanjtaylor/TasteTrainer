@@ -26,7 +26,9 @@ export function Nav() {
   const segments = pathname.split('/').filter(Boolean);
   const crumbs: Array<{ label: string; to: string }> = [{ label: 'TasteTrainer', to: '/' }];
 
-  if (domain) {
+  if (segments[0] === 'iframe') {
+    crumbs.push({ label: 'Iframe', to: '/iframe' });
+  } else if (domain) {
     crumbs.push({ label: DOMAIN_LABELS[domain].short, to: `/${domain}` });
 
     const second = segments[1];

@@ -13,7 +13,7 @@ import { isRunning, liveThread, startRun, stopRun, subscribe } from '../services
 import { applyChangeset, rejectOps, revertChangeset } from '../services/changesets.ts';
 import { newId, now } from '../util.ts';
 import { optionalDomain } from '../../../shared/types.ts';
-import { CHAT_EFFORTS, isMapOp } from '../../../shared/chat.ts';
+import { CHAT_EFFORTS, DEFAULT_CHAT_EFFORT, isMapOp } from '../../../shared/chat.ts';
 import type {
   Changeset,
   ChatEffort,
@@ -24,7 +24,7 @@ import type {
   ChatView,
 } from '../../../shared/chat.ts';
 
-// The Claude chat (plan/claude-agent.md). Mounted at /api/chat.
+// The Claude chat (manual.md). Mounted at /api/chat.
 //
 // Access follows the rest of the app (auth.ts): the physical and digital worlds are
 // open, the personal world needs a signed-in user — for the conversation that was
@@ -89,19 +89,25 @@ const FALLBACK_MODELS: ChatModel[] = [
 // the picker is a convenience, not a dependency.
 chatRouter.get('/models', async (_req, res) => {
   let models = FALLBACK_MODELS;
+  let live = false;
   try {
     const r = await undiciFetch(`${HF_BASE_URL}/api/models`, {
       headers: { 'x-app-secret': HF_APP_SECRET },
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(20000),
     });
-    const body = (await r.json()) as { models?: Array<{ id?: string; name?: string; display_name?: string }> };
-    const live = (body.models ?? [])
+    if (!r.ok) throw new Error(`Space /api/models answered ${r.status}${HF_APP_SECRET ? '' : ' (HF_APP_SECRET is not set)'}`);
+    // The Space names each model's display text `label`.
+    const body = (await r.json()) as { models?: Array<{ id?: string; label?: string; name?: string; display_name?: string }> };
+    const list = (body.models ?? [])
       .filter((m) => m?.id)
-      .map((m) => ({ id: m.id as string, name: m.name ?? m.display_name ?? (m.id as string) }));
-    if (live.length) models = live;
-  } catch { /* fall back */ }
-  res.set('Cache-Control', 'private, max-age=600');
-  res.json({ models, defaultModel: CLAUDE_MODEL });
+      .map((m) => ({ id: m.id as string, name: m.label ?? m.name ?? m.display_name ?? (m.id as string) }));
+    if (list.length) { models = list; live = true; }
+  } catch (err) {
+    console.warn('[chat] live model list unavailable, using fallback:', err instanceof Error ? err.message : err);
+  }
+  // A fallback answer must not be cached, or one cold start pins the list for ten minutes.
+  res.set('Cache-Control', live ? 'private, max-age=600' : 'no-store');
+  res.json({ models, defaultModel: CLAUDE_MODEL, live });
 });
 
 // ---- Threads ----
@@ -169,7 +175,7 @@ chatRouter.post('/messages', async (req: Request, res: Response, next: NextFunct
 
     const started = await startRun({
       thread, text: text.trim(), view, model, personal: !!req.user,
-      effort: CHAT_EFFORTS.some((e) => e.id === effort) ? effort : 'off',
+      effort: CHAT_EFFORTS.some((e) => e.id === effort) ? effort : DEFAULT_CHAT_EFFORT,
     });
     res.status(202).json({ thread: started });
   } catch (err) { next(err); }

@@ -1,5 +1,5 @@
 // The Claude chat: the freeform way to read, question and change your data
-// (plan/claude-agent.md). Claude works through tools; anything that would CHANGE data is
+// (manual.md). Claude works through tools; anything that would CHANGE data is
 // staged as a changeset the user reviews — the same "propose, show the diff, accept"
 // loop as Claude Code on a folder, with datasets in place of files.
 import type {
@@ -76,16 +76,16 @@ export interface ChatThreadSummary {
   updatedAt: string;
 }
 
-/** How hard Claude thinks before answering — a reasoning budget the Space maps to
- *  tokens. 'off' answers directly. Chosen per message in the dock. */
-export type ChatEffort = 'off' | 'low' | 'medium' | 'high' | 'max';
+/** How much effort Claude puts in before answering — a reasoning budget the Space maps
+ *  to tokens, matching Claude's own low-to-max scale. Chosen per message in the dock. */
+export type ChatEffort = 'low' | 'medium' | 'high' | 'max';
 export const CHAT_EFFORTS: ReadonlyArray<{ id: ChatEffort; label: string }> = [
-  { id: 'off', label: 'No thinking' },
-  { id: 'low', label: 'Think a little' },
-  { id: 'medium', label: 'Think' },
-  { id: 'high', label: 'Think hard' },
-  { id: 'max', label: 'Think hardest' },
+  { id: 'low', label: 'Low' },
+  { id: 'medium', label: 'Medium' },
+  { id: 'high', label: 'High' },
+  { id: 'max', label: 'Max' },
 ];
+export const DEFAULT_CHAT_EFFORT: ChatEffort = 'medium';
 
 export interface ChatModel {
   id: string;

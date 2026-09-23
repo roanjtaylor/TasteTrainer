@@ -35,6 +35,7 @@ import {
 import { newId, now } from '../util.ts';
 import { DOMAIN_LABELS } from '../../../shared/types.ts';
 import {
+  DEFAULT_CHAT_EFFORT,
   reduceMessage,
   type ChatEffort,
   type ChatMessage,
@@ -341,7 +342,7 @@ async function execute(run: ActiveRun, args: StartRunArgs, model: string): Promi
         messages: historyFor({ ...thread, messages: thread.messages.slice(0, -1) }),
         // Everything about the run is decided here and sent; the Space adds nothing.
         model,
-        effort: args.effort ?? 'off',
+        effort: args.effort ?? DEFAULT_CHAT_EFFORT,
         maxTurns: CHAT_MAX_TURNS > 0 ? CHAT_MAX_TURNS : undefined,
         timeoutMs: CHAT_TIMEOUT_MS,
         maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
@@ -358,7 +359,7 @@ async function execute(run: ActiveRun, args: StartRunArgs, model: string): Promi
       if (res.status === 401) throw new Error(`The Claude proxy rejected this server's HF_APP_SECRET (401).`);
       if (res.status === 404) {
         throw new Error(
-          `The Claude proxy at ${HF_BASE_URL} has no /api/agent yet — the chat needs the updated Space deployed (see plan/claude-agent.md).`,
+          `The Claude proxy at ${HF_BASE_URL} has no /api/agent yet — the chat needs the updated Space deployed (see manual.md).`,
         );
       }
       throw new Error(`Claude proxy error ${res.status}: ${body.slice(0, 200)}`);

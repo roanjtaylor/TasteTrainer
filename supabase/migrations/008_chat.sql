@@ -1,7 +1,7 @@
 -- TasteTrainer migration 008. Run once in the Supabase SQL editor (Curiosity
 -- project). Safe to re-run — every statement is idempotent.
 --
--- The Claude chat (plan/claude-agent.md, shared/chat.ts). Two tables:
+-- The Claude chat (manual.md, shared/chat.ts). Two tables:
 --
 --   taste_chat_threads — one row per conversation. `data` is the whole thread: title
 --     and every message, each assistant turn with its blocks (thinking, text, tool

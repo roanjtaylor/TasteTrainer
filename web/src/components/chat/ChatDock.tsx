@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { CHAT_EFFORTS, type ChatEffort, type ChatModel, type ChatView } from '../../../../shared/chat';
+import { CHAT_EFFORTS, DEFAULT_CHAT_EFFORT, type ChatEffort, type ChatModel, type ChatView } from '../../../../shared/chat';
 import { DOMAIN_LABELS } from '../../../../shared/types';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
@@ -9,7 +9,7 @@ import { useChatView } from '../../lib/chatView';
 import { ChangesetCard } from './ChangesetReview';
 import { AssistantTurn, UserTurn } from './Transcript';
 
-// The Claude dock (plan/claude-agent.md): an orange circle, bottom-left, on every
+// The Claude dock (manual.md): an orange circle, bottom-left, on every
 // screen. Open it and you are talking to Claude with whatever you're looking at as
 // context — a world, a dataset, one item — and no fixed menu of things you may ask.
 // Questions get answers; requests to change things come back as a diff to accept
@@ -103,7 +103,7 @@ export function ChatDock() {
   const [model, setModel] = useState(() => stored(MODEL_KEY) ?? '');
   const [effort, setEffort] = useState<ChatEffort>(() => {
     const saved = stored(EFFORT_KEY);
-    return CHAT_EFFORTS.some((e) => e.id === saved) ? (saved as ChatEffort) : 'off';
+    return CHAT_EFFORTS.some((e) => e.id === saved) ? (saved as ChatEffort) : DEFAULT_CHAT_EFFORT;
   });
 
   // Anything in the app can open the dock with a draft (lib/chatView.tsx's `ask`) — in
@@ -116,15 +116,27 @@ export function ChatDock() {
   }, [request]);
   const pendingDraft = request.draft;
 
+  // The list is live from Claude via the Space; while Render or the Space is still waking
+  // the API answers with a fallback (live: false), so keep asking until the real one lands.
+  const [modelsLive, setModelsLive] = useState(false);
   useEffect(() => {
-    if (!everOpened || models.length) return;
-    api.chatModels()
-      .then(({ models: list, defaultModel }) => {
-        setModels(list);
-        setModel((m) => (m && list.some((x) => x.id === m) ? m : defaultModel));
-      })
-      .catch(() => {});
-  }, [everOpened, models.length]);
+    if (!everOpened || modelsLive) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = (attempt: number) => {
+      api.chatModels()
+        .then(({ models: list, defaultModel, live }) => {
+          if (cancelled) return;
+          setModels(list);
+          setModel((m) => (m && list.some((x) => x.id === m) ? m : defaultModel));
+          if (live !== false) setModelsLive(true);
+          else if (attempt < 6) timer = setTimeout(() => load(attempt + 1), 10_000);
+        })
+        .catch(() => { if (!cancelled && attempt < 6) timer = setTimeout(() => load(attempt + 1), 10_000); });
+    };
+    load(0);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [everOpened, modelsLive]);
 
   useEffect(() => {
     if (!open) return;
@@ -427,7 +439,7 @@ function ChatThreadPane({
             value={effort}
             onChange={(e) => onEffortChange(e.target.value as ChatEffort)}
             aria-label="Effort"
-            title="How hard Claude thinks before answering — its reasoning is shown as it happens"
+            title="Effort — how hard Claude thinks before answering; its reasoning is shown as it happens"
             className="rounded border border-[var(--color-line)] bg-[var(--color-wall)] px-1.5 py-1 text-[11px]"
           >
             {CHAT_EFFORTS.map((e) => <option key={e.id} value={e.id}>{e.label}</option>)}

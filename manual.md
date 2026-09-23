@@ -2,7 +2,7 @@
 
 A personal, local-first "bicycle for the mind": deliberately expose yourself to the best work in a field, and train your eye by browsing it.
 
-Built from the core idea in [`stevejobs.md`](./stevejobs.md) — that doc is the canonical spec; this app executes it.
+Built from the core idea in [`taste.md`](./taste.md) — that doc says what problem this app solves; this manual covers how the current software works.
 
 ## What it does
 
@@ -34,7 +34,7 @@ shared/    shared TypeScript types (the data model)
 server/    Express API: storage, the Claude agent + its tools, image sourcing
 web/       React app: domain gate, shelf, field map, Dataset view, Claude dock
 supabase/  SQL migrations — run these once each in the Supabase SQL editor
-stevejobs.md the core idea this app is built from
+taste.md     the problem this app solves (the philosophy behind it)
 ```
 
 ## Prerequisites
@@ -67,6 +67,36 @@ To run the pieces separately:
 npm run dev -w server
 npm run dev -w web
 ```
+
+## The Claude agent (chat dock)
+
+TasteTrainer is three things — **storage**, **display**, and **an approval gate**. Claude does the rest, the way Claude Code works on a folder: say what you want, watch it work, review a red/green diff, accept. There are no fixed AI flows (no review buttons, no wizard, no settings cog); the dock's presets are just prompts.
+
+```
+Browser ── SSE ──► Render API ── SSE ──► HF Space (Agent SDK, subscription)
+ chat dock          owns runs, events,         │
+ diff review        changesets, tools          │ tool_request  (down the stream)
+                          ▲                    │
+                          └────────────────────┘ POST /api/agent/tool-result
+```
+
+- **Flow.** The web app sends a message plus the *view context* (world → dataset → item, filters) and the chosen model. The API creates a run, calls the Space's `/api/agent`, stores every event and relays it to the browser. Close the tab and the run carries on; reopen and the transcript replays.
+- **Tools relay, not HTTP-MCP.** The Space can't reach a localhost API, so each tool call travels as a `tool_request` event on the response stream; the API runs it and answers with a POST to `/api/agent/tool-result`. Works identically locally and deployed, and there is no public tool endpoint to secure. The tool manifest travels with each run, so new tools need no Space deploy.
+- **The Space is "simply the connection".** `/api/agent` passes model, effort, maxTurns, timeouts etc. straight through; product limits live in `server/src/config.ts` (`CHAT_MAX_TURNS`, `CHAT_TIMEOUT_MS`). Deliberate exception: host shell/filesystem tools stay off, because the Space's env holds the subscription token and Claude reads untrusted web pages. `/api/chat` on the Space is shared with another app — don't change it.
+- **Read tools** (free rein): view, list/get dataset, search items, get item, get world map, get curation rules, plus WebSearch/WebFetch on the Space.
+- **Propose tools** stage into the run's changeset and never write directly: add / update / remove / move items, update / create / delete dataset (delete: empty datasets only — the last step of a merge), draw map, map changes (regions, placements, proposed missing fields). Each validates and answers Claude ("staged 9 of 10 — 'X' is not a subtopic; options are …") so it fixes itself in the same run. Merge/split/rename of fields is just create + move + delete staged as one changeset.
+- **The gate.** A changeset is an ordered list of ops plus the dataset versions it was built against. Added items show green, removed red and struck through, updated fields old → new. Accept selected / all, or discard. Apply re-checks each dataset's `updatedAt`; ops whose base moved are flagged, not overwritten. Every applied changeset can be undone (map ops undo via a whole-map snapshot). This is also the prompt-injection defence: web pages and tweets are untrusted text, and the worst they can do is make Claude *propose* something you then see in red. The map has no write path except an accepted changeset.
+- **Decisions.** Personal-world chat is allowed (signed-in only). No separate notes field — `Item.description` is the note. No auto-accept; always review.
+- **Queue and stop.** A small in-process limiter (2 concurrent, FIFO) protects the subscription's rate limits; stopping a run aborts the API's fetch, which kills the Space's subprocess. While a run is active the API self-pings to keep Render awake.
+- **Not built yet:** presets are hardcoded in `ChatDock.tsx` (not user-editable); no edit-before-accept in the diff (ask Claude to amend, or edit after accepting); vision (checking/choosing images via the Space's `attachments`).
+
+Where it lives:
+
+- Space (`craftsmanship/hf-space`): `src/services/agent.ts`, `src/routes/agent.ts`
+- API: `services/agentRun.ts` (run engine + short system prompt), `services/agentTools.ts` (the tools), `services/changesets.ts` (stage / apply / revert), `services/worldMap.ts` (`applyMapOp`), `routes/chat.ts`
+- Shared: `shared/chat.ts` — types, and the one reducer both sides fold events with
+- Web: `components/chat/*`, `lib/chat.ts`, `lib/chatView.tsx`
+- DB: `supabase/migrations/008_chat.sql` (threads, messages, runs, changesets)
 
 ## Tuning curation
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
+import { EMBED_CONFIG_MESSAGE, EMBED_MODE_MESSAGE, EMBED_READY_MESSAGE } from '../lib/embedProtocol';
 import { DOMAINS, DOMAIN_LABELS, slugifyTopic } from '../../../shared/types';
 import type { DatasetSummary, Domain, EmbedDataset, EmbedItem } from '../../../shared/types';
 import * as db from '../lib/db';
@@ -64,8 +65,19 @@ function buildOrder(items: EmbedItem[], mode: PlayMode): number[] {
 export function Embed() {
   const { datasetId, slug, domain: domainParam } = useParams();
   const deepLink = slug ?? datasetId ?? '';
-  const [searchParams] = useSearchParams();
-  const editing = searchParams.get('mode') === 'edit';
+  // Edit mode is switched by the host page (lib/embedProtocol.ts), never by the URL, so
+  // a visitor can't open the settings panel by editing the address. Starts in view.
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.source !== window.parent || e.data?.type !== EMBED_MODE_MESSAGE) return;
+      setEditing(e.data.mode === 'edit');
+    };
+    window.addEventListener('message', onMessage);
+    // Asked after listening, so the host's answer can't arrive before we can hear it.
+    if (window.parent !== window) window.parent.postMessage({ type: EMBED_READY_MESSAGE }, '*');
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
 
   const [step, setStep] = useState<Step>({ kind: 'world' });
   const [datasets, setDatasets] = useState<DatasetSummary[] | null>(null);
@@ -146,12 +158,7 @@ export function Embed() {
   );
 }
 
-/** The message a host editor listens for (`window.addEventListener('message', …)`):
- * persist `src` for view mode and apply `width`/`height` to the iframe element — an
- * iframe can't resize itself, so the size fields are requests the host carries out. */
-const EMBED_CONFIG_MESSAGE = 'tastetrainer:embed-config';
-
-// ---- Edit mode (`?mode=edit`): the host editor's settings panel, inside the iframe ----
+// ---- Edit mode (set by the host, see lib/embedProtocol.ts): the settings panel, inside the iframe ----
 function EditPanel({ domainParam, slug }: { domainParam?: string; slug: string }) {
   const navigate = useNavigate();
   const initialWorld = WORLDS.find((w) => w === domainParam) ?? WORLDS[0];
@@ -208,7 +215,7 @@ function EditPanel({ domainParam, slug }: { domainParam?: string; slug: string }
   }
 
   function pickTopic(nextSlug: string) {
-    navigate(`/embed${nextSlug ? `/${world}/${nextSlug}` : ''}?mode=edit`, { replace: true });
+    navigate(`/embed${nextSlug ? `/${world}/${nextSlug}` : ''}`, { replace: true });
   }
 
   const field = 'w-full rounded border border-[var(--color-line)] bg-[var(--color-card)] px-2 py-1.5 text-xs text-[var(--color-ink)]';
@@ -570,48 +577,25 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
             ← {ds.topic}
           </button>
         )}
-
-        {canBrowse &&
-          (viewMode === 'slideshow' ? (
-            <button
-              onClick={() => setViewMode('mosaic')}
-              aria-label="Single view — switch to see every picture at once"
-              title="Single view — switch to mosaic"
-              className="flex items-center gap-1.5 rounded-full bg-[var(--color-ink)]/70 px-3 py-2 text-xs text-[var(--color-wall)] backdrop-blur transition hover:bg-[var(--color-ink)]"
-            >
-              <SingleIcon />
-              Single view
-            </button>
-          ) : (
-            <button
-              onClick={() => setViewMode('slideshow')}
-              aria-label="Mosaic — switch back to one picture"
-              title="Mosaic — switch to single view"
-              className="flex items-center gap-1.5 rounded-full bg-[var(--color-ink)]/70 px-3 py-2 text-xs text-[var(--color-wall)] backdrop-blur transition hover:bg-[var(--color-ink)]"
-            >
-              <MosaicIcon />
-              Mosaic
-            </button>
-          ))}
       </div>
       )}
 
-      {canBrowse && viewMode === 'slideshow' && !showingBack && (
-        <div className={`absolute right-3 top-3 z-10 flex gap-1.5 ${chrome}`}>
-          <button
-            onClick={() => switchPlayMode(playMode === 'shuffle' ? 'chronological' : 'shuffle')}
-            aria-label={playMode === 'shuffle' ? 'Shuffle: on — switch to linear order' : 'Linear order — switch to shuffle'}
-            title={playMode === 'shuffle' ? 'Shuffle: on' : 'Linear order'}
-            className="relative flex items-center gap-1.5 rounded-full bg-[var(--color-ink)]/70 px-3 py-2 text-xs backdrop-blur transition hover:bg-[var(--color-ink)]"
-          >
-            <ShuffleIcon className={playMode === 'shuffle' ? 'text-[var(--color-accent)]' : 'text-[var(--color-wall)]'} />
-            <span className={playMode === 'shuffle' ? 'text-[var(--color-accent)]' : 'text-[var(--color-wall)]'}>
-              {playMode === 'shuffle' ? 'Shuffle' : 'Linear'}
-            </span>
-            {playMode === 'shuffle' && (
-              <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[var(--color-accent)]" />
-            )}
-          </button>
+      {/* Bottom right: two metal switches. Mosaic view on = every picture at once,
+          off (the default) = one picture at a time; Shuffle on = random pass, off = oldest-first. */}
+      {canBrowse && !showingBack && (
+        <div className={`absolute bottom-3 right-3 z-10 flex items-center gap-3 rounded-full bg-[var(--color-ink)]/60 px-3 py-1.5 backdrop-blur ${chrome}`}>
+          {viewMode === 'slideshow' && (
+            <MetalToggle
+              label="Shuffle"
+              checked={playMode === 'shuffle'}
+              onChange={(on) => switchPlayMode(on ? 'shuffle' : 'chronological')}
+            />
+          )}
+          <MetalToggle
+            label="Mosaic view"
+            checked={viewMode === 'mosaic'}
+            onChange={(on) => setViewMode(on ? 'mosaic' : 'slideshow')}
+          />
         </div>
       )}
 
@@ -721,13 +705,13 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
                       </div>
                     )}
 
-                    <div className="mt-auto pt-6" onClick={(e) => e.stopPropagation()}>
+                    <div className="mt-auto flex flex-col items-center pt-6 text-center" onClick={(e) => e.stopPropagation()}>
                       {reportState === 'sent' ? (
                         <p className="text-sm text-[var(--color-ink)]/80">
                           Thanks — this has been flagged for the curator to look at.
                         </p>
                       ) : reportOpen ? (
-                        <div className="space-y-2">
+                        <div className="w-full space-y-2 text-left">
                           <textarea
                             autoFocus
                             value={reportText}
@@ -764,7 +748,7 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
                       ) : (
                         <button
                           onClick={() => setReportOpen(true)}
-                          className="rounded-full border border-[var(--color-line)] px-4 py-1.5 text-xs text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
+                          className="rounded-full bg-[#e88a8a] px-4 py-1.5 text-xs font-medium text-white hover:bg-[#e17676]"
                         >
                           Report a problem
                         </button>
@@ -920,6 +904,45 @@ function Slide({ item }: { item: EmbedItem }) {
         <TweetThreadList tweets={item.tweet.tweets} fallback={item} plain />
       </div>
     </div>
+  );
+}
+
+/** A minimalist brushed-metal switch with a label: a recessed steel track, a
+ *  chrome knob that slides right when on, and a thin accent glow on the track. */
+function MetalToggle({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (on: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      title={`${label}: ${checked ? 'on' : 'off'}`}
+      onClick={() => onChange(!checked)}
+      className="flex items-center gap-2 text-xs text-[#f2f2f2]"
+    >
+      <span>{label}</span>
+      <span
+        className={`relative h-5 w-9 shrink-0 rounded-full border border-[#1a1a1a] shadow-[inset_0_1px_3px_rgba(0,0,0,0.7)] transition-colors duration-150 ${
+          checked
+            ? 'bg-gradient-to-b from-[#5a5a5e] to-[#7c7c82] ring-1 ring-[var(--color-accent)]'
+            : 'bg-gradient-to-b from-[#2a2a2c] to-[#3e3e42]'
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-4 w-4 rounded-full border border-[#6a6a6e] bg-gradient-to-b from-[#f4f4f6] via-[#c2c2c8] to-[#8e8e94] shadow-[0_1px_2px_rgba(0,0,0,0.6)] transition-[left] duration-150 ${
+            checked ? 'left-[1.1rem]' : 'left-0.5'
+          }`}
+        />
+      </span>
+    </button>
   );
 }
 

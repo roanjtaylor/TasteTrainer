@@ -1,5 +1,5 @@
 // Shared data model for TasteTrainer.
-// Canonical shape decided in /plan/2-data.md. Both the server and the web app
+// Canonical data model. Both the server and the web app
 // import these types so the catalogue shape stays in sync everywhere.
 
 /**

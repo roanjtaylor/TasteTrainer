@@ -212,7 +212,7 @@ export const api = {
 
   // The Claude chat (server/src/routes/chat.ts). Sending returns as soon as the turn
   // has STARTED; the reply is watched with `watchChat` below.
-  chatModels: () => http<{ models: ChatModel[]; defaultModel: string }>('/api/chat/models'),
+  chatModels: () => http<{ models: ChatModel[]; defaultModel: string; live?: boolean }>('/api/chat/models'),
   chatThreads: () => http<ChatThreadSummary[]>('/api/chat/threads'),
   chatThread: (id: string) =>
     http<{ thread: ChatThread; changesets: Changeset[]; running: boolean }>(`/api/chat/threads/${id}`),

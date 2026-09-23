@@ -1,4 +1,4 @@
-// The tools Claude is given in the chat (plan/claude-agent.md).
+// The tools Claude is given in the chat (manual.md).
 //
 // Two kinds, and the split is the whole safety model:
 //   READ tools     — free rein. Claude can look at anything the user can.

@@ -275,7 +275,7 @@ export function Mosaic({ items, onOpenItem }: { items: EmbedItem[]; onOpenItem: 
 
       {/* Zoom controls — the gestures above cover most of it, but a trackpad-less
           mouse or a screen reader user needs buttons too. */}
-      <div className="absolute bottom-3 right-3 z-10 flex flex-col overflow-hidden rounded-full bg-[var(--color-ink)]/70 backdrop-blur">
+      <div className="absolute right-3 top-3 z-10 flex flex-col overflow-hidden rounded-full bg-[var(--color-ink)]/70 backdrop-blur">
         <button
           onClick={() => zoomButton(1)}
           aria-label="Zoom in"

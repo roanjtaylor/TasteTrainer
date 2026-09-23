@@ -71,7 +71,7 @@ app.use('/api/datasets', datasetsRouter);
 app.use('/api/curation', curationRouter);
 app.use('/api/images', imagesRouter);
 // The Claude chat: freeform conversation with tools over the data, every change staged
-// for approval (routes/chat.ts, plan/claude-agent.md).
+// for approval (routes/chat.ts, manual.md).
 app.use('/api/chat', chatRouter);
 // Uploads only ever serve the personal world, so this is the one router behind the
 // wall outright rather than checked per-dataset.
