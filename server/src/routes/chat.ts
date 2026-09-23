@@ -9,8 +9,9 @@ import {
   listChangesets,
   listThreads,
 } from '../storage.ts';
-import { isRunning, liveThread, startRun, stopRun, subscribe } from '../services/agentRun.ts';
+import { answerQuestion, isRunning, liveThread, startRun, stopRun, subscribe } from '../services/agentRun.ts';
 import { applyChangeset, rejectOps, revertChangeset } from '../services/changesets.ts';
+import { expandCommand, listCommands } from '../services/commands.ts';
 import { newId, now } from '../util.ts';
 import { optionalDomain } from '../../../shared/types.ts';
 import { CHAT_EFFORTS, DEFAULT_CHAT_EFFORT, isMapOp } from '../../../shared/chat.ts';
@@ -69,10 +70,11 @@ async function loadChangeset(req: Request, res: Response): Promise<Changeset | n
       cs.ops.some((o) => o.kind === 'dataset.create' && o.domain === 'personal');
     if (personal) { res.status(401).json(PERSONAL_401); return null; }
   }
-  if (isRunning(cs.threadId)) {
-    res.status(409).json({ error: 'Claude is still working — wait for it to finish, or stop it, before deciding.' });
-    return null;
-  }
+  // Deciding while Claude is still working is fine — the same as accepting an edit in
+  // Claude Code before it has finished the next one. Staging and deciding both go
+  // through the changeset's per-thread lock (services/changesets.ts), and proposals are
+  // validated against the data as it stands plus what is still pending, so an accepted
+  // op simply becomes part of "as it stands".
   return cs;
 }
 
@@ -108,6 +110,17 @@ chatRouter.get('/models', async (_req, res) => {
   // A fallback answer must not be cached, or one cold start pins the list for ten minutes.
   res.set('Cache-Control', live ? 'private, max-age=600' : 'no-store');
   res.json({ models, defaultModel: CLAUDE_MODEL, live });
+});
+
+// ---- Saved prompts ----
+
+// The slash commands the dock offers (services/commands.ts). Names and descriptions
+// only — the prompt text is the server's business, expanded when a message is sent.
+chatRouter.get('/commands', async (_req, res, next) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    res.json(await listCommands());
+  } catch (err) { next(err); }
 });
 
 // ---- Threads ----
@@ -174,10 +187,25 @@ chatRouter.post('/messages', async (req: Request, res: Response, next: NextFunct
     }
 
     const started = await startRun({
-      thread, text: text.trim(), view, model, personal: !!req.user,
+      thread, text: text.trim(), prompt: (await expandCommand(text)) ?? undefined, view, model, personal: !!req.user,
       effort: CHAT_EFFORTS.some((e) => e.id === effort) ? effort : DEFAULT_CHAT_EFFORT,
     });
     res.status(202).json({ thread: started });
+  } catch (err) { next(err); }
+});
+
+// Answer the question Claude is waiting on (the ask_user tool). The turn then resumes
+// on its own; the answer shows up in the stream as that tool call's result.
+chatRouter.post('/threads/:id/answer', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const thread = await loadThread(req, res);
+    if (!thread) return;
+    const { callId, text } = req.body as { callId?: string; text?: string };
+    if (!callId || !text?.trim()) return res.status(400).json({ error: 'An answer needs a callId and some text.' });
+    if (!answerQuestion(thread.id, callId, text.trim())) {
+      return res.status(409).json({ error: 'Claude is not waiting on that question any more.' });
+    }
+    res.json({ ok: true });
   } catch (err) { next(err); }
 });
 

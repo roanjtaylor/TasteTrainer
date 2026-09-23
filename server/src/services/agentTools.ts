@@ -13,7 +13,7 @@
 //
 // The manifest below travels to the HF Space with every run; the Space registers each
 // entry with the Agent SDK and relays the calls back here (services/agentRun.ts).
-import { getDataset, getWorldMap, listDatasets, listItemReports } from '../storage.ts';
+import { getDataset, getWorldMap, listDatasets, listItemReports, saveDataset } from '../storage.ts';
 import { attachImages } from '../routes/curation.ts';
 import { mapWithLimit } from './imageResolvers.ts';
 import { nameKey } from './itemHygiene.ts';
@@ -23,7 +23,7 @@ import { applyMapOp, ghostKey } from './worldMap.ts';
 import { newId } from '../util.ts';
 import { DOMAINS, isCuratedDomain, mapSlug, singleWordTopic, slugifyTopic } from '../../../shared/types.ts';
 import type { Dataset, Domain, Item, MapAxis, MapRegion, Subtopic, WorldMap } from '../../../shared/types.ts';
-import { ITEM_PATCH_KEYS, isMapOp, type ChangeOp, type Changeset, type ChatView, type ItemPatch, type MapOp } from '../../../shared/chat.ts';
+import { ASK_USER_TOOL, ITEM_PATCH_KEYS, isMapOp, type ChangeOp, type Changeset, type ChatView, type ItemPatch, type MapOp } from '../../../shared/chat.ts';
 
 export interface ToolSpec {
   name: string;
@@ -389,6 +389,21 @@ export const TOOL_SPECS: ToolSpec[] = [
       required: ['opIds'],
     },
   },
+  {
+    // Answered by the run engine, not by a handler here: the answer is the user's, and
+    // the turn waits for it (services/agentRun.ts).
+    name: ASK_USER_TOOL,
+    description:
+      'Put ONE question to the user and wait for their answer, then carry on. For a genuine ambiguity that changes what you would propose, or a decision they should make before you do a lot of work. Offer short options where you can; they can always type something else. Not for permission — proposing is asking.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'The question, in one or two sentences, with any context they need to answer it.' },
+        options: { type: 'array', items: { type: 'string' }, description: 'Two to five short answers to pick from, if the question has natural ones.' },
+      },
+      required: ['question'],
+    },
+  },
 ];
 
 // ---- Helpers ----
@@ -609,12 +624,31 @@ function resolveImages(ctx: ToolContext, cs: Changeset, ops: ChangeOp[], domain:
     try {
       [resolved] = await attachImages([op.item], domain, () => {});
     } catch { /* leaves the item without a picture; the user can pick one after accepting */ }
+    let alreadySaved = false;
     const next = await patchOps(ctx.threadId, cs.id, (o) => {
       if (o.kind !== 'item.add' || o.id !== op.id) return;
       o.imagePending = false;
+      alreadySaved = o.status === 'applied';
       if (resolved) o.item = { ...o.item, image: resolved.image, capture: resolved.capture, candidates: resolved.candidates };
     });
     if (next) ctx.onChangeset(next);
+    // The user can accept an item before its picture lands (they don't have to wait for
+    // Claude to finish). Then the item is already in the dataset, so give it its picture there.
+    if (alreadySaved && resolved) {
+      try {
+        const ds = await getDataset(op.datasetId);
+        const item = ds?.items.find((i) => i.id === op.item.id);
+        if (ds && item && !item.image) {
+          const copy = structuredClone(ds);
+          const target = copy.items.find((i) => i.id === op.item.id)!;
+          target.image = resolved.image;
+          target.capture = resolved.capture;
+          await saveDataset(copy);
+        }
+      } catch (err: any) {
+        console.warn('[chat] could not attach a late picture:', err?.message ?? err);
+      }
+    }
   });
 }
 

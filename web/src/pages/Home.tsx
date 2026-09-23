@@ -7,7 +7,6 @@ import { cardsFor } from '../lib/mapLayout';
 import { WorldMapCanvas, WorldMapSections } from '../components/WorldMapCanvas';
 import { NavActions } from '../lib/navActions';
 import { useChatView } from '../lib/chatView';
-import { WORLD_PROMPTS } from '../components/chat/ChatDock';
 
 // Datasets home — one world's fields (6-ui.md, 7-software-design.md), addressed by
 // the world: /physical, /digital.
@@ -97,7 +96,7 @@ export function Home() {
           <div className="mt-4 flex justify-center gap-2">
             {curated ? (
               <button
-                onClick={() => ask(WORLD_PROMPTS.fields)}
+                onClick={() => ask('/fields')}
                 className="rounded-full bg-[var(--color-ink)] px-5 py-2 text-sm text-[var(--color-wall)]"
               >
                 Ask Claude to map this world →
@@ -123,7 +122,7 @@ export function Home() {
           {curated && !hasMap && (
             <p className="mb-4 text-sm text-[var(--color-muted)]">
               This world has no map yet.{' '}
-              <button onClick={() => ask(WORLD_PROMPTS.draw)} className="text-[var(--color-accent)] underline">
+              <button onClick={() => ask('/map')} className="text-[var(--color-accent)] underline">
                 Ask Claude to draw it
               </button>{' '}
               — how this world divides, and what's missing from it.

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { slugifyTopic } from '../../../shared/types';
 import {
+  ASK_USER_TOOL,
   reduceMessage,
+  type AskUserInput,
   type Changeset,
   type ChangesetResult,
   type ChatEffort,
@@ -31,13 +33,24 @@ function publishResult(result: ChangesetResult): void {
   for (const map of result.maps ?? []) publishWorldMap(map.domain, map);
 }
 
+/** A question Claude has put to the user and is waiting on, mid-turn. */
+export interface PendingQuestion {
+  callId: string;
+  question: string;
+  options: string[];
+}
+
 export interface ChatState {
   thread: ChatThread | null;
   changesets: Changeset[];
   /** A turn is queued or running in this conversation. */
   running: boolean;
+  /** Set while the running turn is stopped on a question for the user (the ask_user
+   *  tool): the next thing typed is the answer, not a new message. */
+  question: PendingQuestion | null;
   error: string;
   send: (text: string, view: ChatView, opts: { model?: string; effort?: ChatEffort }) => Promise<void>;
+  answer: (text: string) => Promise<void>;
   stop: () => void;
   decide: (
     changesetId: string,
@@ -92,7 +105,10 @@ export function useChatThread(threadId: string | null, enabled: boolean, onThrea
         // Staging only happens during a turn, and the turn is always the last message.
         const messages = threadRef.current?.messages ?? [];
         const m = messages[messages.length - 1];
-        if (m?.role === 'assistant' && m.status !== 'done') m.changesetId = event.changeset.id;
+        if (m?.role === 'assistant' && m.status !== 'done') {
+          m.changesetIds ??= [];
+          if (!m.changesetIds.includes(event.changeset.id)) m.changesetIds.push(event.changeset.id);
+        }
       } else if (event.type === 'end') {
         setRunning(false);
       } else {
@@ -148,6 +164,31 @@ export function useChatThread(threadId: string | null, enabled: boolean, onThrea
     if (threadId) api.stopChat(threadId).catch(() => {});
   }, [threadId]);
 
+  // The question Claude is waiting on: an ask_user call in the running turn whose input
+  // has arrived and whose result hasn't. The stream marks it done once the answer is
+  // relayed back, so this clears itself.
+  let question: PendingQuestion | null = null;
+  if (running) {
+    const messages = threadRef.current?.messages ?? [];
+    const m = messages[messages.length - 1];
+    for (const b of m?.blocks ?? []) {
+      if (b.type === 'tool' && b.name === ASK_USER_TOOL && !b.done && b.input) {
+        const input = b.input as AskUserInput;
+        question = { callId: b.id, question: input.question ?? '', options: Array.isArray(input.options) ? input.options.filter(Boolean) : [] };
+      }
+    }
+  }
+
+  const answer = useCallback<ChatState['answer']>(async (text) => {
+    if (!threadId || !question) return;
+    setError('');
+    try {
+      await api.answerChat(threadId, { callId: question.callId, text });
+    } catch (e: any) {
+      setError(e?.message ?? 'Could not send the answer.');
+    }
+  }, [threadId, question?.callId]);
+
   const decide = useCallback<ChatState['decide']>(async (changesetId, action, body = {}) => {
     setError('');
     try {
@@ -168,8 +209,10 @@ export function useChatThread(threadId: string | null, enabled: boolean, onThrea
     thread: threadRef.current,
     changesets: changesetsRef.current,
     running,
+    question,
     error,
     send,
+    answer,
     stop,
     decide,
   };

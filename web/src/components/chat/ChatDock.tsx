@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { CHAT_EFFORTS, DEFAULT_CHAT_EFFORT, type ChatEffort, type ChatModel, type ChatView } from '../../../../shared/chat';
+import { CHAT_EFFORTS, DEFAULT_CHAT_EFFORT, type ChatCommand, type ChatEffort, type ChatModel, type ChatView } from '../../../../shared/chat';
 import { DOMAIN_LABELS } from '../../../../shared/types';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
@@ -9,62 +9,30 @@ import { useChatView } from '../../lib/chatView';
 import { ChangesetCard } from './ChangesetReview';
 import { AssistantTurn, UserTurn } from './Transcript';
 
-// The Claude dock (manual.md): an orange circle, bottom-left, on every
-// screen. Open it and you are talking to Claude with whatever you're looking at as
-// context — a world, a dataset, one item — and no fixed menu of things you may ask.
-// Questions get answers; requests to change things come back as a diff to accept
-// (ChangesetReview.tsx). The manual controls everywhere else in the app are untouched:
-// this is the main way in, not the only one.
+// The Claude dock (manual.md): an orange circle, bottom-left, on every screen. Open it
+// and you are talking to Claude with whatever you're looking at as context — a world, a
+// dataset, one item — and no fixed menu of things you may ask. It is Claude Code's
+// terminal, for data: say what you want, watch it read and think and propose, review the
+// diff, accept, and keep talking. The manual controls everywhere else in the app are
+// untouched: this is the main way in, not the only one.
+//
+// Two things the dock deliberately does NOT do:
+//  - It never ends a conversation for you. Accepting a diff is a step in the
+//    conversation, not the end of it; only closing the tab does that.
+//  - It has no menu of "things Claude can do". What it has is `/` — saved prompts
+//    (server/src/prompts/commands, one Markdown file each), the way Claude Code has
+//    slash commands: a good thorough ask on file, so you don't retype it. Each is only
+//    ever a prompt.
 //
 // No history: a conversation is a TAB (lib/chatTabs.ts), not an entry in a list you
-// browse later. You can have several going at once — that's what tabs are for, queuing
-// up more than one job — but each one only sticks around while it's still open or
-// still has something to decide. Closing a tab, or a changeset settling with nothing
-// left pending, deletes the thread. Nothing is kept "just in case."
+// browse later. Several can be going at once — that's what tabs are for. Closing a tab
+// deletes its thread.
 
 const MODEL_KEY = 'tt:chat:model';
 const EFFORT_KEY = 'tt:chat:effort';
 
 const stored = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
 const store = (key: string, value: string) => { try { localStorage.setItem(key, value); } catch { /* fine */ } };
-
-/** The world-level asks, shared with the shelf's own buttons (pages/Home.tsx). */
-export const WORLD_PROMPTS = {
-  draw: 'Draw the map of this world: choose the two axes and the regions, place every dataset, and mark the fields I’m missing.',
-  review:
-    'Review this world: is the map still right, which fields am I missing (favour the ones I wouldn’t think of), and which datasets should be merged, split or renamed? Propose the changes.',
-  fields: 'Which fields make up this world? Propose the datasets I should start with, then draw its map.',
-};
-
-/** Starting points, chosen by what's on screen. Plain prompts — each does nothing a
- *  typed message couldn't, which is the point: they replace the old fixed Review
- *  buttons with text you can read, send as-is, or edit first. */
-function presetsFor(view: ChatView): string[] {
-  if (view.itemId) {
-    return [
-      'Tell me more about this — what should I be looking at?',
-      'Check this item’s facts: year, maker, and the defining fact.',
-      'What else here is most like this, and what is its opposite?',
-    ];
-  }
-  if (view.datasetId) {
-    return [
-      'What is this dataset missing? Sweep the whole field, then tell me the gaps.',
-      'Expand this with 10 defining items it doesn’t have yet.',
-      'Check the years and makers for mistakes and propose fixes.',
-      'Fill in any thin or missing descriptions.',
-    ];
-  }
-  if (view.domain === 'personal') return ['Which of my datasets look thin or lopsided?'];
-  if (view.domain) {
-    return [
-      WORLD_PROMPTS.review,
-      WORLD_PROMPTS.draw,
-      'Which of my datasets look thin or lopsided?',
-    ];
-  }
-  return ['What can you do here?'];
-}
 
 function ClaudeMark({ className = '' }: { className?: string }) {
   // A plain eight-point spark — reads as "Claude" without borrowing the real logo.
@@ -81,6 +49,7 @@ interface TabStatus {
   title: string;
   running: boolean;
   pending: number;
+  asking: boolean;
 }
 
 export function ChatDock() {
@@ -94,7 +63,7 @@ export function ChatDock() {
   const [statusByTab, setStatusByTab] = useState<Record<string, TabStatus>>({});
   const reportStatus = (key: string, status: TabStatus) =>
     setStatusByTab((prev) => (
-      prev[key]?.title === status.title && prev[key]?.running === status.running && prev[key]?.pending === status.pending
+      prev[key]?.title === status.title && prev[key]?.running === status.running && prev[key]?.pending === status.pending && prev[key]?.asking === status.asking
         ? prev
         : { ...prev, [key]: status }
     ));
@@ -105,6 +74,7 @@ export function ChatDock() {
     const saved = stored(EFFORT_KEY);
     return CHAT_EFFORTS.some((e) => e.id === saved) ? (saved as ChatEffort) : DEFAULT_CHAT_EFFORT;
   });
+  const [commands, setCommands] = useState<ChatCommand[]>([]);
 
   // Anything in the app can open the dock with a draft (lib/chatView.tsx's `ask`) — in
   // a fresh tab, so it never clobbers a conversation already going.
@@ -139,6 +109,11 @@ export function ChatDock() {
   }, [everOpened, modelsLive]);
 
   useEffect(() => {
+    if (!everOpened) return;
+    api.chatCommands().then(setCommands).catch(() => {});
+  }, [everOpened]);
+
+  useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       // The diff review owns Escape while it's up (it sits above the dock).
@@ -151,6 +126,7 @@ export function ChatDock() {
   const needsSignIn = view.domain === 'personal' && !email;
 
   const running = Object.values(statusByTab).some((s) => s.running);
+  const asking = Object.values(statusByTab).some((s) => s.asking);
   const pendingCount = Object.values(statusByTab).reduce((n, s) => n + s.pending, 0);
 
   function openDock() {
@@ -179,8 +155,8 @@ export function ChatDock() {
         >
           <ClaudeMark className="h-6 w-6" />
           {(running || pendingCount > 0) && (
-            <span className={`absolute -right-0.5 -top-0.5 grid h-5 min-w-5 place-items-center rounded-full bg-[var(--color-ink)] px-1 text-[10px] font-medium text-white ${running ? 'animate-pulse' : ''}`}>
-              {pendingCount > 0 ? pendingCount : '…'}
+            <span className={`absolute -right-0.5 -top-0.5 grid h-5 min-w-5 place-items-center rounded-full bg-[var(--color-ink)] px-1 text-[10px] font-medium text-white ${running && !asking ? 'animate-pulse' : ''}`}>
+              {asking ? '?' : pendingCount > 0 ? pendingCount : '…'}
             </span>
           )}
         </button>
@@ -208,7 +184,8 @@ export function ChatDock() {
                     }`}
                   >
                     <button type="button" onClick={() => tabs.activate(tab.key)} className="min-w-0 flex-1 truncate text-left">
-                      {status?.running && <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-claude)] align-middle animate-pulse" />}
+                      {status?.asking && <span className="mr-1 text-[10px] font-semibold text-[var(--color-claude)]">?</span>}
+                      {status?.running && !status.asking && <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-claude)] align-middle animate-pulse" />}
                       {!status?.running && (status?.pending ?? 0) > 0 && (
                         <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-amber-500 align-middle" />
                       )}
@@ -237,8 +214,7 @@ export function ChatDock() {
 
           {!tabs.tabs.length && (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
-              <p className="text-sm text-[var(--color-muted)]">No chats open.</p>
-              <button type="button" onClick={() => tabs.newTab()} className="rounded bg-[var(--color-claude)] px-3 py-1.5 text-xs font-medium text-white">Start a chat</button>
+              <button type="button" onClick={() => tabs.newTab()} className="rounded bg-[var(--color-claude)] px-3 py-1.5 text-xs font-medium text-white">New chat</button>
             </div>
           )}
 
@@ -255,10 +231,10 @@ export function ChatDock() {
               initialDraft={tab.key === tabs.activeKey && pendingDraft ? pendingDraft : ''}
               onThreadId={(id) => tabs.setThreadId(tab.key, id)}
               onStatus={(status) => reportStatus(tab.key, status)}
-              onClose={() => tabs.closeTab(tab.key)}
               onModelChange={(m) => { setModel(m); store(MODEL_KEY, m); }}
               onEffortChange={(e) => { setEffort(e); store(EFFORT_KEY, e); }}
               models={models}
+              commands={commands}
             />
           ))}
         </section>
@@ -267,9 +243,19 @@ export function ChatDock() {
   );
 }
 
+/** The `/` menu: which saved prompts match what's typed so far. Open only while the
+ *  draft is a lone `/word` — once there's a space after the name, the user is writing
+ *  arguments and the menu gets out of the way. */
+function commandMenu(draft: string, commands: ChatCommand[]): ChatCommand[] {
+  const m = draft.match(/^\/([a-z0-9-]*)$/i);
+  if (!m) return [];
+  const prefix = m[1].toLowerCase();
+  return commands.filter((c) => c.name.startsWith(prefix));
+}
+
 function ChatThreadPane({
   tab, active, enabled, view, model, effort, needsSignIn, initialDraft,
-  onThreadId, onStatus, onClose, onModelChange, onEffortChange, models,
+  onThreadId, onStatus, onModelChange, onEffortChange, models, commands,
 }: {
   tab: ChatTab;
   active: boolean;
@@ -281,14 +267,15 @@ function ChatThreadPane({
   initialDraft: string;
   onThreadId: (id: string) => void;
   onStatus: (status: TabStatus) => void;
-  onClose: () => void;
   onModelChange: (m: string) => void;
   onEffortChange: (e: ChatEffort) => void;
   models: ChatModel[];
+  commands: ChatCommand[];
 }) {
   const chat: ChatState = useChatThread(tab.threadId, enabled, onThreadId);
   const [draft, setDraft] = useState(initialDraft);
   const [dropped, setDropped] = useState<{ item?: boolean; dataset?: boolean }>({});
+  const [menuIndex, setMenuIndex] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
@@ -322,27 +309,32 @@ function ChatThreadPane({
   // Keep the tab strip (and the launcher badge) current even while this pane is
   // sitting in the background.
   useEffect(() => {
-    onStatus({ title: chat.thread?.title || '', running: chat.running, pending: pendingCount });
-  }, [chat.thread?.title, chat.running, pendingCount]);
+    onStatus({ title: chat.thread?.title || '', running: chat.running, pending: pendingCount, asking: !!chat.question });
+  }, [chat.thread?.title, chat.running, pendingCount, chat.question]);
 
-  // A tab is a temporary chatbot, not history: once every changeset it staged has
-  // been decided one way or another and nothing is still running, there is nothing
-  // left to look at — close it, which deletes the thread. Pure Q&A (no changeset was
-  // ever staged) is left for the user to close by hand.
+  // When Claude asks something, bring the input back to the front.
   useEffect(() => {
-    if (chat.running || !chat.changesets.length) return;
-    const settled = chat.changesets.every((c) => c.ops.every((o) => o.status !== 'pending' && o.status !== 'conflict'));
-    if (!settled) return;
-    const t = setTimeout(onClose, 1200);
-    return () => clearTimeout(t);
-  }, [chat.running, chat.changesets, onClose]);
+    if (chat.question && active) inputRef.current?.focus();
+  }, [chat.question?.callId, active]);
 
-  const needsSignInHere = needsSignIn;
+  const menu = commandMenu(draft, commands);
+  useEffect(() => setMenuIndex(0), [draft]);
+
+  function pickCommand(c: ChatCommand) {
+    setDraft(`/${c.name} `);
+    inputRef.current?.focus();
+  }
 
   function submit(text = draft) {
     const clean = text.trim();
-    if (!clean || chat.running || needsSignInHere) return;
+    if (!clean || needsSignIn) return;
     stickRef.current = true;
+    if (chat.question) {
+      setDraft('');
+      void chat.answer(clean);
+      return;
+    }
+    if (chat.running) return;
     setDraft('');
     void chat.send(clean, effectiveView, { model: model || undefined, effort });
   }
@@ -350,13 +342,22 @@ function ChatThreadPane({
   // Which message each changeset is drawn under: the LAST turn that staged into it, so
   // the card sits at the point in the conversation where it was most recently touched.
   const cardAfter = new Map<string, string>();
-  for (const m of messages) if (m.changesetId) cardAfter.set(m.changesetId, m.id);
+  for (const m of messages) for (const id of m.changesetIds ?? []) cardAfter.set(id, m.id);
 
   const chips = [
     effectiveView.domain && { key: 'domain', label: DOMAIN_LABELS[effectiveView.domain].short, drop: undefined },
     effectiveView.datasetTopic && { key: 'dataset', label: effectiveView.datasetTopic, drop: () => setDropped({ dataset: true }) },
     effectiveView.itemName && { key: 'item', label: effectiveView.itemName, drop: () => setDropped((d) => ({ ...d, item: true })) },
   ].filter(Boolean) as Array<{ key: string; label: string; drop?: () => void }>;
+
+  const canSend = !!draft.trim() && !needsSignIn && (!chat.running || !!chat.question);
+  const placeholder = chat.question
+    ? 'Answer Claude…'
+    : chat.running
+      ? 'Claude is working… (Stop to interrupt)'
+      : commands.length
+        ? 'Ask, or ask for a change.  /  for saved prompts'
+        : 'Ask, or ask for a change…';
 
   return (
     <div className={`flex min-h-0 flex-1 flex-col ${active ? '' : 'hidden'}`}>
@@ -368,25 +369,9 @@ function ChatThreadPane({
         }}
         className="custom-scroll flex-1 space-y-4 overflow-y-auto px-3 py-3"
       >
-        {!messages.length && (
-          <div className="px-1 pt-2">
-            <p className="serif text-lg leading-snug">Ask anything, or ask for anything.</p>
-            <p className="mt-1 text-xs leading-relaxed text-[var(--color-muted)]">
-              Claude can see what you’re looking at and read all your data. Anything it wants to change comes back as a diff for you to accept — nothing is saved without you.
-            </p>
-            <div className="mt-3 space-y-1.5">
-              {presetsFor(effectiveView).map((p) => (
-                <button key={p} type="button" disabled={needsSignInHere} onClick={() => submit(p)} className="block w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-card)] px-3 py-2 text-left text-xs leading-snug hover:border-[var(--color-claude)] disabled:opacity-40">
-                  {p}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
         {messages.map((m) => (
           <div key={m.id} className="space-y-2">
-            {m.role === 'user' ? <UserTurn message={m} /> : <AssistantTurn message={m} />}
+            {m.role === 'user' ? <UserTurn message={m} /> : <AssistantTurn message={m} onAnswer={(text) => submit(text)} />}
             {chat.changesets
               .filter((c) => cardAfter.get(c.id) === m.id)
               .map((c) => <ChangesetCard key={c.id} changeset={c} decide={chat.decide} busy={chat.running} />)}
@@ -396,7 +381,24 @@ function ChatThreadPane({
 
       {chat.error && <p className="mx-3 mb-2 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-800">{chat.error}</p>}
 
-      <footer className="border-t border-[var(--color-line)] bg-[var(--color-card)] p-2.5 sm:rounded-b-xl">
+      <footer className="relative border-t border-[var(--color-line)] bg-[var(--color-card)] p-2.5 sm:rounded-b-xl">
+        {menu.length > 0 && (
+          <ul className="custom-scroll absolute bottom-full left-2.5 right-2.5 z-10 mb-1 max-h-64 overflow-y-auto rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] py-1 shadow-lg">
+            {menu.map((c, i) => (
+              <li key={c.name}>
+                <button
+                  type="button"
+                  onMouseDown={(e) => { e.preventDefault(); pickCommand(c); }}
+                  onMouseEnter={() => setMenuIndex(i)}
+                  className={`flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-xs ${i === menuIndex ? 'bg-[var(--color-wall-soft)]' : ''}`}
+                >
+                  <span className="shrink-0 font-mono text-[var(--color-claude)]">/{c.name}</span>
+                  <span className="min-w-0 flex-1 truncate text-[var(--color-muted)]">{c.description}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         {chips.length > 0 && (
           <div className="mb-1.5 flex flex-wrap items-center gap-1 text-[11px]">
             <span className="text-[var(--color-muted)]">Looking at</span>
@@ -410,7 +412,7 @@ function ChatThreadPane({
             ))}
           </div>
         )}
-        {needsSignInHere ? (
+        {needsSignIn ? (
           <p className="px-1 py-2 text-xs text-[var(--color-muted)]">Sign in to use Claude in your personal world.</p>
         ) : (
           <textarea
@@ -418,11 +420,22 @@ function ChatThreadPane({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
+              const highlighted = menu[menuIndex] ?? menu[0];
+              if (highlighted) {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setMenuIndex((i) => (i + 1) % menu.length); return; }
+                if (e.key === 'ArrowUp') { e.preventDefault(); setMenuIndex((i) => (i - 1 + menu.length) % menu.length); return; }
+                // Enter on a half-typed name completes it; on the full name it sends.
+                if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && draft.trim() !== `/${highlighted.name}`)) {
+                  e.preventDefault();
+                  pickCommand(highlighted);
+                  return;
+                }
+              }
               if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
             }}
             rows={Math.min(6, Math.max(2, draft.split('\n').length))}
-            placeholder={chat.running ? 'Claude is working…' : 'Ask about this, or ask for a change…'}
-            className="w-full resize-none rounded-lg border border-[var(--color-line)] bg-[var(--color-wall)] px-3 py-2 text-sm outline-none focus:border-[var(--color-claude)]"
+            placeholder={placeholder}
+            className={`w-full resize-none rounded-lg border bg-[var(--color-wall)] px-3 py-2 text-sm outline-none focus:border-[var(--color-claude)] ${chat.question ? 'border-[var(--color-claude)]/60' : 'border-[var(--color-line)]'}`}
           />
         )}
         <div className="mt-1.5 flex items-center gap-2">
@@ -439,16 +452,19 @@ function ChatThreadPane({
             value={effort}
             onChange={(e) => onEffortChange(e.target.value as ChatEffort)}
             aria-label="Effort"
-            title="Effort — how hard Claude thinks before answering; its reasoning is shown as it happens"
+            title="Effort — how hard Claude thinks before answering"
             className="rounded border border-[var(--color-line)] bg-[var(--color-wall)] px-1.5 py-1 text-[11px]"
           >
             {CHAT_EFFORTS.map((e) => <option key={e.id} value={e.id}>{e.label}</option>)}
           </select>
           <span className="flex-1" />
-          {chat.running ? (
+          {chat.running && (
             <button type="button" onClick={chat.stop} className="rounded border border-[var(--color-line)] px-3 py-1.5 text-xs">Stop</button>
-          ) : (
-            <button type="button" onClick={() => submit()} disabled={!draft.trim() || needsSignInHere} className="rounded bg-[var(--color-claude)] px-4 py-1.5 text-xs font-medium text-white disabled:opacity-40">Send</button>
+          )}
+          {(!chat.running || chat.question) && (
+            <button type="button" onClick={() => submit()} disabled={!canSend} className="rounded bg-[var(--color-claude)] px-4 py-1.5 text-xs font-medium text-white disabled:opacity-40">
+              {chat.question ? 'Answer' : 'Send'}
+            </button>
           )}
         </div>
       </footer>

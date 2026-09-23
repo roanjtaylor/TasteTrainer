@@ -35,8 +35,10 @@ import {
 import { newId, now } from '../util.ts';
 import { DOMAIN_LABELS } from '../../../shared/types.ts';
 import {
+  ASK_USER_TOOL,
   DEFAULT_CHAT_EFFORT,
   reduceMessage,
+  type AskUserInput,
   type ChatEffort,
   type ChatMessage,
   type ChatStreamEvent,
@@ -61,6 +63,8 @@ interface ActiveRun {
   message: ChatMessage;
   controller: AbortController;
   subscribers: Set<(event: ChatStreamEvent) => void>;
+  /** A question Claude has put to the user and is waiting on (the `ask_user` tool). */
+  question?: { callId: string; resolve: (answer: string) => void };
 }
 
 /** threadId -> the turn running in it. One turn per thread at a time. */
@@ -70,6 +74,15 @@ export const isRunning = (threadId: string) => active.has(threadId);
 
 /** The in-memory thread while a turn runs — fresher than the last batched write. */
 export const liveThread = (threadId: string) => active.get(threadId)?.thread ?? null;
+
+/** Hand Claude the user's answer to the question it is waiting on. False if it isn't
+ *  waiting on one (or that one has since been answered / the turn ended). */
+export function answerQuestion(threadId: string, callId: string, answer: string): boolean {
+  const run = active.get(threadId);
+  if (!run?.question || run.question.callId !== callId) return false;
+  run.question.resolve(answer);
+  return true;
+}
 
 /** Watch a running turn. Returns null if nothing is running; otherwise an unsubscribe. */
 export function subscribe(threadId: string, fn: (event: ChatStreamEvent) => void): (() => void) | null {
@@ -205,7 +218,9 @@ The app is the storage and the display. You are the intelligence. The user talks
 # How you work here
 - You see what they see. Their current view is described below; "this", "here", "these" refer to it.
 - READ freely: get_dataset, get_items, search_items, list_datasets, get_world_map, get_item_reports (what visitors have flagged wrong on the public embed widget). Use WebSearch / WebFetch when a fact matters and you aren't sure of it — years, makers and attributions should be right, not plausible.
-- CHANGE only through the propose_* tools. They never write: each stages a change the user then sees as a red/green diff and accepts, edits or discards — exactly like a code review. So never say a change "has been made" or "is saved"; say what you've proposed and that it's waiting for them. Don't ask permission before proposing — proposing IS asking.
+- CHANGE only through the propose_* tools. They never write: each stages a change the user then sees as a red/green diff and accepts, edits or discards — exactly like a code review. So never say a change "has been made" or "is saved"; say what you've proposed and that it's waiting for them. Proposing is how you ask "shall I?" — don't ask that in words.
+- ASK when it matters: ${ASK_USER_TOOL} puts a question to the user and waits for the answer, mid-turn, then you carry on. Use it when the request is genuinely ambiguous in a way that changes what you would propose (which of two fields, how strict, how many, which reading of a brief), or when you have found something they should decide before you do a lot of work. Give short options where you can; they can always type something else. Don't ask about things you can settle with a read or a search, and don't ask permission — make routine judgement calls yourself and say what you assumed. A conversation can also just continue: they will reply to whatever you say.
+- The user may accept some of what you've staged while you are still working; what you stage after that simply opens a fresh set. Never re-propose something already accepted.
 - The propose tools validate, and their results tell you what was refused and why. Read them and fix what you can in the same turn.
 - Refer to items by id in tool calls, by name when talking to the user. Never show ids in your reply.
 - The WORLD level is yours too. The physical and digital worlds each have a map: two meaningful axes, named regions positioned on them, every dataset in one region, and the fields the user is missing drawn as dashed holes they can start a dataset from. Draw it with propose_draw_map, amend it with propose_map_changes, and give propose_create_dataset a region. A settled map is something the user has learned — change what is wrong and leave the rest; redraw only if asked. Restructuring fields is ordinary staged work: a merge is move the items, then propose_delete_dataset on the emptied field; a split is create, then move.
@@ -228,10 +243,15 @@ function historyFor(thread: ChatThread): Array<{ role: 'user' | 'assistant'; con
     .filter((m) => m.role === 'user' || m.blocks.length > 0)
     .slice(-30)
     .map((m) => {
-      if (m.role === 'user') return { role: 'user' as const, content: m.text };
+      if (m.role === 'user') return { role: 'user' as const, content: m.prompt ?? m.text };
       const content = m.blocks
         .map((b) => {
           if (b.type === 'text') return b.text;
+          if (b.type === 'tool' && b.name === ASK_USER_TOOL) {
+            // A question and its answer are conversation, not plumbing: keep both whole.
+            const q = (b.input as AskUserInput | undefined)?.question ?? '';
+            return `[asked the user: ${q}${b.result ? ` → they answered: ${b.result}` : ' → (no answer)'}]`;
+          }
           if (b.type === 'tool') return `[${b.name}${b.result ? ` → ${b.result.split('\n')[0].slice(0, 160)}` : ''}]`;
           return '';
         })
@@ -245,7 +265,10 @@ function historyFor(thread: ChatThread): Array<{ role: 'user' | 'assistant'; con
 
 export interface StartRunArgs {
   thread: ChatThread;
+  /** What the user typed. */
   text: string;
+  /** What Claude is sent, when a saved command expanded `text` (services/commands.ts). */
+  prompt?: string;
   view: ChatView;
   model?: string;
   effort?: ChatEffort;
@@ -263,7 +286,7 @@ export async function startRun(args: StartRunArgs): Promise<ChatThread> {
 
   const model = args.model || CLAUDE_MODEL;
   thread.messages.push({
-    id: newId(), role: 'user', text, blocks: [], view, status: 'done', createdAt: now(),
+    id: newId(), role: 'user', text, ...(args.prompt ? { prompt: args.prompt } : {}), blocks: [], view, status: 'done', createdAt: now(),
   });
   const message: ChatMessage = {
     id: newId(), role: 'assistant', text: '', blocks: [], model, status: 'queued', createdAt: now(),
@@ -312,17 +335,37 @@ async function execute(run: ActiveRun, args: StartRunArgs, model: string): Promi
     if (event.type !== 'tool_input') scheduleFlush();
   };
 
+  let slotHeld = false;
   const ctx: ToolContext = {
     threadId: thread.id,
     view: args.view,
     personal: args.personal,
     onChangeset: (changeset) => {
-      message.changesetId = changeset.id;
+      message.changesetIds ??= [];
+      if (!message.changesetIds.includes(changeset.id)) message.changesetIds.push(changeset.id);
       emit({ type: 'changeset', changeset });
     },
   };
 
-  let slotHeld = false;
+  // A question to the user: the tool call waits for the answer, however long that takes.
+  // The turn's concurrency slot is handed back meanwhile — a question left open for an
+  // hour must not hold up other conversations — and taken again before Claude resumes.
+  const askUser = async (callId: string, input: unknown): Promise<string> => {
+    const q = (input ?? {}) as Partial<AskUserInput>;
+    if (!q.question?.trim()) return 'ask_user needs a `question`.';
+    const answer = await new Promise<string>((resolve) => {
+      run.question = { callId, resolve };
+      if (slotHeld) { release(); slotHeld = false; }
+      // Stop pressed while waiting: let the chain drain rather than hang forever.
+      controller.signal.addEventListener('abort', () => resolve(''), { once: true });
+    });
+    run.question = undefined;
+    if (controller.signal.aborted) return '';
+    await acquire(controller.signal);
+    slotHeld = true;
+    return answer;
+  };
+
   try {
     await acquire(controller.signal);
     slotHeld = true;
@@ -346,6 +389,9 @@ async function execute(run: ActiveRun, args: StartRunArgs, model: string): Promi
         maxTurns: CHAT_MAX_TURNS > 0 ? CHAT_MAX_TURNS : undefined,
         timeoutMs: CHAT_TIMEOUT_MS,
         maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
+        // The Space's default wait for a tool answer is two minutes — fine for a database
+        // read, not for a question the user may come back to after lunch.
+        toolTimeoutMs: CHAT_TIMEOUT_MS,
         previewChars: 4000,
         systemPrompt: await buildSystemPrompt(thread, args.view, args.personal),
         tools: TOOL_SPECS,
@@ -372,7 +418,7 @@ async function execute(run: ActiveRun, args: StartRunArgs, model: string): Promi
     let toolChain: Promise<void> = Promise.resolve();
     const answerTool = (callId: string, name: string, input: unknown) => {
       toolChain = toolChain.then(async () => {
-        const answer = await runTool(ctx, name, input);
+        const answer = name === ASK_USER_TOOL ? { text: await askUser(callId, input) } : await runTool(ctx, name, input);
         await undiciFetch(`${HF_BASE_URL}/api/agent/tool-result`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-app-secret': HF_APP_SECRET },

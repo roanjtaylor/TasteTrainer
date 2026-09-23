@@ -42,8 +42,12 @@ export type ChatStatus = 'queued' | 'running' | 'done' | 'error' | 'stopped';
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
-  /** A user message's words. Assistant turns carry `blocks` instead. */
+  /** A user message's words, as typed — a saved command stays `/gaps` here. Assistant
+   *  turns carry `blocks` instead. */
   text: string;
+  /** User messages that used a saved command: the full prompt Claude was actually
+   *  sent (server/src/prompts/commands). Absent when `text` was sent as-is. */
+  prompt?: string;
   blocks: ChatBlock[];
   /** User messages: what was on screen when it was sent. */
   view?: ChatView;
@@ -51,8 +55,10 @@ export interface ChatMessage {
   model?: string;
   status: ChatStatus;
   error?: string;
-  /** The changeset this turn staged changes into, if it staged any. */
-  changesetId?: string;
+  /** Every changeset this turn staged into, oldest first. Usually one — but the user
+   *  can accept a changeset while Claude is still working, and what it stages after
+   *  that opens a new one. */
+  changesetIds?: string[];
   sources?: { url: string; title?: string }[];
   usage?: { turns?: number; durationMs?: number };
   createdAt: string;
@@ -90,6 +96,24 @@ export const DEFAULT_CHAT_EFFORT: ChatEffort = 'medium';
 export interface ChatModel {
   id: string;
   name: string;
+}
+
+/** A saved prompt, typed as `/name` in the dock the way a slash command is in Claude
+ *  Code. Lives as a Markdown file in server/src/prompts/commands; the body is what
+ *  Claude is sent, the name is what the user sees. */
+export interface ChatCommand {
+  name: string;
+  description: string;
+}
+
+/** The tool Claude uses to put a question to the user mid-turn (services/agentRun.ts).
+ *  The turn waits; the answer goes back as the tool's result. */
+export const ASK_USER_TOOL = 'ask_user';
+
+export interface AskUserInput {
+  question: string;
+  /** Short answers to pick from. The user can always type something else. */
+  options?: string[];
 }
 
 // ---- The live stream (server -> browser) ----

@@ -12,6 +12,7 @@ import type {
 import type {
   Changeset,
   ChangesetResult,
+  ChatCommand,
   ChatEffort,
   ChatModel,
   ChatStreamEvent,
@@ -213,6 +214,9 @@ export const api = {
   // The Claude chat (server/src/routes/chat.ts). Sending returns as soon as the turn
   // has STARTED; the reply is watched with `watchChat` below.
   chatModels: () => http<{ models: ChatModel[]; defaultModel: string; live?: boolean }>('/api/chat/models'),
+  chatCommands: () => http<ChatCommand[]>('/api/chat/commands'),
+  answerChat: (id: string, body: { callId: string; text: string }) =>
+    http<{ ok: boolean }>(`/api/chat/threads/${id}/answer`, { method: 'POST', body: JSON.stringify(body) }),
   chatThreads: () => http<ChatThreadSummary[]>('/api/chat/threads'),
   chatThread: (id: string) =>
     http<{ thread: ChatThread; changesets: Changeset[]; running: boolean }>(`/api/chat/threads/${id}`),

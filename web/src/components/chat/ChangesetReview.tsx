@@ -356,24 +356,26 @@ export function ChangesetReview({ changeset, decide, onClose }: { changeset: Cha
     return [...byDataset];
   }, [changeset.ops]);
 
-  // Once an apply resolves, wait for the changeset to actually come back with
-  // nothing left pending (it streams back in via props, not the awaited call) —
-  // then show the success beat and close, but only once everything is decided.
-  const [awaitingApplySettle, setAwaitingApplySettle] = useState(false);
+  // Once an apply resolves, wait for the ops it covered to come back decided (the
+  // changeset streams back in via props, not the awaited call) — then the success beat.
+  // Only THOSE ops: Claude may still be staging more into this changeset, and they are
+  // not this decision's to wait for.
+  const [awaitingApply, setAwaitingApply] = useState<Set<string> | null>(null);
 
   const run = async (action: 'apply' | 'discard', body: { opIds?: string[]; force?: boolean }) => {
+    const covered = new Set((body.opIds ?? pending.map((o) => o.id)));
     setBusy(true);
     await decide(changeset.id, action, body);
     setBusy(false);
-    if (action === 'apply') setAwaitingApplySettle(true);
+    if (action === 'apply') setAwaitingApply(covered);
   };
 
   useEffect(() => {
-    if (!awaitingApplySettle) return;
-    if (pending.length > 0) return;
-    setAwaitingApplySettle(false);
+    if (!awaitingApply) return;
+    if (pending.some((o) => awaitingApply.has(o.id))) return;
+    setAwaitingApply(null);
     setApplied(true);
-  }, [awaitingApplySettle, pending.length]);
+  }, [awaitingApply, pending]);
 
   // Separate from the effect above so that flipping `applied` doesn't re-run this one
   // and cancel its own timeout via cleanup before it fires.
@@ -493,17 +495,26 @@ export function ChangesetCard({ changeset, decide, busy }: { changeset: Changese
   const failed = changeset.ops.filter((o) => o.status === 'failed');
   const topics = [...new Set(changeset.ops.map((o) => changeset.datasetTopics[opGroup(o)]).filter(Boolean))].join(', ');
 
+  // The one-click accept skips the diff, so it is only offered when there is nothing
+  // in it that the diff would have left unticked (removals, redraws).
+  const allSafe = pending.every((o) => !destructive(o));
+
   let body: ReactNode;
   if (pending.length) {
     body = (
       <>
         <p className="text-sm"><span className="font-medium">{summarise(pending)}</span> <span className="text-[var(--color-muted)]">to {topics}</span></p>
-        <p className="mt-0.5 text-[11px] text-[var(--color-muted)]">Waiting for you — nothing is saved yet.{busy && ' Claude may still add more.'}</p>
+        <p className="mt-0.5 text-[11px] text-[var(--color-muted)]">Nothing is saved until you accept.{busy && ' Claude is still working and may add more.'}</p>
         <div className="mt-2 flex items-center gap-2">
           <button type="button" onClick={() => setReviewing(true)} className="rounded bg-[var(--color-ink)] px-3 py-1.5 text-xs font-medium text-[var(--color-wall)]">
-            Review changes
+            Review
           </button>
-          <button type="button" disabled={busy} onClick={() => decide(changeset.id, 'discard', {})} className="text-xs text-[var(--color-muted)] underline underline-offset-2 disabled:opacity-40">
+          {allSafe && (
+            <button type="button" onClick={() => decide(changeset.id, 'apply', {})} className="rounded border border-[var(--color-line)] px-3 py-1.5 text-xs">
+              Accept all
+            </button>
+          )}
+          <button type="button" onClick={() => decide(changeset.id, 'discard', {})} className="text-xs text-[var(--color-muted)] underline underline-offset-2">
             Discard
           </button>
         </div>
@@ -515,7 +526,7 @@ export function ChangesetCard({ changeset, decide, busy }: { changeset: Changese
         <span className="text-emerald-700">✓ Saved {summarise(applied)}</span> <span className="text-[var(--color-muted)]">to {topics}.</span>
         {failed.length > 0 && <span className="text-amber-800"> {plural(failed.length, 'change')} couldn’t be applied.</span>}
         <button type="button" onClick={() => setReviewing(true)} className="ml-2 underline underline-offset-2">View</button>
-        <button type="button" disabled={busy} onClick={() => decide(changeset.id, 'revert')} className="ml-2 underline underline-offset-2 disabled:opacity-40">Undo</button>
+        <button type="button" onClick={() => decide(changeset.id, 'revert')} className="ml-2 underline underline-offset-2">Undo</button>
       </p>
     );
   } else {

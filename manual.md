@@ -70,7 +70,7 @@ npm run dev -w web
 
 ## The Claude agent (chat dock)
 
-TasteTrainer is three things — **storage**, **display**, and **an approval gate**. Claude does the rest, the way Claude Code works on a folder: say what you want, watch it work, review a red/green diff, accept. There are no fixed AI flows (no review buttons, no wizard, no settings cog); the dock's presets are just prompts.
+TasteTrainer is three things — **storage**, **display**, and **an approval gate**. Claude does the rest, the way Claude Code works on a folder: say what you want, watch it work, review a red/green diff, accept, keep talking. There are no fixed AI flows (no review buttons, no wizard, no settings cog) and no application logic deciding what Claude may be asked: the product's whole job is to give Claude the context, relay its tools, and gate its writes.
 
 ```
 Browser ── SSE ──► Render API ── SSE ──► HF Space (Agent SDK, subscription)
@@ -80,20 +80,22 @@ Browser ── SSE ──► Render API ── SSE ──► HF Space (Agent SDK
                           └────────────────────┘ POST /api/agent/tool-result
 ```
 
-- **Flow.** The web app sends a message plus the *view context* (world → dataset → item, filters) and the chosen model. The API creates a run, calls the Space's `/api/agent`, stores every event and relays it to the browser. Close the tab and the run carries on; reopen and the transcript replays.
+- **Flow.** The web app sends a message plus the *view context* (world → dataset → item, filters) and the chosen model. The API creates a run, calls the Space's `/api/agent`, stores every event and relays it to the browser. Close the tab and the run carries on; reopen and the transcript replays. A conversation ends only when you close its tab — accepting a diff is a step in it, not the end of it.
+- **Saved prompts (`/`).** Type `/` in the dock for the saved prompts — Claude Code's slash commands, for data. Each is one Markdown file in `server/src/prompts/commands/` (`gaps.md` → `/gaps`): a `description:` line in the frontmatter is what the picker shows, the body is what Claude is sent, `$ARGUMENTS` takes whatever you typed after the name. They are prompts and nothing more — `/gaps`, `/expand`, `/verify`, `/describe`, `/tidy`, `/review`, `/map`, `/fields`, `/reports` each do nothing a typed message couldn't; the point is a thorough ask on file instead of retyped. Edit a file or add one and it's live on the next message (no restart; a deploy on Render, since the files ship in the image). The transcript shows the command as typed, with the expanded prompt a click away.
+- **Questions.** Claude can stop mid-turn and ask you something (`ask_user`): the question appears in the transcript with any options as buttons, the input box becomes the answer box, and the turn resumes when you reply — however long that takes. While it waits it hands back its concurrency slot so other tabs keep moving. The system prompt tells Claude to ask only when the answer changes what it would propose, never for permission (proposing is asking).
 - **Tools relay, not HTTP-MCP.** The Space can't reach a localhost API, so each tool call travels as a `tool_request` event on the response stream; the API runs it and answers with a POST to `/api/agent/tool-result`. Works identically locally and deployed, and there is no public tool endpoint to secure. The tool manifest travels with each run, so new tools need no Space deploy.
 - **The Space is "simply the connection".** `/api/agent` passes model, effort, maxTurns, timeouts etc. straight through; product limits live in `server/src/config.ts` (`CHAT_MAX_TURNS`, `CHAT_TIMEOUT_MS`). Deliberate exception: host shell/filesystem tools stay off, because the Space's env holds the subscription token and Claude reads untrusted web pages. `/api/chat` on the Space is shared with another app — don't change it.
 - **Read tools** (free rein): view, list/get dataset, search items, get item, get world map, get curation rules, plus WebSearch/WebFetch on the Space.
 - **Propose tools** stage into the run's changeset and never write directly: add / update / remove / move items, update / create / delete dataset (delete: empty datasets only — the last step of a merge), draw map, map changes (regions, placements, proposed missing fields). Each validates and answers Claude ("staged 9 of 10 — 'X' is not a subtopic; options are …") so it fixes itself in the same run. Merge/split/rename of fields is just create + move + delete staged as one changeset.
-- **The gate.** A changeset is an ordered list of ops plus the dataset versions it was built against. Added items show green, removed red and struck through, updated fields old → new. Accept selected / all, or discard. Apply re-checks each dataset's `updatedAt`; ops whose base moved are flagged, not overwritten. Every applied changeset can be undone (map ops undo via a whole-map snapshot). This is also the prompt-injection defence: web pages and tweets are untrusted text, and the worst they can do is make Claude *propose* something you then see in red. The map has no write path except an accepted changeset.
+- **The gate.** A changeset is an ordered list of ops plus the dataset versions it was built against. Added items show green, removed red and struck through, updated fields old → new. Accept selected / all, or discard — including while Claude is still working, the way you accept one edit in Claude Code before it has made the next (staging and deciding share a per-thread lock, and proposals are validated against the data as saved plus what is still pending, so an accepted op just becomes part of "as saved"; what Claude stages after that opens a fresh changeset under the same turn). Apply re-checks each dataset's `updatedAt`; ops whose base moved are flagged, not overwritten. Every applied changeset can be undone (map ops undo via a whole-map snapshot). This is also the prompt-injection defence: web pages and tweets are untrusted text, and the worst they can do is make Claude *propose* something you then see in red. The map has no write path except an accepted changeset.
 - **Decisions.** Personal-world chat is allowed (signed-in only). No separate notes field — `Item.description` is the note. No auto-accept; always review.
 - **Queue and stop.** A small in-process limiter (2 concurrent, FIFO) protects the subscription's rate limits; stopping a run aborts the API's fetch, which kills the Space's subprocess. While a run is active the API self-pings to keep Render awake.
-- **Not built yet:** presets are hardcoded in `ChatDock.tsx` (not user-editable); no edit-before-accept in the diff (ask Claude to amend, or edit after accepting); vision (checking/choosing images via the Space's `attachments`).
+- **Not built yet:** no edit-before-accept in the diff (ask Claude to amend, or edit after accepting); vision (checking/choosing images via the Space's `attachments`); queuing a follow-up message while a turn runs (Stop, then send).
 
 Where it lives:
 
 - Space (`craftsmanship/hf-space`): `src/services/agent.ts`, `src/routes/agent.ts`
-- API: `services/agentRun.ts` (run engine + short system prompt), `services/agentTools.ts` (the tools), `services/changesets.ts` (stage / apply / revert), `services/worldMap.ts` (`applyMapOp`), `routes/chat.ts`
+- API: `services/agentRun.ts` (run engine, short system prompt, the `ask_user` wait), `services/agentTools.ts` (the tools), `services/changesets.ts` (stage / apply / revert), `services/worldMap.ts` (`applyMapOp`), `services/commands.ts` + `prompts/commands/*.md` (saved prompts), `routes/chat.ts`
 - Shared: `shared/chat.ts` — types, and the one reducer both sides fold events with
 - Web: `components/chat/*`, `lib/chat.ts`, `lib/chatView.tsx`
 - DB: `supabase/migrations/008_chat.sql` (threads, messages, runs, changesets)
@@ -108,7 +110,7 @@ server/src/prompts/curation-rules.md
 
 Edit it to refine coverage, anti-bias, dedup, field-filling, or web-search policy. Changes take effect on the next call (the file is re-read each time) — no restart, no code change.
 
-The chat dock's own system prompt is short and lives in `server/src/services/agentRun.ts`; it reads the rulebook on demand (`get_curation_rules`) rather than carrying it in every call.
+The chat dock's own system prompt is short and lives in `server/src/services/agentRun.ts`; it reads the rulebook on demand (`get_curation_rules`) rather than carrying it in every call. The saved prompts behind the dock's `/` commands are the same idea one level up — `server/src/prompts/commands/*.md`, one file per command, edit freely.
 
 ## Database migrations
 

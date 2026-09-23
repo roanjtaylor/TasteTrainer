@@ -159,19 +159,31 @@ export function Embed() {
 }
 
 // ---- Edit mode (set by the host, see lib/embedProtocol.ts): the settings panel, inside the iframe ----
+// This IS what a website builder's editor shows (the /iframe tester flips the same mode,
+// so it previews exactly this). A scrim over the widget, and the panel on the right half
+// — or the whole frame when it's too narrow to split. Nothing here can be dismissed from
+// inside: the host decides when editing ends, not the widget.
+//
+// The pickers are custom listboxes rather than native <select>s on purpose: builders
+// zoom their canvas with `transform: scale()`, and Chromium positions a native select's
+// popup wrongly for an iframe under a transformed ancestor (the list lands off to the
+// side of the field). A list drawn in the panel's own DOM can't go anywhere else.
+const NARROW_FRAME = 560;
+
 function EditPanel({ domainParam, slug }: { domainParam?: string; slug: string }) {
   const navigate = useNavigate();
-  const initialWorld = WORLDS.find((w) => w === domainParam) ?? WORLDS[0];
-  const [world, setWorld] = useState<Domain>(initialWorld);
+  const initialWorld = WORLDS.find((w) => w === domainParam) ?? '';
+  const [world, setWorld] = useState<Domain | ''>(initialWorld);
   const [topics, setTopics] = useState<DatasetSummary[] | null>(null);
-  const [open, setOpen] = useState(true);
   const [width, setWidth] = useState(String(window.innerWidth));
   const [height, setHeight] = useState(String(window.innerHeight));
+  const [narrow, setNarrow] = useState(window.innerWidth < NARROW_FRAME);
   // The personal world lists nothing until signed in; re-asked once that happens.
   const { email } = useAuth();
 
   useEffect(() => {
     setTopics(null);
+    if (!world) return;
     db.listDatasets(world).catch(() => [] as DatasetSummary[]).then(setTopics);
   }, [world, email]);
 
@@ -203,6 +215,7 @@ function EditPanel({ domainParam, slug }: { domainParam?: string; slug: string }
     const onResize = () => {
       setWidth(String(window.innerWidth));
       setHeight(String(window.innerHeight));
+      setNarrow(window.innerWidth < NARROW_FRAME);
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
@@ -214,75 +227,154 @@ function EditPanel({ domainParam, slug }: { domainParam?: string; slug: string }
     if (w > 0 && h > 0) post({ width: w, height: h });
   }
 
+  // A world without a topic is "visitor picks" — the src stays the generic /embed
+  // (same as the tester's), the world only decides which topics are listed.
+  function pickWorld(next: Domain | '') {
+    setWorld(next);
+    if (slug) navigate('/embed', { replace: true });
+  }
   function pickTopic(nextSlug: string) {
-    navigate(`/embed${nextSlug ? `/${world}/${nextSlug}` : ''}`, { replace: true });
+    navigate(`/embed${nextSlug && world ? `/${world}/${nextSlug}` : ''}`, { replace: true });
   }
 
-  const field = 'w-full rounded border border-[var(--color-line)] bg-[var(--color-card)] px-2 py-1.5 text-xs text-[var(--color-ink)]';
-  const label = 'mb-1 block text-[0.7rem] font-semibold text-[var(--color-muted)]';
-
-  if (!open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        className="absolute bottom-3 right-3 z-20 rounded-full bg-[var(--color-ink)] px-3 py-1.5 text-xs text-[var(--color-wall)] shadow"
-      >
-        Edit embed
-      </button>
-    );
-  }
+  const label = 'block text-[0.7rem] font-semibold text-[var(--color-muted)]';
 
   return (
-    <div className="absolute inset-y-0 right-0 z-20 flex w-60 max-w-full flex-col gap-3 overflow-y-auto border-l border-[var(--color-line)] bg-[var(--color-wall)] p-3 shadow-lg">
-      <div className="flex items-center justify-between">
-        <span className="text-[0.7rem] uppercase tracking-wide text-[var(--color-muted)]">Starting view</span>
-        <button onClick={() => setOpen(false)} aria-label="Hide settings" title="Hide settings" className="text-sm text-[var(--color-muted)] hover:text-[var(--color-ink)]">
-          ✕
-        </button>
-      </div>
-      <div>
-        <label className={label} htmlFor="embed-world">World</label>
-        <select id="embed-world" className={field} value={world} onChange={(e) => setWorld(e.target.value as Domain)}>
-          {WORLDS.map((w) => (
-            <option key={w} value={w}>{DOMAIN_LABELS[w].title}</option>
-          ))}
-        </select>
-      </div>
-      <div>
-        <label className={label} htmlFor="embed-topic">Topic</label>
-        <select
-          id="embed-topic"
-          className={field}
-          value={world === domainParam ? slug : ''}
-          disabled={topics === null}
-          onChange={(e) => pickTopic(e.target.value)}
+    <>
+      <div className="absolute inset-0 z-20 bg-black/25" />
+      <aside
+        className={`absolute inset-y-0 right-0 z-20 space-y-2.5 overflow-y-auto border-l border-[var(--color-line)] bg-[var(--color-card)] p-3 text-xs shadow-lg ${
+          narrow ? 'left-0 w-full border-l-0' : 'w-1/2'
+        }`}
+      >
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">Settings</h3>
+        <div className="space-y-1">
+          <label className={label} htmlFor="embed-world">World</label>
+          <Dropdown
+            id="embed-world"
+            value={world}
+            onChange={(v) => pickWorld(v as Domain | '')}
+            options={[
+              { value: '', label: 'Visitor picks (no fixed topic)' },
+              ...WORLDS.map((w) => ({ value: w, label: DOMAIN_LABELS[w].title })),
+            ]}
+          />
+        </div>
+        {world && (
+          <div className="space-y-1">
+            <label className={label} htmlFor="embed-topic">Topic</label>
+            <Dropdown
+              id="embed-topic"
+              value={world === domainParam ? slug : ''}
+              disabled={topics === null}
+              onChange={pickTopic}
+              options={[
+                {
+                  value: '',
+                  label:
+                    topics === null
+                      ? 'Loading…'
+                      : world === 'personal' && !email
+                        ? 'Sign in (in the widget) to list yours'
+                        : 'Visitor picks a topic',
+                },
+                ...(topics ?? []).map((d) => ({ value: slugifyTopic(d.topic), label: d.topic })),
+              ]}
+            />
+          </div>
+        )}
+        <div className="flex gap-2">
+          <div className="min-w-0 flex-1 space-y-1">
+            <label className={label} htmlFor="embed-width">Width (px)</label>
+            <input id="embed-width" type="number" min={220} step={10} className={EDIT_FIELD} value={width}
+              onChange={(e) => setWidth(e.target.value)} onBlur={commitSize}
+              onKeyDown={(e) => e.key === 'Enter' && commitSize()} />
+          </div>
+          <div className="min-w-0 flex-1 space-y-1">
+            <label className={label} htmlFor="embed-height">Height (px)</label>
+            <input id="embed-height" type="number" min={160} step={10} className={EDIT_FIELD} value={height}
+              onChange={(e) => setHeight(e.target.value)} onBlur={commitSize}
+              onKeyDown={(e) => e.key === 'Enter' && commitSize()} />
+          </div>
+        </div>
+      </aside>
+    </>
+  );
+}
+
+const EDIT_FIELD = 'w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-card)] px-2 py-1 text-xs text-[var(--color-ink)]';
+
+/** A select that draws its list in the panel's own DOM (see EditPanel for why not a
+ *  native one). Closes on a click anywhere else or Escape. */
+function Dropdown({
+  id,
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  options: { value: string; label: string }[];
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  const current = options.find((o) => o.value === value) ?? options[0];
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        id={id}
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className={`${EDIT_FIELD} flex items-center justify-between gap-2 text-left disabled:opacity-50`}
+      >
+        <span className="truncate">{current?.label}</span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0 text-[var(--color-muted)]">
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute left-0 right-0 z-30 mt-1 max-h-48 overflow-y-auto rounded-lg border border-[var(--color-line)] bg-[var(--color-card)] py-1 shadow-lg"
         >
-          <option value="">
-            {topics === null
-              ? 'Loading…'
-              : world === 'personal' && !email
-                ? 'Sign in (in the widget) to list yours'
-                : 'Visitor picks (no fixed topic)'}
-          </option>
-          {topics?.map((d) => (
-            <option key={d.id} value={slugifyTopic(d.topic)}>{d.topic}</option>
+          {options.map((o) => (
+            <li key={o.value} role="option" aria-selected={o.value === value}>
+              <button
+                type="button"
+                onClick={() => {
+                  onChange(o.value);
+                  setOpen(false);
+                }}
+                className={`block w-full truncate px-2 py-1.5 text-left text-xs hover:bg-[var(--color-wall-soft)] ${
+                  o.value === value ? 'font-semibold text-[var(--color-ink)]' : 'text-[var(--color-ink)]/85'
+                }`}
+              >
+                {o.label}
+              </button>
+            </li>
           ))}
-        </select>
-      </div>
-      <div className="flex gap-2">
-        <div className="flex-1">
-          <label className={label} htmlFor="embed-width">Width (px)</label>
-          <input id="embed-width" type="number" min={220} step={10} className={field} value={width}
-            onChange={(e) => setWidth(e.target.value)} onBlur={commitSize}
-            onKeyDown={(e) => e.key === 'Enter' && commitSize()} />
-        </div>
-        <div className="flex-1">
-          <label className={label} htmlFor="embed-height">Height (px)</label>
-          <input id="embed-height" type="number" min={160} step={10} className={field} value={height}
-            onChange={(e) => setHeight(e.target.value)} onBlur={commitSize}
-            onKeyDown={(e) => e.key === 'Enter' && commitSize()} />
-        </div>
-      </div>
+        </ul>
+      )}
     </div>
   );
 }

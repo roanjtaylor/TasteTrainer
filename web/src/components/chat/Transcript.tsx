@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ChatBlock, ChatMessage } from '../../../../shared/chat';
+import { ASK_USER_TOOL, type AskUserInput, type ChatBlock, type ChatMessage } from '../../../../shared/chat';
 import { Markdown } from './Markdown';
 
 // One assistant turn, drawn the way Claude Code draws it: what Claude thought, each
@@ -46,6 +46,7 @@ function labelOf(block: ToolBlock): string {
     case 'propose_draw_map': return `Proposing ${input.redraw ? 'a redrawn' : 'a'} map of the ${input.domain ?? ''} world`;
     case 'propose_map_changes': return 'Proposing changes to the map';
     case 'withdraw_changes': return `Withdrew ${plural(input.opIds?.length ?? 0, 'staged change')}`;
+    case ASK_USER_TOOL: return 'Asked you a question';
     case 'WebSearch': return `Searched the web for “${input.query ?? '…'}”`;
     case 'WebFetch': return `Read ${hostOf(input.url)}`;
     default: return block.name;
@@ -90,6 +91,40 @@ function ToolRow({ block }: { block: ToolBlock }) {
   );
 }
 
+/** A question Claude has put to the user (the ask_user tool), drawn as a question, not a
+ *  tool call: the options as buttons while it waits, then the question and the answer. */
+function QuestionRow({ block, onAnswer }: { block: ToolBlock; onAnswer?: (text: string) => void }) {
+  const input = (block.input ?? {}) as Partial<AskUserInput>;
+  const options = Array.isArray(input.options) ? input.options.filter(Boolean) : [];
+  const waiting = !block.done && !!block.input;
+  return (
+    <div className={`rounded-lg border px-3 py-2.5 text-sm ${waiting ? 'border-[var(--color-claude)]/60 bg-[var(--color-card)]' : 'border-[var(--color-line)]'}`}>
+      <p className="whitespace-pre-wrap">{input.question || (block.partial ? 'Working out what to ask…' : '…')}</p>
+      {waiting && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {options.map((o) => (
+            <button
+              key={o}
+              type="button"
+              onClick={() => onAnswer?.(o)}
+              className="rounded-full border border-[var(--color-line)] bg-[var(--color-wall)] px-2.5 py-1 text-xs hover:border-[var(--color-claude)]"
+            >
+              {o}
+            </button>
+          ))}
+          <span className="self-center text-[11px] text-[var(--color-muted)]">{options.length ? 'or type an answer below' : 'type your answer below'}</span>
+        </div>
+      )}
+      {block.done && (
+        <p className="mt-1.5 text-xs">
+          <span className="text-[var(--color-muted)]">You: </span>
+          <span className={block.result ? '' : 'italic text-[var(--color-muted)]'}>{block.result || 'no answer'}</span>
+        </p>
+      )}
+    </div>
+  );
+}
+
 function Thinking({ text, live }: { text: string; live: boolean }) {
   const [open, setOpen] = useState(false);
   // While it's being written, show the tail — the most recent thought — so there is
@@ -107,7 +142,7 @@ function Thinking({ text, live }: { text: string; live: boolean }) {
   );
 }
 
-export function AssistantTurn({ message }: { message: ChatMessage }) {
+export function AssistantTurn({ message, onAnswer }: { message: ChatMessage; onAnswer?: (text: string) => void }) {
   const live = message.status === 'running' || message.status === 'queued';
   const lastIndex = message.blocks.length - 1;
   return (
@@ -117,6 +152,8 @@ export function AssistantTurn({ message }: { message: ChatMessage }) {
           <div key={i} className="px-1.5"><Markdown text={block.text} /></div>
         ) : block.type === 'thinking' ? (
           <Thinking key={i} text={block.text} live={live && i === lastIndex} />
+        ) : block.name === ASK_USER_TOOL ? (
+          <QuestionRow key={block.id} block={block} onAnswer={live ? onAnswer : undefined} />
         ) : (
           <ToolRow key={block.id} block={block} />
         ),
@@ -151,9 +188,22 @@ export function AssistantTurn({ message }: { message: ChatMessage }) {
 
 export function UserTurn({ message }: { message: ChatMessage }) {
   const where = [message.view?.datasetTopic, message.view?.itemName].filter(Boolean).join(' › ');
+  // A saved command shows as typed (`/gaps`), the way Claude Code shows one; the prompt
+  // it expanded to is a click away.
+  const [showPrompt, setShowPrompt] = useState(false);
   return (
     <div className="ml-8 rounded-lg bg-[var(--color-wall-soft)] px-3 py-2 text-sm">
-      <p className="whitespace-pre-wrap">{message.text}</p>
+      <p className="whitespace-pre-wrap">
+        {message.prompt ? <span className="font-mono text-[13px] text-[var(--color-claude)]">{message.text}</span> : message.text}
+        {message.prompt && (
+          <button type="button" onClick={() => setShowPrompt((s) => !s)} className="ml-2 text-[10px] text-[var(--color-muted)] underline underline-offset-2">
+            {showPrompt ? 'hide prompt' : 'prompt'}
+          </button>
+        )}
+      </p>
+      {showPrompt && message.prompt && (
+        <p className="mt-1.5 whitespace-pre-wrap border-l border-[var(--color-line)] pl-2 text-xs text-[var(--color-muted)]">{message.prompt}</p>
+      )}
       {where && <p className="mt-1 text-[10px] uppercase tracking-wide text-[var(--color-muted)]">about {where}</p>}
     </div>
   );
