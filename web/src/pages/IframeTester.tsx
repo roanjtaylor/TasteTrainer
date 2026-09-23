@@ -97,65 +97,18 @@ export function IframeTester() {
     return () => window.removeEventListener('message', onMessage);
   }, [setParams]);
 
-  // What a website builder's custom component needs, in full.
-  const wiring = `<script>
-var f = document.getElementById('tt-embed');
-var MODE = 'view';
-function send() {
-  f.contentWindow.postMessage(
-    { type: '${EMBED_MODE_MESSAGE}', mode: MODE }, '${origin}');
-}
-// Call this whenever your editor flips this element: setMode('edit') / setMode('view')
-function setMode(m) { MODE = m; send(); }
-addEventListener('message', function (e) {
-  if (e.source !== f.contentWindow) return;
-  var d = e.data || {};
-  if (d.type === '${EMBED_READY_MESSAGE}') send();
-  if (d.type === '${EMBED_CONFIG_MESSAGE}') {
-    save(d.src);            // YOUR code: store d.src as this element's setting
-    f.width = d.width;
-    f.height = d.height;
-  }
-});
-</script>`;
-
-  const field = 'w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-card)] px-2 py-1.5 font-mono text-[10px] leading-snug';
-  const copy = (text: string) => void navigator.clipboard.writeText(text);
-  const btn = 'w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-card)] py-1 text-xs hover:bg-[var(--color-wall-soft)]';
-
   return (
     <div className="flex flex-col items-center">
       {/* One bordered "host page": the embed exactly as an importer's snippet renders it
           (the code is injected verbatim, not a lookalike). In edit mode the frame is
-          told so and draws its own settings panel (Embed.tsx EditPanel) — nothing is
-          drawn over it from out here, so what's previewed is what a builder's editor
-          gets. The embed code and wiring are this page's concern, not the widget's, so
-          they sit beside the frame. */}
-      <div ref={boxRef} className="flex max-w-full items-start gap-4 overflow-x-auto rounded-2xl border border-[var(--color-line)] bg-[var(--color-wall-soft)] p-4 shadow-sm">
-        <div className="relative shrink-0 overflow-hidden rounded-xl" style={{ width, height }}>
+          told so and draws its own settings panel (Embed.tsx EditPanel) — settings,
+          embed code and editor wiring, all in that one column inside the frame. Nothing
+          is drawn from out here, so the frame is the same size in both modes and what's
+          previewed is exactly what a builder's editor gets. */}
+      <div ref={boxRef} className="max-w-full rounded-2xl border border-[var(--color-line)] bg-[var(--color-wall-soft)] p-4 shadow-sm">
+        <div className="relative overflow-hidden rounded-xl" style={{ width, height }}>
           <div ref={hostRef} key={code} className="[&_iframe]:block" dangerouslySetInnerHTML={{ __html: code }} />
         </div>
-        {editing && (
-          <aside className="w-72 shrink-0 space-y-2.5 text-xs">
-            <details open className="rounded-lg border border-[var(--color-line)] bg-[var(--color-card)]">
-              <summary className="cursor-pointer px-3 py-1.5 font-semibold">Embed code</summary>
-              <div className="space-y-2 px-3 pb-3">
-                <textarea readOnly value={code} wrap="off" className={`${field} h-16`} />
-                <button onClick={() => copy(code)} className={btn}>Copy embed code</button>
-              </div>
-            </details>
-            <details className="rounded-lg border border-[var(--color-line)] bg-[var(--color-card)]">
-              <summary className="cursor-pointer px-3 py-1.5 font-semibold">Editor wiring</summary>
-              <div className="space-y-2 px-3 pb-3">
-                <p className="text-xs text-[var(--color-muted)]">
-                  For a website builder: the frame starts in view mode and your editor flips it — the URL can't.
-                </p>
-                <textarea readOnly value={wiring} wrap="off" className={`${field} h-40`} />
-                <button onClick={() => copy(wiring)} className={btn}>Copy wiring</button>
-              </div>
-            </details>
-          </aside>
-        )}
       </div>
     </div>
   );

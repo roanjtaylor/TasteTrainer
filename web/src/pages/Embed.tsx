@@ -239,6 +239,36 @@ function EditPanel({ domainParam, slug }: { domainParam?: string; slug: string }
 
   const label = 'block text-[0.7rem] font-semibold text-[var(--color-muted)]';
 
+  // The snippet and wiring live in this column with the settings — one panel is the
+  // whole edit surface, and the frame is the same size in edit and view mode. They
+  // read from the fields, so what's typed is what's copied.
+  const origin = window.location.origin;
+  const src = `${origin}/embed${slug ? `/${domainParam}/${slug}` : ''}`;
+  const code = `<iframe id="tt-embed" src="${src}" width="${width}" height="${height}" style="border:0;border-radius:12px" loading="lazy"></iframe>`;
+  const wiring = `<script>
+var f = document.getElementById('tt-embed');
+var MODE = 'view';
+function send() {
+  f.contentWindow.postMessage(
+    { type: '${EMBED_MODE_MESSAGE}', mode: MODE }, '${origin}');
+}
+// Call this whenever your editor flips this element: setMode('edit') / setMode('view')
+function setMode(m) { MODE = m; send(); }
+addEventListener('message', function (e) {
+  if (e.source !== f.contentWindow) return;
+  var d = e.data || {};
+  if (d.type === '${EMBED_READY_MESSAGE}') send();
+  if (d.type === '${EMBED_CONFIG_MESSAGE}') {
+    save(d.src);            // YOUR code: store d.src as this element's setting
+    f.width = d.width;
+    f.height = d.height;
+  }
+});
+</script>`;
+  const copy = (text: string) => void navigator.clipboard.writeText(text);
+  const codeField = `${EDIT_FIELD} font-mono text-[10px] leading-snug`;
+  const btn = 'w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-card)] py-1 text-xs hover:bg-[var(--color-wall-soft)]';
+
   return (
     <>
       <div className="absolute inset-0 z-20 bg-black/25" />
@@ -297,6 +327,23 @@ function EditPanel({ domainParam, slug }: { domainParam?: string; slug: string }
               onKeyDown={(e) => e.key === 'Enter' && commitSize()} />
           </div>
         </div>
+        <details open className="rounded-lg border border-[var(--color-line)]">
+          <summary className="cursor-pointer px-2 py-1.5 font-semibold">Embed code</summary>
+          <div className="space-y-2 px-2 pb-2">
+            <textarea readOnly value={code} wrap="off" className={`${codeField} h-16`} />
+            <button type="button" onClick={() => copy(code)} className={btn}>Copy embed code</button>
+          </div>
+        </details>
+        <details className="rounded-lg border border-[var(--color-line)]">
+          <summary className="cursor-pointer px-2 py-1.5 font-semibold">Editor wiring</summary>
+          <div className="space-y-2 px-2 pb-2">
+            <p className="text-[var(--color-muted)]">
+              For a website builder: the frame starts in view mode and your editor flips it — the URL can't.
+            </p>
+            <textarea readOnly value={wiring} wrap="off" className={`${codeField} h-40`} />
+            <button type="button" onClick={() => copy(wiring)} className={btn}>Copy wiring</button>
+          </div>
+        </details>
       </aside>
     </>
   );
