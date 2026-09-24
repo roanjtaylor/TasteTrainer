@@ -4,7 +4,7 @@ import { removeFiles, storagePathsIn, toServedImages, toStoredImages } from './s
 import { cached, invalidate, invalidatePrefix, keys, put } from './cache.ts';
 import { normalizeDomain, singleWordTopic, slugifyTopic } from '../../shared/types.ts';
 import type { Dataset, DatasetSummary, Domain, ItemReport, ItemReportStatus, WorldMap } from '../../shared/types.ts';
-import type { Changeset, ChatThread } from '../../shared/chat.ts';
+import type { Changeset, ChatThread, PromptKind, PromptText } from '../../shared/chat.ts';
 
 /**
  * "That table isn't there" — i.e. a migration hasn't been applied yet.
@@ -283,4 +283,65 @@ export async function listItemReports(filter: {
   if (missingRelation(error)) throw new Error(REPORTS_MIGRATION_HINT);
   if (error) throw new Error(error.message);
   return (data ?? []).map(rowToReport);
+}
+
+/** Open or close a report. The agent's way of closing the loop on one it has dealt
+ *  with — only ever through an accepted changeset (services/changesets.ts). */
+export async function setReportStatus(id: string, status: ItemReportStatus): Promise<void> {
+  const { error } = await supabase.from('taste_item_reports').update({ status }).eq('id', id);
+  if (missingRelation(error)) throw new Error(REPORTS_MIGRATION_HINT);
+  if (error) throw new Error(error.message);
+}
+
+// ---- Prompt overrides: the rulebook and the saved commands as edited through the
+// chat (migration 012, services/promptStore.ts). A row overrides the shipped file of
+// the same name; no row means the file is current. ----
+
+const PROMPTS_MIGRATION_HINT =
+  'The taste_prompts table is missing. Run supabase/migrations/012_prompts.sql in the Supabase SQL editor.';
+
+export interface PromptRow extends PromptText {
+  name: string;
+  kind: PromptKind;
+  updatedAt: string;
+}
+
+function rowToPrompt(row: any): PromptRow {
+  return {
+    name: row.name,
+    kind: row.kind === 'rules' ? 'rules' : 'command',
+    description: row.description ?? '',
+    body: row.body ?? '',
+    updatedAt: row.updated_at ?? '',
+  };
+}
+
+/** Every stored override. Before migration 012 is applied there are none — reads must
+ *  not fail on that, or the agent loses its rulebook over a missing optional table. */
+export async function listPromptOverrides(): Promise<PromptRow[]> {
+  const { data, error } = await supabase.from('taste_prompts').select('*');
+  if (missingRelation(error)) return [];
+  if (error) throw new Error(error.message);
+  return (data ?? []).map(rowToPrompt);
+}
+
+export async function getPromptOverride(name: string): Promise<PromptRow | null> {
+  const { data, error } = await supabase.from('taste_prompts').select('*').eq('name', name).maybeSingle();
+  if (missingRelation(error)) return null;
+  if (error) throw new Error(error.message);
+  return data ? rowToPrompt(data) : null;
+}
+
+export async function savePromptOverride(name: string, kind: PromptKind, text: PromptText): Promise<void> {
+  const { error } = await supabase
+    .from('taste_prompts')
+    .upsert({ name, kind, description: text.description, body: text.body, updated_at: now() });
+  if (missingRelation(error)) throw new Error(PROMPTS_MIGRATION_HINT);
+  if (error) throw new Error(error.message);
+}
+
+export async function deletePromptOverride(name: string): Promise<void> {
+  const { error } = await supabase.from('taste_prompts').delete().eq('name', name);
+  if (missingRelation(error)) throw new Error(PROMPTS_MIGRATION_HINT);
+  if (error) throw new Error(error.message);
 }

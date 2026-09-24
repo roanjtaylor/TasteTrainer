@@ -14,16 +14,21 @@
 // hold for a write to be safe.
 import {
   deleteDataset,
+  deletePromptOverride,
   getChangeset,
   getDataset,
+  getPromptOverride,
   getWorldMap,
   listChangesets,
   saveChangeset,
   saveDataset,
+  savePromptOverride,
   saveWorldMap,
+  setReportStatus,
 } from '../storage.ts';
 import { absorbGhost, applyMapOp, blankMap, removePlacement } from './worldMap.ts';
 import { canonicalSubtopic } from './itemHygiene.ts';
+import { readPrompt } from './promptStore.ts';
 import { newId, now } from '../util.ts';
 import { singleWordTopic, slugifyTopic } from '../../../shared/types.ts';
 import type { Dataset, Domain, Item, WorldMap } from '../../../shared/types.ts';
@@ -31,6 +36,7 @@ import {
   ITEM_PATCH_KEYS,
   changesetStatusOf,
   isMapOp,
+  opDatasetIds,
   type ChangeOp,
   type Changeset,
   type ChangesetResult,
@@ -71,14 +77,12 @@ export async function openChangeset(threadId: string): Promise<Changeset | null>
 }
 
 function datasetIdsOf(ops: ChangeOp[]): string[] {
-  const ids = new Set<string>();
-  for (const op of ops) {
-    if (isMapOp(op)) continue;
-    if (op.kind !== 'dataset.create') ids.add(op.datasetId);
-    if (op.kind === 'item.move') ids.add(op.toDatasetId);
-  }
-  return [...ids];
+  return [...new Set(ops.flatMap(opDatasetIds))];
 }
+
+/** Ops that write somewhere other than a dataset row: the map, a report's status, a
+ *  prompt. Each is applied on its own, not through the dataset workspace. */
+const sideOp = (op: ChangeOp) => isMapOp(op) || op.kind === 'report.resolve' || op.kind === 'prompt.update';
 
 async function loadWorkspace(ids: string[]): Promise<Workspace> {
   const ws: Workspace = new Map();
@@ -242,7 +246,7 @@ export function applyOp(ws: Workspace, op: ChangeOp, force = false): UndoRecord 
     }
 
     default:
-      // Map ops don't touch datasets — `applyChangeset` runs them through applyMapOp.
+      // Map, report and prompt ops don't touch datasets — `applyChangeset` handles them.
       throw new OpError('failed', 'Not a dataset change.');
   }
 }
@@ -367,6 +371,30 @@ export function applyChangeset(
           delete op.problem;
           continue;
         }
+        if (op.kind === 'report.resolve') {
+          // Written at once: a report row is its own thing, with nothing to batch.
+          await setReportStatus(op.reportId, 'resolved');
+          undos.push({ opId: op.id, kind: 'report.resolve', reportId: op.reportId });
+          op.status = 'applied';
+          delete op.problem;
+          continue;
+        }
+        if (op.kind === 'prompt.update') {
+          // The same "did it move underneath?" check an item edit gets: the text must
+          // still read as it did when Claude proposed the change.
+          const current = await readPrompt(op.name);
+          const liveBefore = current ? { description: current.description, body: current.body } : null;
+          if (!opts.force && !same(liveBefore, op.before)) {
+            throw new OpError('conflict', `${op.name === 'rules' ? 'The rules' : `/${op.name}`} changed after Claude proposed this.`);
+          }
+          const existing = await getPromptOverride(op.name);
+          const restore = existing ? { description: existing.description, body: existing.body } : null;
+          await savePromptOverride(op.name, op.promptKind, op.after);
+          undos.push({ opId: op.id, kind: 'prompt.update', name: op.name, promptKind: op.promptKind, restore });
+          op.status = 'applied';
+          delete op.problem;
+          continue;
+        }
         // Dataset names are unique across the whole shelf (the slug column), and the
         // database's own complaint about that is not something to show anyone.
         const newTopic =
@@ -423,7 +451,7 @@ export function applyChangeset(
         // The write itself failed: nothing in this dataset actually changed.
         saveFailed = true;
         for (const op of selected) {
-          if (isMapOp(op)) continue;
+          if (sideOp(op)) continue;
           const mine = op.datasetId === id || (op.kind === 'item.move' && op.toDatasetId === id);
           if (mine && op.status === 'applied') fail(op, err?.message ?? 'The save failed.');
         }
@@ -503,7 +531,7 @@ export function revertChangeset(threadId: string, changesetId: string): Promise<
     const records = [...cs.undo].reverse();
     const ids = new Set<string>();
     for (const u of records) {
-      if (u.kind === 'map' || u.kind === 'dataset.delete') continue;
+      if (u.kind === 'map' || u.kind === 'dataset.delete' || u.kind === 'report.resolve' || u.kind === 'prompt.update') continue;
       ids.add(u.datasetId);
       if (u.kind === 'item.move') ids.add(u.toDatasetId);
     }
@@ -518,6 +546,17 @@ export function revertChangeset(threadId: string, changesetId: string): Promise<
         // Newest first, so the last one written for a world is its oldest snapshot.
         await saveWorldMap(structuredClone(u.before ?? blankMap(u.domain)));
         restoredMaps.add(u.domain);
+        continue;
+      }
+      if (u.kind === 'report.resolve') {
+        await setReportStatus(u.reportId, 'open');
+        continue;
+      }
+      if (u.kind === 'prompt.update') {
+        // Newest first, so the last one written for a prompt is its oldest state — and
+        // a null `restore` means the prompt goes back to the file it ships with.
+        if (u.restore) await savePromptOverride(u.name, u.promptKind, u.restore);
+        else await deletePromptOverride(u.name);
         continue;
       }
       if (u.kind === 'dataset.delete') {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { isMapOp, opGroup, type ChangeOp, type Changeset } from '../../../../shared/chat';
+import { isMapOp, opGroup, promptTitle, type ChangeOp, type Changeset } from '../../../../shared/chat';
 import type { Subtopic } from '../../../../shared/types';
 import { Photo } from '../Photo';
 
@@ -39,8 +39,75 @@ export function summarise(ops: ChangeOp[]): string {
     count('dataset.update') && plural(count('dataset.update'), 'dataset change'),
     count('dataset.delete') && plural(count('dataset.delete'), 'dataset deletion'),
     ops.some(isMapOp) && plural(ops.filter(isMapOp).length, 'map change'),
+    count('report.resolve') && plural(count('report.resolve'), 'report resolved'),
+    count('prompt.update') && plural(count('prompt.update'), 'prompt edit'),
   ].filter(Boolean);
   return parts.join(' · ');
+}
+
+// ---- Line-level diff, for whole documents (the rulebook, a saved prompt) ----
+//
+// The word diff above is sized for a sentence or three; a 300-line rulebook wants
+// lines, and only the lines that changed, with a little context — a unified diff.
+
+type LinePiece = { text: string; kind: 'same' | 'del' | 'add' };
+
+function diffLines(before: string, after: string): LinePiece[] {
+  const a = before.split('\n');
+  const b = after.split('\n');
+  if (a.length * b.length > 4_000_000) return [{ text: before, kind: 'del' }, { text: after, kind: 'add' }];
+  const lcs: Uint16Array[] = Array.from({ length: a.length + 1 }, () => new Uint16Array(b.length + 1));
+  for (let i = a.length - 1; i >= 0; i -= 1) {
+    for (let j = b.length - 1; j >= 0; j -= 1) {
+      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+  const out: LinePiece[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { out.push({ text: a[i], kind: 'same' }); i += 1; j += 1; }
+    else if (lcs[i + 1][j] >= lcs[i][j + 1]) { out.push({ text: a[i], kind: 'del' }); i += 1; }
+    else { out.push({ text: b[j], kind: 'add' }); j += 1; }
+  }
+  while (i < a.length) { out.push({ text: a[i++], kind: 'del' }); }
+  while (j < b.length) { out.push({ text: b[j++], kind: 'add' }); }
+  return out;
+}
+
+const CONTEXT_LINES = 2;
+
+function DocumentDiff({ before, after }: { before: string; after: string }) {
+  const pieces = diffLines(before, after);
+  // Keep changed lines plus a couple of unchanged lines either side; elide the rest.
+  const keep = new Set<number>();
+  pieces.forEach((p, n) => {
+    if (p.kind === 'same') return;
+    for (let k = Math.max(0, n - CONTEXT_LINES); k <= Math.min(pieces.length - 1, n + CONTEXT_LINES); k += 1) keep.add(k);
+  });
+  const rows: Array<LinePiece | { kind: 'gap'; text: string }> = [];
+  let hidden = 0;
+  pieces.forEach((p, n) => {
+    if (keep.has(n)) {
+      if (hidden) { rows.push({ kind: 'gap', text: `… ${plural(hidden, 'unchanged line')} …` }); hidden = 0; }
+      rows.push(p);
+    } else hidden += 1;
+  });
+  if (hidden) rows.push({ kind: 'gap', text: `… ${plural(hidden, 'unchanged line')} …` });
+  return (
+    <pre className="custom-scroll max-h-80 overflow-auto whitespace-pre-wrap break-words rounded border border-[var(--color-line)] bg-[var(--color-wall-soft)] p-2 font-mono text-[11px] leading-snug">
+      {rows.map((r, n) => (
+        <div
+          key={n}
+          className={
+            r.kind === 'del' ? 'bg-red-100 text-red-900' : r.kind === 'add' ? 'bg-emerald-100 text-emerald-900' : r.kind === 'gap' ? 'py-0.5 italic text-[var(--color-muted)]' : ''
+          }
+        >
+          {r.kind === 'del' ? '− ' : r.kind === 'add' ? '+ ' : '  '}{r.text || ' '}
+        </div>
+      ))}
+    </pre>
+  );
 }
 
 // ---- Word-level diff, for prose fields ----
@@ -284,6 +351,27 @@ function OpBody({ op, topics }: { op: ChangeOp; topics: Record<string, string> }
           {op.action === 'add' && op.field.why && <p className="mt-0.5 italic text-[var(--color-muted)]">{op.field.why}</p>}
         </div>
       );
+    case 'report.resolve':
+      return (
+        <div className="text-xs leading-relaxed">
+          <p className="serif text-sm">
+            <span className={`${ADD} px-1`}>✓ Resolve the visitor report on {op.itemName || 'an item'}</span>
+          </p>
+          <p className="mt-1 italic text-[var(--color-muted)]">“{op.text}”</p>
+        </div>
+      );
+    case 'prompt.update':
+      return (
+        <div className="space-y-1.5">
+          <p className="serif text-sm">
+            {op.before ? `Edit ${promptTitle(op.name).toLowerCase()}` : <span className={`${ADD} px-1`}>+ New saved prompt /{op.name}</span>}
+          </p>
+          {op.promptKind === 'command' && (op.before?.description ?? '') !== op.after.description && (
+            <FieldDiff label="description" before={op.before?.description} after={op.after.description} />
+          )}
+          {(op.before?.body ?? '') !== op.after.body && <DocumentDiff before={op.before?.body ?? ''} after={op.after.body} />}
+        </div>
+      );
   }
 }
 
@@ -297,7 +385,8 @@ function OpRow({
   onForce: () => void;
 }) {
   const adds =
-    op.kind === 'item.add' || op.kind === 'dataset.create' || op.kind === 'map.draw' ||
+    op.kind === 'item.add' || op.kind === 'dataset.create' || op.kind === 'map.draw' || op.kind === 'report.resolve' ||
+    (op.kind === 'prompt.update' && !op.before) ||
     ((op.kind === 'map.region' || op.kind === 'map.ghost') && op.action === 'add');
   const edge = destructive(op) ? 'border-l-red-400' : adds ? 'border-l-emerald-500' : 'border-l-amber-400';
   const settled = !open(op);

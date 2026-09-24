@@ -338,13 +338,55 @@ export type ChangeOp =
       field: MissingField;
       regionId: string;
       regionName: string;
+    })
+  // ---- Visitor reports (types.ts's ItemReport). Filed under the item's dataset. ----
+  | (OpBase & {
+      kind: 'report.resolve';
+      datasetId: string;
+      reportId: string;
+      itemName: string;
+      /** What the visitor wrote, so the diff can show what is being closed. */
+      text: string;
+    })
+  // ---- The prompts Claude works from: the curation rulebook and the saved `/` commands
+  // (services/promptStore.ts). Same gate as the data: Claude proposes, the user accepts.
+  | (OpBase & {
+      kind: 'prompt.update';
+      /** 'rules' for the rulebook; otherwise the command name (`gaps` for /gaps). */
+      name: string;
+      promptKind: PromptKind;
+      /** As it read when staged; null when the command did not exist yet. */
+      before: PromptText | null;
+      after: PromptText;
     });
+
+export type PromptKind = 'rules' | 'command';
+
+/** A prompt's editable text. `description` is what the `/` picker shows for a command
+ *  and is unused for the rulebook. */
+export interface PromptText {
+  description: string;
+  body: string;
+}
 
 export type MapOp = Extract<ChangeOp, { kind: `map.${string}` }>;
 export const isMapOp = (op: ChangeOp): op is MapOp => op.kind.startsWith('map.');
 
-/** What an op is filed under in the diff: the dataset it touches, or its world's map. */
-export const opGroup = (op: ChangeOp): string => (isMapOp(op) ? `map:${op.domain}` : op.datasetId);
+/** The group key a prompt op is filed under, and its heading in the diff. */
+export const promptGroup = (name: string) => `prompt:${name}`;
+export const promptTitle = (name: string) => (name === 'rules' ? 'Curation rules' : `Saved prompt /${name}`);
+
+/** What an op is filed under in the diff: the dataset it touches, its world's map, or
+ *  the prompt it edits. */
+export const opGroup = (op: ChangeOp): string =>
+  isMapOp(op) ? `map:${op.domain}` : op.kind === 'prompt.update' ? promptGroup(op.name) : op.datasetId;
+
+/** Every dataset an op reads or writes — none for map and prompt ops. */
+export function opDatasetIds(op: ChangeOp): string[] {
+  if (isMapOp(op) || op.kind === 'prompt.update' || op.kind === 'dataset.create') return [];
+  if (op.kind === 'item.move') return [op.datasetId, op.toDatasetId];
+  return [op.datasetId];
+}
 
 export type ChangeOpKind = ChangeOp['kind'];
 
@@ -374,7 +416,11 @@ export type UndoRecord =
   | { opId: string; kind: 'dataset.delete'; datasetId: string; dataset: Dataset; regionId?: string }
   /** The whole map as it was before this apply touched it — maps are small, and a
    *  snapshot is the one undo that is right whatever combination of map ops ran. */
-  | { opId: string; kind: 'map'; domain: Domain; before: WorldMap | null };
+  | { opId: string; kind: 'map'; domain: Domain; before: WorldMap | null }
+  | { opId: string; kind: 'report.resolve'; reportId: string }
+  /** `restore` is the stored override as it was — null means there was none, so undo
+   *  deletes the override and the prompt falls back to the file it ships with. */
+  | { opId: string; kind: 'prompt.update'; name: string; promptKind: PromptKind; restore: PromptText | null };
 
 /** open      — has pending ops
  *  applied   — nothing pending, at least one applied

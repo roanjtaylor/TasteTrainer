@@ -96,7 +96,7 @@ export function Home() {
           <div className="mt-4 flex justify-center gap-2">
             {curated ? (
               <button
-                onClick={() => ask('/fields')}
+                onClick={() => ask('/create')}
                 className="rounded-full bg-[var(--color-ink)] px-5 py-2 text-sm text-[var(--color-wall)]"
               >
                 Ask Claude to map this world →
@@ -122,7 +122,7 @@ export function Home() {
           {curated && !hasMap && (
             <p className="mb-4 text-sm text-[var(--color-muted)]">
               This world has no map yet.{' '}
-              <button onClick={() => ask('/map')} className="text-[var(--color-accent)] underline">
+              <button onClick={() => ask('/create')} className="text-[var(--color-accent)] underline">
                 Ask Claude to draw it
               </button>{' '}
               — how this world divides, and what's missing from it.

@@ -17,13 +17,16 @@ import { getDataset, getWorldMap, listDatasets, listItemReports, saveDataset } f
 import { attachImages } from '../routes/curation.ts';
 import { mapWithLimit } from './imageResolvers.ts';
 import { nameKey } from './itemHygiene.ts';
-import { loadRules } from './curationRules.ts';
+import { COMMAND_NAME, RULES_NAME, listCommandPrompts, loadRules, readPrompt } from './promptStore.ts';
 import { openChangeset, patchOps, project, projectMap, rejectOps, stageOps, type Workspace } from './changesets.ts';
 import { applyMapOp, ghostKey } from './worldMap.ts';
 import { newId } from '../util.ts';
 import { DOMAINS, isCuratedDomain, mapSlug, singleWordTopic, slugifyTopic } from '../../../shared/types.ts';
 import type { Dataset, Domain, Item, MapAxis, MapRegion, Subtopic, WorldMap } from '../../../shared/types.ts';
-import { ASK_USER_TOOL, ITEM_PATCH_KEYS, isMapOp, type ChangeOp, type Changeset, type ChatView, type ItemPatch, type MapOp } from '../../../shared/chat.ts';
+import {
+  ASK_USER_TOOL, ITEM_PATCH_KEYS, isMapOp, promptGroup, promptTitle,
+  type ChangeOp, type Changeset, type ChatView, type ItemPatch, type MapOp, type PromptKind, type PromptText,
+} from '../../../shared/chat.ts';
 
 export interface ToolSpec {
   name: string;
@@ -140,16 +143,28 @@ export const TOOL_SPECS: ToolSpec[] = [
     },
   },
   {
-    name: 'search_items',
+    name: 'query_items',
     description:
-      'Find items by text across one dataset or all of them — matches name, maker, creator, description, defining fact and subtopic.',
+      'Find items by CONDITION across one dataset or every dataset — the way you would grep a codebase. Any mix of: free text (matched against name, maker, creator, description, defining fact, subtopic), fields that are empty or missing, a year range, a subtopic, a maker. Use it to audit ("every item with no defining fact", "descriptions under 60 characters", "items before 1950 in Chairs") rather than paging whole datasets. Results are paged; detail "full" returns every field.',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string' },
-        dataset: { ...DATASET_REF, description: 'Limit to one dataset (id or topic). Omit to search everything.' },
+        dataset: { ...DATASET_REF, description: 'Limit to one dataset (id or topic). Omit to search every dataset.' },
+        domain: { type: 'string', enum: [...DOMAINS], description: 'Limit to one world (when no dataset is given).' },
+        text: { type: 'string', description: 'Words that must all appear somewhere in the item (case-insensitive).' },
+        missing: {
+          type: 'array',
+          items: { type: 'string', enum: ['year', 'description', 'definingFact', 'brand', 'creator', 'subtopic', 'url', 'image', 'wikipediaTitle', 'imageQuery'] },
+          description: 'Only items where EVERY listed field is empty or null.',
+        },
+        shortDescription: { type: 'integer', description: 'Only items whose description is shorter than this many characters (thin notes).' },
+        subtopic: { type: 'string', description: 'Only items filed under this subtopic (exact name, case-insensitive).' },
+        maker: { type: 'string', description: 'Only items whose brand or creator contains this.' },
+        yearFrom: { type: 'integer' },
+        yearTo: { type: 'integer' },
+        detail: { type: 'string', enum: ['compact', 'full'], description: 'Default compact (one line per item).' },
+        offset: { type: 'integer', description: 'Skip this many matches (paging).' },
       },
-      required: ['query'],
     },
   },
   {
@@ -166,6 +181,12 @@ export const TOOL_SPECS: ToolSpec[] = [
     description:
       "The user's own curation rulebook: how fields are mapped, the anti-popularity-bias rules, dedup, what makes an item 'defining', and how a whole world is reviewed and mapped. Read it once before proposing new items, restructuring a field, or reviewing or mapping a world (physical or digital).",
     inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'get_commands',
+    description:
+      "The saved prompts behind the dock's `/` commands (what the user types to hand you a thorough ask). Without a name: every command with its description. With a name: that command's full text — read it before proposing an edit to it.",
+    inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'A command name, e.g. "update" for /update.' } } },
   },
   {
     name: 'get_pending_changes',
@@ -381,6 +402,66 @@ export const TOOL_SPECS: ToolSpec[] = [
     },
   },
   {
+    name: 'propose_resolve_reports',
+    description:
+      "Stage closing visitor reports (ids from get_item_reports) you have dealt with — fixed the item, removed it, or judged the report wrong and said why. Stage it in the same batch as the fix so the user accepts both together. A report the user has not seen resolved stays open, so never call this for a report you have not actually looked into.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        reportIds: { type: 'array', items: { type: 'string' } },
+        why: { type: 'string', description: 'One line: what was done about them (fixed / removed / not a real problem, and why).' },
+      },
+      required: ['reportIds', 'why'],
+    },
+  },
+  {
+    name: 'propose_update_rules',
+    description:
+      "Stage an edit to the user's curation rulebook (get_curation_rules) — YOUR standing instructions. Use it when the user corrects you in a way that should hold in every future conversation (\"never include concept cars\", \"descriptions should name what to look at first\"), or when you find the rules ambiguous or wrong in practice. Edit surgically with `edits` (each `old` must appear exactly once in the current text, like a find-and-replace); send `body` only to rewrite the whole document. Never change the rules just to make your current task easier.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        edits: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              old: { type: 'string', description: 'Exact text to replace — must occur exactly once. Include enough surrounding lines to be unique.' },
+              new: { type: 'string', description: 'What it becomes. Empty string deletes the passage.' },
+            },
+            required: ['old', 'new'],
+          },
+        },
+        body: { type: 'string', description: 'The COMPLETE new rulebook, replacing the old one. Prefer `edits`.' },
+        why: { type: 'string', description: 'What prompted this — usually something the user said.' },
+      },
+      required: ['why'],
+    },
+  },
+  {
+    name: 'propose_update_command',
+    description:
+      "Stage an edit to one of the saved `/` prompts (get_commands), or add a new one. The same find-and-replace `edits` as propose_update_rules, or a whole new `body`; a new command needs a `body` and a `description`. Command names are lowercase words (a-z, 0-9, hyphen). Use `$ARGUMENTS` in a body where whatever the user types after the command should go.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'The command name, without the slash.' },
+        description: { type: 'string', description: 'The one-line description the `/` picker shows.' },
+        edits: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { old: { type: 'string' }, new: { type: 'string' } },
+            required: ['old', 'new'],
+          },
+        },
+        body: { type: 'string', description: 'The COMPLETE new prompt text.' },
+        why: { type: 'string' },
+      },
+      required: ['name', 'why'],
+    },
+  },
+  {
     name: 'withdraw_changes',
     description: 'Un-stage changes you proposed earlier in this conversation (ids from get_pending_changes), e.g. because the user asked you to drop or redo them.',
     inputSchema: {
@@ -502,8 +583,12 @@ export function describeOp(op: ChangeOp, topics: Record<string, string>): string
       case 'map.ghost': return `${op.action === 'add' ? 'propose' : 'drop'} missing field ${op.field.topic} on the ${op.domain} map`;
     }
   }
+  if (op.kind === 'prompt.update') {
+    return `${op.before ? 'edit' : 'add'} ${promptTitle(op.name).toLowerCase()}`;
+  }
   const where = topics[op.datasetId] ?? op.datasetId;
   switch (op.kind) {
+    case 'report.resolve': return `resolve the visitor report on "${op.itemName}" in ${where}`;
     case 'item.add': return `add "${op.item.name}" to ${where}`;
     case 'item.update': return `edit "${op.itemName}" in ${where} (${Object.keys(op.patch).join(', ')})`;
     case 'item.remove': return `remove "${op.before.name}" from ${where}`;
@@ -561,30 +646,86 @@ async function getItemsTool(ctx: ToolContext, input: any): Promise<string> {
   return found.map((i) => JSON.stringify(itemForClaude(i), null, 1)).join('\n').slice(0, RESULT_BUDGET);
 }
 
-async function searchItemsTool(ctx: ToolContext, input: any): Promise<string> {
-  const terms = str(input?.query).toLowerCase().split(/\s+/).filter(Boolean);
-  if (!terms.length) throw new ToolError('query is required.');
-  const datasets: Dataset[] = str(input?.dataset)
-    ? [await resolveDataset(ctx, input.dataset)]
+/** The item fields query_items can test for emptiness. */
+const MISSABLE = new Set(['year', 'description', 'definingFact', 'brand', 'creator', 'subtopic', 'url', 'image', 'wikipediaTitle', 'imageQuery']);
+const empty = (v: unknown) => v === null || v === undefined || (typeof v === 'string' && !v.trim());
+
+async function queryItemsTool(ctx: ToolContext, input: any): Promise<string> {
+  const one = str(input?.dataset);
+  const domain = DOMAINS.includes(input?.domain) ? (input.domain as Domain) : undefined;
+  if (domain) guardPersonal(ctx, domain);
+  const datasets: Dataset[] = one
+    ? [await resolveDataset(ctx, one)]
     : (
         await Promise.all(
-          (await listDatasets())
+          (await listDatasets(domain))
             .filter((d) => ctx.personal || d.domain !== 'personal')
             .map((d) => getDataset(d.id)),
         )
       ).filter((d): d is Dataset => !!d);
 
-  const hits: string[] = [];
+  const terms = str(input?.text).toLowerCase().split(/\s+/).filter(Boolean);
+  const missing = list<string>(input?.missing).filter((f) => MISSABLE.has(f));
+  const shorter = Number(input?.shortDescription) > 0 ? Number(input.shortDescription) : 0;
+  const subtopic = str(input?.subtopic).toLowerCase();
+  const maker = str(input?.maker).toLowerCase();
+  const from = Number.isFinite(Number(input?.yearFrom)) && input?.yearFrom !== undefined && input?.yearFrom !== null ? Number(input.yearFrom) : null;
+  const to = Number.isFinite(Number(input?.yearTo)) && input?.yearTo !== undefined && input?.yearTo !== null ? Number(input.yearTo) : null;
+  const unknownMissing = list<string>(input?.missing).filter((f) => !MISSABLE.has(f));
+  if (unknownMissing.length) throw new ToolError(`missing: unknown field(s) ${unknownMissing.join(', ')}. Choose from ${[...MISSABLE].join(', ')}.`);
+
+  const matches: Array<{ ds: Dataset; item: Item }> = [];
   for (const ds of datasets) {
-    for (const i of ds.items) {
-      const hay = [i.name, i.brand, i.creator, i.description, i.definingFact, i.subtopic, String(i.year ?? '')]
-        .join(' ')
-        .toLowerCase();
-      if (terms.every((t) => hay.includes(t))) hits.push(`[${ds.topic}] ${compactLine(i)}`);
-      if (hits.length >= 80) break;
+    for (const item of ds.items) {
+      if (terms.length) {
+        const hay = [item.name, item.brand, item.creator, item.description, item.definingFact, item.subtopic, String(item.year ?? '')].join(' ').toLowerCase();
+        if (!terms.every((t) => hay.includes(t))) continue;
+      }
+      if (missing.length && !missing.every((f) => empty((item as any)[f]))) continue;
+      if (shorter && (item.description ?? '').trim().length >= shorter) continue;
+      if (subtopic && (item.subtopic ?? '').trim().toLowerCase() !== subtopic) continue;
+      if (maker && !`${item.brand} ${item.creator}`.toLowerCase().includes(maker)) continue;
+      if (from !== null && (item.year === null || item.year < from)) continue;
+      if (to !== null && (item.year === null || item.year > to)) continue;
+      matches.push({ ds, item });
     }
   }
-  return hits.length ? `dataset | id | name | maker | year | subtopic\n${hits.join('\n')}` : 'No items match.';
+
+  const full = input?.detail === 'full';
+  const offset = Math.max(0, Number(input?.offset) || 0);
+  const lines: string[] = [];
+  let used = 0;
+  let shown = 0;
+  for (const { ds, item } of matches.slice(offset)) {
+    const line = full
+      ? JSON.stringify({ dataset: ds.topic, ...itemForClaude(item) })
+      : `${ds.topic} | ${compactLine(item)}`;
+    if (used + line.length > RESULT_BUDGET) break;
+    lines.push(line);
+    used += line.length + 1;
+    shown += 1;
+  }
+  const scope = one ? datasets[0].topic : `${datasets.length} dataset${datasets.length === 1 ? '' : 's'}`;
+  if (!matches.length) return `No items match in ${scope}.`;
+  const more =
+    offset + shown < matches.length
+      ? `\n\nShowing matches ${offset + 1}–${offset + shown} of ${matches.length}. Call again with offset ${offset + shown} for more.`
+      : '';
+  const head = full ? '' : 'dataset | id | name | maker | year | subtopic\n';
+  return `${matches.length} match${matches.length === 1 ? '' : 'es'} in ${scope}:\n${head}${lines.join('\n')}${more}`;
+}
+
+async function getCommandsTool(_ctx: ToolContext, input: any): Promise<string> {
+  const name = str(input?.name).toLowerCase().replace(/^\//, '');
+  const all = await listCommandPrompts();
+  if (!name) {
+    return all.length
+      ? all.map((c) => `/${c.name} — ${c.description || '(no description)'}${c.stored ? ' [edited through the chat]' : ''}`).join('\n')
+      : 'There are no saved commands.';
+  }
+  const cmd = all.find((c) => c.name === name);
+  if (!cmd) throw new ToolError(`There is no /${name}. The commands are: ${all.map((c) => `/${c.name}`).join(', ') || '(none)'}.`);
+  return `/${cmd.name} — ${cmd.description}\n\n${cmd.body}`;
 }
 
 async function pendingChangesTool(ctx: ToolContext): Promise<string> {
@@ -1145,6 +1286,107 @@ async function proposeDeleteDataset(ctx: ToolContext, input: any): Promise<strin
   return `Staged deleting the (emptied) dataset ${ds.topic}.\n${STAGED_NOTE}`;
 }
 
+// ---- Visitor reports ----
+
+async function proposeResolveReports(ctx: ToolContext, input: any): Promise<string> {
+  const ids = [...new Set(list<string>(input?.reportIds).map(String))];
+  const why = str(input?.why);
+  if (!ids.length) throw new ToolError('reportIds is required.');
+  if (!why) throw new ToolError('Say in `why` what was done about them.');
+
+  const open = (await listItemReports({ status: 'open' })).filter((r) => ctx.personal || r.domain !== 'personal');
+  const cs = await openChangeset(ctx.threadId);
+  const alreadyStaged = new Set(
+    (cs?.ops ?? []).filter((o) => o.kind === 'report.resolve' && o.status === 'pending').map((o) => (o as any).reportId as string),
+  );
+  const ops: ChangeOp[] = [];
+  const topics: Record<string, string> = {};
+  const refused: string[] = [];
+  for (const id of ids) {
+    const r = open.find((x) => x.id === id);
+    if (!r) { refused.push(`${id} — not an open report`); continue; }
+    if (alreadyStaged.has(id)) { refused.push(`${id} — already staged for resolution`); continue; }
+    topics[r.datasetId] ??= (await getDataset(r.datasetId))?.topic ?? r.datasetId;
+    ops.push({ id: newId(), kind: 'report.resolve', status: 'pending', why, datasetId: r.datasetId, reportId: r.id, itemName: r.itemName, text: r.text });
+  }
+  if (ops.length) await stage(ctx, ops, topics);
+  return [
+    `Staged resolving ${ops.length} report${ops.length === 1 ? '' : 's'}.`,
+    refused.length ? `Refused ${refused.length}:\n${refused.map((r) => `- ${r}`).join('\n')}` : '',
+    STAGED_NOTE,
+  ].filter(Boolean).join('\n');
+}
+
+// ---- The prompts: rulebook and saved commands ----
+
+/** Apply find-and-replace edits the way Claude Code's Edit tool does: each `old` must
+ *  occur exactly once, so an edit can never land somewhere other than where it was aimed. */
+function applyEdits(text: string, edits: unknown): string {
+  let out = text;
+  const items = list<{ old?: unknown; new?: unknown }>(edits);
+  if (!items.length) throw new ToolError('Give `edits` (find-and-replace pairs) or a whole `body`.');
+  items.forEach((e, n) => {
+    const oldText = typeof e?.old === 'string' ? e.old : '';
+    const newText = typeof e?.new === 'string' ? e.new : '';
+    if (!oldText) throw new ToolError(`edits[${n}]: \`old\` is required and must be the exact current text.`);
+    const first = out.indexOf(oldText);
+    if (first === -1) throw new ToolError(`edits[${n}]: \`old\` was not found in the current text. Read it again (get_curation_rules / get_commands) and copy the passage exactly.`);
+    if (out.indexOf(oldText, first + 1) !== -1) throw new ToolError(`edits[${n}]: \`old\` occurs more than once — include more surrounding text so it is unique.`);
+    out = out.slice(0, first) + newText + out.slice(first + oldText.length);
+  });
+  return out;
+}
+
+async function stagePromptUpdate(
+  ctx: ToolContext,
+  name: string,
+  promptKind: PromptKind,
+  before: PromptText | null,
+  after: PromptText,
+  why: string,
+): Promise<string> {
+  if (before && before.body === after.body && before.description === after.description) {
+    return `Nothing to change — ${promptTitle(name)} already reads like that.`;
+  }
+  const cs = await openChangeset(ctx.threadId);
+  const dup = (cs?.ops ?? []).find((o) => o.kind === 'prompt.update' && o.status === 'pending' && o.name === name);
+  if (dup) {
+    throw new ToolError(`An edit to ${promptTitle(name)} is already staged in this conversation and awaiting the user (op ${dup.id}). Withdraw it (withdraw_changes) if you want to propose a different one — a second staged edit to the same text would conflict with the first.`);
+  }
+  await stage(
+    ctx,
+    [{ id: newId(), kind: 'prompt.update', status: 'pending', why: why || undefined, name, promptKind, before, after }],
+    { [promptGroup(name)]: promptTitle(name) },
+  );
+  return `Staged ${before ? 'an edit to' : 'a new'} ${promptTitle(name)}. It takes effect for every future conversation once the user accepts — it does not change what you were told in this one.\n${STAGED_NOTE}`;
+}
+
+async function proposeUpdateRules(ctx: ToolContext, input: any): Promise<string> {
+  const why = str(input?.why);
+  if (!why) throw new ToolError('Say in `why` what prompted this — usually something the user said.');
+  const current = await readPrompt(RULES_NAME);
+  const before: PromptText = { description: '', body: current?.body ?? '' };
+  const body = typeof input?.body === 'string' && input.body.trim() ? input.body.trim() : applyEdits(before.body, input?.edits);
+  if (body.length < 400) throw new ToolError('That would leave the rulebook almost empty. Send the complete document in `body`, or use `edits` for a targeted change.');
+  return stagePromptUpdate(ctx, RULES_NAME, 'rules', before, { description: '', body }, why);
+}
+
+async function proposeUpdateCommand(ctx: ToolContext, input: any): Promise<string> {
+  const name = str(input?.name).toLowerCase().replace(/^\//, '');
+  const why = str(input?.why);
+  if (!COMMAND_NAME.test(name)) throw new ToolError('name must be lowercase letters, digits and hyphens, e.g. "update".');
+  if (name === RULES_NAME) throw new ToolError('"rules" is the curation rulebook — use propose_update_rules.');
+  if (!why) throw new ToolError('Say in `why` what prompted this.');
+  const current = await readPrompt(name);
+  const before: PromptText | null = current ? { description: current.description, body: current.body } : null;
+  const wholeBody = typeof input?.body === 'string' && input.body.trim() ? input.body.trim() : '';
+  if (!before && !wholeBody) throw new ToolError(`There is no /${name} yet, so a new one needs its complete \`body\` (and a \`description\`).`);
+  const body = wholeBody || applyEdits(before!.body, input?.edits);
+  const description = str(input?.description) || before?.description || '';
+  if (!description) throw new ToolError('A command needs a one-line `description` for the picker.');
+  return stagePromptUpdate(ctx, name, 'command', before, { description, body }, why);
+}
+
 async function withdrawChanges(ctx: ToolContext, input: any): Promise<string> {
   const cs = await openChangeset(ctx.threadId);
   if (!cs) return 'Nothing is staged.';
@@ -1160,11 +1402,15 @@ const HANDLERS: Record<string, (ctx: ToolContext, input: any) => Promise<string>
   list_datasets: listDatasetsTool,
   get_dataset: getDatasetTool,
   get_items: getItemsTool,
-  search_items: searchItemsTool,
+  query_items: queryItemsTool,
   get_world_map: getWorldMapTool,
   get_curation_rules: () => loadRules(),
+  get_commands: getCommandsTool,
   get_pending_changes: pendingChangesTool,
   get_item_reports: getItemReportsTool,
+  propose_resolve_reports: proposeResolveReports,
+  propose_update_rules: proposeUpdateRules,
+  propose_update_command: proposeUpdateCommand,
   propose_add_items: proposeAddItems,
   propose_update_items: proposeUpdateItems,
   propose_remove_items: proposeRemoveItems,

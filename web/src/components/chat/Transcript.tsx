@@ -32,9 +32,20 @@ function labelOf(block: ToolBlock): string {
     case 'list_datasets': return `Looked at the ${input.domain ? `${input.domain} ` : ''}shelf`;
     case 'get_dataset': return `Read${named}${input.detail === 'full' ? ' in full' : ''}${input.subtopic ? ` · ${input.subtopic}` : ''}`;
     case 'get_items': return `Read ${plural(input.itemIds?.length ?? 0, 'item')} in full`;
-    case 'search_items': return `Searched your items for “${input.query ?? '…'}”`;
+    case 'query_items': {
+      const parts = [
+        input.text && `“${input.text}”`,
+        Array.isArray(input.missing) && input.missing.length && `missing ${input.missing.join(', ')}`,
+        input.shortDescription && `descriptions under ${input.shortDescription} chars`,
+        input.subtopic && `in ${input.subtopic}`,
+        input.maker && `by ${input.maker}`,
+        (input.yearFrom || input.yearTo) && `${input.yearFrom ?? '…'}–${input.yearTo ?? '…'}`,
+      ].filter(Boolean);
+      return `Queried ${ds ? String(input.dataset) : input.domain ? `the ${input.domain} world` : 'every dataset'}${parts.length ? `: ${parts.join(', ')}` : ''}`;
+    }
     case 'get_world_map': return `Read the ${input.domain ?? ''} world map`;
     case 'get_curation_rules': return 'Read your curation rules';
+    case 'get_commands': return input.name ? `Read the /${input.name} prompt` : 'Looked at the saved prompts';
     case 'get_pending_changes': return 'Checked what’s already staged';
     case 'propose_add_items': return `Proposing ${plural(countSoFar(block, 'items', 'name'), 'new item')}`;
     case 'propose_update_items': return `Proposing edits to ${plural(countSoFar(block, 'updates', 'itemId'), 'item')}`;
@@ -45,6 +56,9 @@ function labelOf(block: ToolBlock): string {
     case 'propose_delete_dataset': return `Proposing to delete the emptied dataset${input.dataset ? ` ${input.dataset}` : ''}`;
     case 'propose_draw_map': return `Proposing ${input.redraw ? 'a redrawn' : 'a'} map of the ${input.domain ?? ''} world`;
     case 'propose_map_changes': return 'Proposing changes to the map';
+    case 'propose_resolve_reports': return `Proposing to resolve ${plural(input.reportIds?.length ?? 0, 'visitor report')}`;
+    case 'propose_update_rules': return 'Proposing a change to your curation rules';
+    case 'propose_update_command': return `Proposing a change to /${input.name ?? '…'}`;
     case 'withdraw_changes': return `Withdrew ${plural(input.opIds?.length ?? 0, 'staged change')}`;
     case ASK_USER_TOOL: return 'Asked you a question';
     case 'WebSearch': return `Searched the web for “${input.query ?? '…'}”`;

@@ -76,10 +76,22 @@ export const isRunning = (threadId: string) => active.has(threadId);
 export const liveThread = (threadId: string) => active.get(threadId)?.thread ?? null;
 
 /** Hand Claude the user's answer to the question it is waiting on. False if it isn't
- *  waiting on one (or that one has since been answered / the turn ended). */
+ *  waiting on one (or that one has since been answered / the turn ended).
+ *
+ *  One question has TWO ids, and the browser only knows one of them. The Space mints a
+ *  fresh `callId` for every relayed tool call (its MCP handler never sees the model's
+ *  tool_use id), and that is what `run.question` was keyed by. The transcript, and so the
+ *  browser, knows the question by its tool block's id — the model's tool_use id from
+ *  `tool_start`. Matching only the first meant every answer came back 409 ("Claude is
+ *  not waiting on that question any more"). Only one question is ever open per turn, so
+ *  an answer addressed to the open ask_user block is an answer to the open question. */
 export function answerQuestion(threadId: string, callId: string, answer: string): boolean {
   const run = active.get(threadId);
-  if (!run?.question || run.question.callId !== callId) return false;
+  if (!run?.question) return false;
+  const openBlock = run.message.blocks.some(
+    (b) => b.type === 'tool' && b.name === ASK_USER_TOOL && !b.done && b.id === callId,
+  );
+  if (run.question.callId !== callId && !openBlock) return false;
   run.question.resolve(answer);
   return true;
 }
@@ -160,7 +172,7 @@ function release(): void {
 
 // ---- The prompt ----
 
-/** Inventories past this size are left for get_dataset / search_items to page through
+/** Inventories past this size are left for get_dataset / query_items to page through
  *  rather than spent on every turn's prompt. */
 const INLINE_INVENTORY_MAX = 400;
 
@@ -179,7 +191,7 @@ async function describeView(view: ChatView, personal: boolean): Promise<string> 
     if (ds.items.length <= INLINE_INVENTORY_MAX) {
       lines.push('', `All ${ds.items.length} items:`, compactInventory(ds.items));
     } else {
-      lines.push('', `It has ${ds.items.length} items — too many to list here. Use get_dataset (paged) or search_items.`);
+      lines.push('', `It has ${ds.items.length} items — too many to list here. Use get_dataset (paged) or query_items.`);
     }
     const item = view.itemId ? ds.items.find((i) => i.id === view.itemId) : null;
     if (item) {
@@ -217,8 +229,11 @@ The app is the storage and the display. You are the intelligence. The user talks
 
 # How you work here
 - You see what they see. Their current view is described below; "this", "here", "these" refer to it.
-- READ freely: get_dataset, get_items, search_items, list_datasets, get_world_map, get_item_reports (what visitors have flagged wrong on the public embed widget). Use WebSearch / WebFetch when a fact matters and you aren't sure of it — years, makers and attributions should be right, not plausible.
+- READ freely: get_dataset, get_items, query_items (grep for the data: by text, empty fields, thin descriptions, year range, subtopic, maker — across one dataset or all), list_datasets, get_world_map, get_item_reports (what visitors have flagged wrong on the public embed widget), get_commands. Use WebSearch / WebFetch when a fact matters and you aren't sure of it — years, makers and attributions should be right, not plausible.
 - CHANGE only through the propose_* tools. They never write: each stages a change the user then sees as a red/green diff and accepts, edits or discards — exactly like a code review. So never say a change "has been made" or "is saved"; say what you've proposed and that it's waiting for them. Proposing is how you ask "shall I?" — don't ask that in words.
+- WHOLE-DATASET passes are normal work, not a special mode. "Add more detail to every description", "check every year", "make the facts sharper": read the dataset in full (paged), then stage propose_update_items in batches of 10–15 patches, keeping what is already good. Use query_items first to find exactly which items need it, so a pass touches what is thin and leaves the rest alone.
+- REPORTS: when a visitor report (or the user) points at one item, decide the SCOPE before fixing. Ask: is this a fault of this one item, or a pattern — the same mistake, convention or gap likely across the dataset (all years given as release rather than design year; every description missing what to look at; a maker credited inconsistently)? Check the rest with query_items or get_dataset; if it is a pattern, propose the fix everywhere it applies, not only where it was noticed, and say that you did. Stage propose_resolve_reports for the reports you dealt with in the same batch as the fix.
+- YOUR RULES ARE EDITABLE. get_curation_rules is the user's standing standard and get_commands are their saved asks. When the user corrects you in a way that should hold in future conversations, or you find a rule wrong or ambiguous in practice, propose the change with propose_update_rules / propose_update_command (targeted find-and-replace edits) — it goes through the same review as any other change. Do not rewrite the rules to suit the task in hand.
 - ASK when it matters: ${ASK_USER_TOOL} puts a question to the user and waits for the answer, mid-turn, then you carry on. Use it when the request is genuinely ambiguous in a way that changes what you would propose (which of two fields, how strict, how many, which reading of a brief), or when you have found something they should decide before you do a lot of work. Give short options where you can; they can always type something else. Don't ask about things you can settle with a read or a search, and don't ask permission — make routine judgement calls yourself and say what you assumed. A conversation can also just continue: they will reply to whatever you say.
 - The user may accept some of what you've staged while you are still working; what you stage after that simply opens a fresh set. Never re-propose something already accepted.
 - The propose tools validate, and their results tell you what was refused and why. Read them and fix what you can in the same turn.
