@@ -31,7 +31,14 @@ function TweetTile({ item }: { item: EmbedItem }) {
  * screen. Pointer Events (not separate mouse/touch handlers) so drag-to-pan and
  * two-finger pinch-to-zoom share one code path.
  */
-export function Mosaic({ items, onOpenItem }: { items: EmbedItem[]; onOpenItem: (index: number) => void }) {
+export function Mosaic({
+  items,
+  onOpenItem,
+}: {
+  items: EmbedItem[];
+  /** `rect` is the tapped tile's box on screen, for animating out of it. */
+  onOpenItem: (index: number, rect?: DOMRect) => void;
+}) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [transform, setTransform] = useState({ scale: 1, x: 0, y: 0 });
   const [transitioning, setTransitioning] = useState(false);
@@ -103,6 +110,7 @@ export function Mosaic({ items, onOpenItem }: { items: EmbedItem[]; onOpenItem: 
   const gesture = useRef<null | { mode: 'pan'; startX: number; startY: number; origin: { x: number; y: number } } | { mode: 'pinch'; startDist: number; startScale: number; midpoint: { x: number; y: number } }>(null);
   const dragMoved = useRef(0);
   const downItem = useRef<number | null>(null);
+  const downEl = useRef<HTMLElement | null>(null);
 
   function viewportPoint(e: { clientX: number; clientY: number }) {
     const vp = viewportRef.current!.getBoundingClientRect();
@@ -114,6 +122,7 @@ export function Mosaic({ items, onOpenItem }: { items: EmbedItem[]; onOpenItem: 
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     dragMoved.current = 0;
     downItem.current = itemIndex ?? null;
+    downEl.current = itemIndex === undefined ? null : (e.currentTarget as HTMLElement);
 
     if (pointers.current.size === 1) {
       gesture.current = { mode: 'pan', startX: e.clientX, startY: e.clientY, origin: { x: transform.x, y: transform.y } };
@@ -152,7 +161,7 @@ export function Mosaic({ items, onOpenItem }: { items: EmbedItem[]; onOpenItem: 
       // A near-still pointer-down/up on a tile is a tap: open that picture. A real
       // drag (panning) must never also open one.
       if (dragMoved.current < 6 && downItem.current !== null) {
-        onOpenItem(downItem.current);
+        onOpenItem(downItem.current, downEl.current?.getBoundingClientRect());
       }
       downItem.current = null;
     } else if (pointers.current.size === 1) {
@@ -203,20 +212,6 @@ export function Mosaic({ items, onOpenItem }: { items: EmbedItem[]; onOpenItem: 
     return () => vp.removeEventListener('wheel', handler);
   }, [zoomAt]);
 
-  function zoomButton(dir: 1 | -1) {
-    const vp = viewportRef.current;
-    if (!vp) return;
-    const center = { x: vp.clientWidth / 2, y: vp.clientHeight / 2 };
-    zoomAt(center, transform.scale * (dir > 0 ? 1.5 : 1 / 1.5), true);
-  }
-
-  function resetView() {
-    const scale = fitScale();
-    setTransitioning(true);
-    setTransform({ scale, ...centerRect(scale) });
-    window.setTimeout(() => setTransitioning(false), 180);
-  }
-
   const grid = useMemo(
     () =>
       items.map((item, i) => ({
@@ -228,10 +223,8 @@ export function Mosaic({ items, onOpenItem }: { items: EmbedItem[]; onOpenItem: 
     [items, cols],
   );
 
-  const atFloor = transform.scale <= fitScale() * 0.75;
-
   return (
-    <div className="relative h-full w-full overflow-hidden bg-[var(--color-ink)]">
+    <div className="relative h-full w-full overflow-hidden bg-[var(--color-wall)]">
       <div
         ref={viewportRef}
         className="h-full w-full cursor-grab touch-none select-none active:cursor-grabbing"
@@ -272,34 +265,6 @@ export function Mosaic({ items, onOpenItem }: { items: EmbedItem[]; onOpenItem: 
           ))}
         </div>
       </div>
-
-      {/* Zoom controls — the gestures above cover most of it, but a trackpad-less
-          mouse or a screen reader user needs buttons too. */}
-      <div className="absolute right-3 top-3 z-10 flex flex-col overflow-hidden rounded-full bg-[var(--color-ink)]/70 backdrop-blur">
-        <button
-          onClick={() => zoomButton(1)}
-          aria-label="Zoom in"
-          className="flex h-8 w-8 items-center justify-center text-[var(--color-wall)] hover:bg-[var(--color-ink)]"
-        >
-          +
-        </button>
-        <div className="h-px bg-[var(--color-wall)]/20" />
-        <button
-          onClick={() => zoomButton(-1)}
-          aria-label="Zoom out"
-          className="flex h-8 w-8 items-center justify-center text-[var(--color-wall)] hover:bg-[var(--color-ink)]"
-        >
-          −
-        </button>
-      </div>
-      {!atFloor && (
-        <button
-          onClick={resetView}
-          className="absolute bottom-3 left-3 z-10 rounded-full bg-[var(--color-ink)]/70 px-3 py-1.5 text-xs text-[var(--color-wall)] backdrop-blur hover:bg-[var(--color-ink)]"
-        >
-          Zoom to fit
-        </button>
-      )}
     </div>
   );
 }

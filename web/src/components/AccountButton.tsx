@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 
 // The account's home in the chrome: the window's top-right corner, not a bare
@@ -13,6 +13,7 @@ import { useAuth } from '../lib/auth';
 export function AccountButton({ className = '' }: { className?: string }) {
   const { email, signOut } = useAuth();
   const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (!open) return;
@@ -42,9 +43,9 @@ export function AccountButton({ className = '' }: { className?: string }) {
         title={`Signed in as ${email}`}
         aria-label="Account"
         aria-expanded={open}
-        className={`h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-medium text-[var(--color-muted)] transition-colors hover:text-[var(--color-ink)] ${className}`}
+        className={`h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-medium text-[var(--color-muted)] transition-colors hover:text-[var(--color-ink)] xl:h-14 xl:w-14 ${className}`}
       >
-        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
+        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--color-accent)]/15 text-[var(--color-accent)] xl:h-12 xl:w-12 xl:text-xl">
           {initial}
         </span>
       </button>
@@ -54,6 +55,15 @@ export function AccountButton({ className = '' }: { className?: string }) {
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-2 shadow-lg">
             <p className="truncate px-2 py-1 text-xs text-[var(--color-muted)]">{email}</p>
+            <button
+              onClick={() => {
+                setOpen(false);
+                navigate('/iframe');
+              }}
+              className="mt-1 w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-[var(--color-wall-soft)]"
+            >
+              Embed tester
+            </button>
             <button
               onClick={() => {
                 setOpen(false);

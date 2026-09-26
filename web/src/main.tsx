@@ -51,14 +51,14 @@ function AppShell() {
         {/* Below `lg` there's no reliable margin for the gutter column below to sit
             in, so the queue falls back to a small floating box here. */}
         <TaskNotifications variant="overlay" />
-        {/* Top-right of the window, in the right margin. Only from `xl`, where the margin
-            is wide enough to clear the nav's own actions; Nav carries these below that.
+        {/* Top-right of the window, always: fixed there at every width, with the nav
+            padded on its right (below `xl`) to stay clear of it.
             The notification rail shares this margin and stops below it (`xl:top-14`).
             One shared container, not separately-positioned ones: each button in its own
             `fixed` wrapper would open its own stacking context, so the account menu's
             z-50 would only out-rank content inside its own wrapper and its neighbour
             would paint over it. A single row fixes both the layout and the stacking. */}
-        <div className="fixed right-3 top-3 z-40 hidden items-center gap-2 xl:flex">
+        <div className="fixed right-3 top-3 z-40 flex items-center gap-2">
           <EmbedTesterButton className="flex border border-[var(--color-line)] bg-[var(--color-card)]/90 shadow-sm backdrop-blur" />
           <AccountButton className="flex border border-[var(--color-line)] bg-[var(--color-card)]/90 shadow-sm backdrop-blur" />
         </div>

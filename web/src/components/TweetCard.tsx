@@ -66,25 +66,29 @@ export function TweetCard({
           }}
           aria-expanded={false}
           aria-label="Show thread"
-          className={`flex cursor-pointer flex-col gap-2 overflow-hidden p-4 hover:bg-[var(--color-wall-soft)] ${
+          className={`cursor-pointer overflow-hidden hover:bg-[var(--color-wall-soft)] ${
             stacked ? `${HAND} ${CARD} z-10 shadow-sm` : 'aspect-[4/3] w-full'
           }`}
         >
-          <Byline tweet={lead} fallback={item} />
-          {/* min-h-0 lets the text be the part that gives way, so the footer always fits. */}
-          <p className="serif min-h-0 flex-1 overflow-hidden whitespace-pre-line text-[15px] leading-snug">
-            {lead?.text ?? item.name}
-          </p>
-          <p className="flex shrink-0 items-center justify-between text-xs text-[var(--color-muted)]">
-            {stacked ? (
-              <span className="rounded-full bg-[var(--color-ink)]/80 px-2.5 py-0.5 text-[var(--color-wall)]">
-                +{own.length - 1} more
-              </span>
-            ) : (
-              <span>{item.subtopic}</span>
-            )}
-            <span>{item.year ?? ''}</span>
-          </p>
+          <ScaledTile stacked={stacked}>
+            <div className="flex h-full flex-col gap-2 p-4">
+              <Byline tweet={lead} fallback={item} />
+              {/* min-h-0 lets the text be the part that gives way, so the footer always fits. */}
+              <p className="serif min-h-0 flex-1 overflow-hidden whitespace-pre-line text-[15px] leading-snug">
+                {lead?.text ?? item.name}
+              </p>
+              <p className="flex shrink-0 items-center justify-between text-xs text-[var(--color-muted)]">
+                {stacked ? (
+                  <span className="rounded-full bg-[var(--color-ink)]/80 px-2.5 py-0.5 text-[var(--color-wall)]">
+                    +{own.length - 1} more
+                  </span>
+                ) : (
+                  <span>{item.subtopic}</span>
+                )}
+                <span>{item.year ?? ''}</span>
+              </p>
+            </div>
+          </ScaledTile>
         </div>
       )}
 
@@ -119,6 +123,28 @@ export function TweetCard({
         </div>
       )}
     </figure>
+  );
+}
+
+// The closed tile is laid out once at a fixed design size and then scaled by the wall's
+// `--tile-scale` variable (set once per zoom step on the grid in DatasetView), so zooming
+// shrinks the tile like a picture — nothing re-measures or re-wraps per tile. A stacked
+// hand's front card is 90% of the cell wide, so its design size is 90% of the plain one.
+export const TILE_W = 320;
+const TILE_H = 240;
+
+function ScaledTile({ stacked, children }: { stacked: boolean; children: ReactNode }) {
+  return (
+    <div
+      className="origin-top-left"
+      style={{
+        width: stacked ? TILE_W * 0.9 : TILE_W,
+        height: stacked ? TILE_H * 0.91 : TILE_H,
+        transform: 'scale(var(--tile-scale, 1))',
+      }}
+    >
+      {children}
+    </div>
   );
 }
 

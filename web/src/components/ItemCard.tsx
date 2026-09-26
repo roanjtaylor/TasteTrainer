@@ -9,7 +9,7 @@ import { Photo } from './Photo';
 // used to break up the mosaic every time you looked at one item, leaving a hole in
 // the wall exactly where your eye was. `onOpen` is owned by the grid (Browse in
 // DatasetView.tsx), which is what decides which item's modal is open.
-export function ItemCard({ item, onOpen }: { item: Item; onOpen: () => void }) {
+export function ItemCard({ item, onOpen, sizes }: { item: Item; onOpen: () => void; sizes?: string }) {
   return (
     <figure className="group overflow-hidden border border-[var(--color-line)] bg-[var(--color-card)]">
       <div
@@ -26,7 +26,7 @@ export function ItemCard({ item, onOpen }: { item: Item; onOpen: () => void }) {
         aria-label={`View ${item.name || 'item'}`}
         className="relative aspect-[4/3] w-full cursor-pointer bg-[var(--color-wall-soft)]"
       >
-        <Photo src={item.image} alt={item.name} />
+        <Photo src={item.image} alt={item.name} sizes={sizes} />
         <CaptureBadge capture={item.capture} year={item.year} />
         <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent p-3 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
           <div className="flex items-baseline justify-between gap-2 text-white">

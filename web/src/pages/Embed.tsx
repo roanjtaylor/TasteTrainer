@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { EMBED_CONFIG_MESSAGE, EMBED_MODE_MESSAGE, EMBED_READY_MESSAGE } from '../lib/embedProtocol';
 import { DOMAINS, DOMAIN_LABELS, slugifyTopic } from '../../../shared/types';
@@ -9,6 +9,7 @@ import { supabase } from '../lib/supabase';
 import { thumbSrcSet } from '../lib/image';
 import { Photo } from '../components/Photo';
 import { Mosaic } from '../components/Mosaic';
+import { ShuffleButton } from '../components/ShuffleButton';
 import { TweetThreadList } from '../components/TweetCard';
 
 // Every world, the personal one included. A personal topic marked private reads as
@@ -494,6 +495,10 @@ function DatasetPicker({
 // (a zoomable/pannable mosaic of every picture, Mosaic.tsx) ----
 function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
   const [viewMode, setViewMode] = useState<'slideshow' | 'mosaic'>('slideshow');
+  // What's actually drawn lags `viewMode` (which the switches read): flipping to the
+  // mosaic mounts a tile per picture, and done in the same render as the click it held
+  // the switch's knob still for a moment. The knob moves first; the view follows.
+  const shownMode = useDeferredValue(viewMode);
   const [playMode, setPlayMode] = useState<PlayMode>('shuffle');
   const [order, setOrder] = useState<number[]>(() => buildOrder(ds.items, 'shuffle'));
   const [pos, setPos] = useState(0);
@@ -503,14 +508,89 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
   // a button/keyboard step), so the animation carries on from where the finger
   // left it rather than jumping back to centre first.
   const [slide, setSlide] = useState<{ prevPos: number; dir: 1 | -1; fromX: number } | null>(null);
+  // Set when a picture was opened by tapping its tile in the mosaic: that's a look at
+  // one picture, not the shuffle slideshow, so there's no next/previous or switches —
+  // just a Back button (top left) back to the mosaic exactly as it was left. The Mosaic stays
+  // mounted underneath (hidden) so its zoom and pan survive; `mosaicSeen` mounts it
+  // the first time it's asked for and keeps it, so a slideshow-only visitor never
+  // pays for every tile loading.
+  const [solo, setSolo] = useState(false);
+  const [mosaicSeen, setMosaicSeen] = useState(false);
+  useEffect(() => {
+    if (shownMode === 'mosaic') setMosaicSeen(true);
+  }, [shownMode]);
+  const closeSolo = useCallback(() => {
+    setSolo(false);
+    setViewMode('mosaic');
+  }, []);
+
+  // The "genie": the picture grows out of the tile that was tapped and, on close,
+  // shrinks back into it. The picture's frame is moved and clipped from the tile's
+  // box (`originRef`, in this frame's own coordinates) to the whole frame — a uniform
+  // scale so nothing stretches, with a clip that opens up as it grows, and a little
+  // spring on the way out. Web Animations API, so it can be played in reverse and
+  // knows when it's done. The Mosaic stays put beneath, which is what it lands on.
+  const frameRef = useRef<HTMLDivElement>(null);
+  const soloWrapRef = useRef<HTMLDivElement>(null);
+  const originRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  const closingRef = useRef(false);
+
+  function playGenie(direction: 'open' | 'close', onDone?: () => void) {
+    const el = soloWrapRef.current;
+    const o = originRef.current;
+    const f = frameRef.current;
+    if (!el || !o || !f || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      onDone?.();
+      return;
+    }
+    const W = f.clientWidth;
+    const H = f.clientHeight;
+    const s = Math.max(o.w / W, o.h / H);
+    const dx = o.x + o.w / 2 - W / 2;
+    const dy = o.y + o.h / 2 - H / 2;
+    const ix = Math.max(0, (W - o.w / s) / 2);
+    const iy = Math.max(0, (H - o.h / s) / 2);
+    const tile = { transform: `translate(${dx}px, ${dy}px) scale(${s})`, clipPath: `inset(${iy}px ${ix}px round ${8 / s}px)` };
+    const full = { transform: 'translate(0px, 0px) scale(1)', clipPath: 'inset(0px 0px round 0px)' };
+    const opening = direction === 'open';
+    const frames = opening ? [tile, full] : [full, tile];
+    const anim = el.animate(frames, {
+      duration: opening ? 460 : 340,
+      easing: opening ? 'cubic-bezier(0.34, 1.25, 0.5, 1)' : 'cubic-bezier(0.55, 0, 0.3, 1)',
+      fill: opening ? 'none' : 'forwards',
+    });
+    anim.onfinish = () => onDone?.();
+  }
+
+  useLayoutEffect(() => {
+    if (solo) playGenie('open');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [solo]);
+
+  const requestClose = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    playGenie('close', () => {
+      closingRef.current = false;
+      closeSolo();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closeSolo]);
+
+  useEffect(() => {
+    if (!solo) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && requestClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [solo, requestClose]);
 
   const goTo = useCallback(
     (newPos: number, dir: 1 | -1, fromX = 0) => {
-      if (order.length < 2 || slide) return;
+      if (order.length < 2 || slide || solo) return;
       setSlide({ prevPos: pos, dir, fromX });
       setPos(newPos);
     },
-    [order.length, pos, slide],
+    [order.length, pos, slide, solo],
   );
   const goNext = useCallback((fromX = 0) => goTo((pos + 1) % order.length, 1, fromX), [goTo, pos, order.length]);
   const goPrev = useCallback((fromX = 0) => goTo((pos - 1 + order.length) % order.length, -1, fromX), [goTo, pos, order.length]);
@@ -599,15 +679,25 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
     [ds.items, order, pos],
   );
 
-  // Tapping a tile in the mosaic jumps the slideshow straight to it, no transition.
+  // The mosaic is always oldest to newest (undated last), the dataset view's default
+  // order, whatever the slideshow's shuffle switch says. `mosaicOrder[t]` is the
+  // `ds.items` index of tile t.
+  const mosaicOrder = useMemo(() => buildOrder(ds.items, 'chronological'), [ds.items]);
+  const mosaicItems = useMemo(() => mosaicOrder.map((i) => ds.items[i]), [mosaicOrder, ds.items]);
+
+  // Tapping a tile in the mosaic shows that picture on its own, no transition (see `solo`).
   const openItemIndex = useCallback(
-    (itemIndex: number) => {
-      const p = order.indexOf(itemIndex);
+    (tile: number, rect?: DOMRect) => {
+      const f = frameRef.current?.getBoundingClientRect();
+      originRef.current =
+        rect && f ? { x: rect.left - f.left, y: rect.top - f.top, w: rect.width, h: rect.height } : null;
+      const p = order.indexOf(mosaicOrder[tile]);
       setSlide(null);
       setPos(p === -1 ? 0 : p);
+      setSolo(true);
       setViewMode('slideshow');
     },
-    [order],
+    [order, mosaicOrder],
   );
 
   // The card flip (click the picture -> its info + a report button, on the back) and
@@ -667,7 +757,7 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
   // Warm the cache for both neighbours — whichever way the visitor goes next, same
   // srcset + sizes as the Photo that will show it, so the browser reuses the file.
   useEffect(() => {
-    if (viewMode !== 'slideshow' || order.length < 2) return;
+    if (viewMode !== 'slideshow' || order.length < 2 || solo) return;
     for (const d of [1, -1]) {
       const src = ds.items[order[(pos + d + order.length) % order.length]]?.image;
       if (!src) continue;
@@ -679,7 +769,7 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
       }
       img.src = src;
     }
-  }, [pos, order, viewMode, ds.items]);
+  }, [pos, order, viewMode, ds.items, solo]);
 
   if (ds.items.length === 0) {
     return (
@@ -690,7 +780,8 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
   }
 
   const current = ds.items[order[pos]];
-  const canBrowse = ds.items.length > 1;
+  // A solo picture (from the mosaic) has nowhere to browse to: no arrows, no switches.
+  const canBrowse = ds.items.length > 1 && !solo;
 
   // Every piece of chrome (back, mode toggles, caption, prev/next) lives in this
   // `group` and only shows on hover — the photo itself displays uninterrupted
@@ -703,8 +794,21 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
 
   return (
     <div className="flex h-full w-full flex-col">
-    <div className="group relative min-h-0 flex-1">
-      {!showingBack && (
+    <div ref={frameRef} className="group relative min-h-0 flex-1">
+      {/* Unlike the hover chrome, this stays on both sides of the card (and through the
+          flip): it's the only way back to the mosaic. */}
+      {solo && (
+        <button
+          onClick={requestClose}
+          aria-label="Back to the mosaic"
+          title="Back to the mosaic"
+          className="absolute left-3 top-3 z-10 flex items-center gap-1 rounded-full bg-[var(--color-ink)]/70 py-1.5 pl-2 pr-3 text-xs text-[var(--color-wall)] backdrop-blur hover:bg-[var(--color-ink)]"
+        >
+          <ChevronIcon direction="left" />
+          Back
+        </button>
+      )}
+      {!solo && (
       <div className={`absolute left-3 top-3 z-10 flex items-center gap-1.5 ${chrome}`}>
         {onBack && (
           <button
@@ -721,14 +825,10 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
 
       {/* Bottom right: two metal switches. Mosaic view on = every picture at once,
           off (the default) = one picture at a time; Shuffle on = random pass, off = oldest-first. */}
-      {canBrowse && !showingBack && (
+      {canBrowse && (
         <div className={`absolute bottom-3 right-3 z-10 flex items-center gap-3 rounded-full bg-[var(--color-ink)]/60 px-3 py-1.5 backdrop-blur ${chrome}`}>
           {viewMode === 'slideshow' && (
-            <MetalToggle
-              label="Shuffle"
-              checked={playMode === 'shuffle'}
-              onChange={(on) => switchPlayMode(on ? 'shuffle' : 'chronological')}
-            />
+            <ShuffleButton on={playMode === 'shuffle'} onChange={(on) => switchPlayMode(on ? 'shuffle' : 'chronological')} />
           )}
           <MetalToggle
             label="Mosaic view"
@@ -738,10 +838,15 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
         </div>
       )}
 
-      {viewMode === 'mosaic' ? (
-        <Mosaic items={ds.items} onOpenItem={openItemIndex} />
-      ) : (
+      {(mosaicSeen || shownMode === 'mosaic') && (
+        <div className={viewMode === 'mosaic' || solo ? 'h-full w-full' : 'hidden'}>
+          <Mosaic items={mosaicItems} onOpenItem={openItemIndex} />
+        </div>
+      )}
+      {(shownMode !== 'mosaic' || solo) && (
         <>
+          {/* The picture's frame, which the mosaic-to-picture animation moves (soloWrapRef). */}
+          <div ref={soloWrapRef} className="absolute inset-0">
           <div
             ref={containerRef}
             onPointerDown={onPointerDown}
@@ -828,12 +933,17 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
                     role="button"
                     aria-label="Back to the picture"
                     title="Click for the picture"
-                    className="embed-flip-face embed-flip-face-back flex cursor-pointer flex-col overflow-y-auto bg-[var(--color-wall)] p-6 text-[var(--color-ink)]"
+                    className={`embed-flip-face embed-flip-face-back flex cursor-pointer flex-col overflow-y-auto bg-[var(--color-wall)] text-[var(--color-ink)] ${
+                      canBrowse ? 'px-16 pb-14 pt-6' : 'p-6'
+                    }`}
                   >
-                    <h2 className="serif text-xl leading-tight">{current.name || 'Untitled'}</h2>
-                    <p className="mt-1 text-sm text-[var(--color-muted)]">
-                      {[current.year ?? undefined, current.brand].filter(Boolean).join(' · ') || '—'}
-                    </p>
+                    {/* Nudged right of the Back button (top left) when there is one. */}
+                    <div className={solo ? 'pl-20' : onBack ? 'pt-8' : ''}>
+                      <h2 className="serif text-xl leading-tight">{current.name || 'Untitled'}</h2>
+                      <p className="mt-1 text-sm text-[var(--color-muted)]">
+                        {[current.year ?? undefined, current.brand].filter(Boolean).join(' · ') || '—'}
+                      </p>
+                    </div>
 
                     {(current.description || current.definingFact) && (
                       <div className="mt-4 space-y-2 text-sm leading-relaxed text-[var(--color-ink)]/90">
@@ -898,6 +1008,7 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
               )}
             </div>
           </div>
+          </div>
 
           {!showingBack && (
             <div
@@ -908,7 +1019,7 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
             </div>
           )}
 
-          {canBrowse && !showingBack && (
+          {canBrowse && (
             <>
               <button
                 onClick={() => goPrev()}
@@ -947,7 +1058,6 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
       {canBrowse && viewMode === 'slideshow' ? (
         <button
           onClick={() => goPrev()}
-          disabled={!!showingBack}
           aria-label="Previous picture"
           title="Previous"
           className="flex shrink-0 items-center rounded-full px-1.5 hover:bg-white/10 disabled:opacity-40"
@@ -960,7 +1070,7 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
 
       <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-1 px-1">
         <div className="flex w-full items-center justify-between">
-          {onBack ? (
+          {onBack && !solo ? (
             <button
               onClick={onBack}
               aria-label="Choose a different dataset"
@@ -989,23 +1099,16 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
           {canBrowse && (
             <button
               onClick={() => setViewMode(viewMode === 'slideshow' ? 'mosaic' : 'slideshow')}
-              aria-label={viewMode === 'slideshow' ? 'Single view — switch to mosaic' : 'Mosaic — switch to single view'}
-              title={viewMode === 'slideshow' ? 'Single view' : 'Mosaic'}
+              aria-label={viewMode === 'slideshow' ? 'Slideshow — switch to mosaic' : 'Mosaic — switch to slideshow'}
+              title={viewMode === 'slideshow' ? 'Slideshow' : 'Mosaic'}
               className="flex items-center gap-1.5 rounded-full border border-white/25 px-2.5 py-1 text-[11px] hover:bg-white/10 active:bg-white/15"
             >
               {viewMode === 'slideshow' ? <SingleIcon size={14} /> : <MosaicIcon size={14} />}
-              {viewMode === 'slideshow' ? 'Image' : 'Mosaic'}
+              {viewMode === 'slideshow' ? 'Slideshow' : 'Mosaic'}
             </button>
           )}
           {canBrowse && viewMode === 'slideshow' && (
-            <button
-              onClick={() => switchPlayMode(playMode === 'shuffle' ? 'chronological' : 'shuffle')}
-              aria-label={playMode === 'shuffle' ? 'Shuffle: on — switch to linear order' : 'Linear order — switch to shuffle'}
-              title={playMode === 'shuffle' ? 'Shuffle' : 'Linear order'}
-              className="flex items-center rounded-full border border-white/25 p-1.5 hover:bg-white/10 active:bg-white/15"
-            >
-              {playMode === 'shuffle' ? <ShuffleIcon className="h-3.5 w-3.5" /> : <LinearIcon />}
-            </button>
+            <ShuffleButton on={playMode === 'shuffle'} onChange={(on) => switchPlayMode(on ? 'shuffle' : 'chronological')} className="border border-white/25 hover:bg-white/10" />
           )}
         </div>
       </div>
@@ -1013,7 +1116,6 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
       {canBrowse && viewMode === 'slideshow' ? (
         <button
           onClick={() => goNext()}
-          disabled={!!showingBack}
           aria-label="Next picture"
           title="Next"
           className="flex shrink-0 items-center rounded-full px-1.5 hover:bg-white/10 disabled:opacity-40"
@@ -1085,34 +1187,11 @@ function MetalToggle({
   );
 }
 
-function ShuffleIcon({ className = '' }: { className?: string }) {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className}>
-      <path d="M16 3h5v5" />
-      <path d="M4 20 21 3" />
-      <path d="M21 16v5h-5" />
-      <path d="M15 15l6 6" />
-      <path d="M4 4l5 5" />
-    </svg>
-  );
-}
-
 function LockIcon({ className = '' }: { className?: string }) {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <rect x="4" y="11" width="16" height="10" rx="2" />
       <path d="M8 11V7a4 4 0 0 1 8 0v4" />
-    </svg>
-  );
-}
-
-/** A single straight path, in contrast to shuffle's crossed one — chronological
- *  order, not a random pass. */
-function LinearIcon({ className = '' }: { className?: string }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M4 12h13" />
-      <path d="M12 6l6 6-6 6" />
     </svg>
   );
 }

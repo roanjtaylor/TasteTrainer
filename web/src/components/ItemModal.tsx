@@ -25,11 +25,14 @@ export function ItemModal({
   item,
   onClose,
   onChanged,
+  inline = false,
 }: {
   ds: Dataset;
   item: Item;
   onClose: () => void;
   onChanged: (ds: Dataset) => void;
+  /** Sits in the page (the slideshow) instead of floating over it: no backdrop. */
+  inline?: boolean;
 }) {
   const personal = ds.domain === 'personal';
   const { ask } = useChatView();
@@ -119,7 +122,7 @@ export function ItemModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      className={inline ? 'flex justify-center' : 'fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4'}
       // A stray click on the backdrop mid-edit only backs out of editing, not the
       // whole modal — the same graduated retreat as Escape, so it can't silently
       // discard a half-finished edit as a side effect of missing the panel. Ignored
@@ -128,7 +131,7 @@ export function ItemModal({
       onClick={() => {
         if (saving) return;
         if (mode === 'edit') cancelEdit();
-        else onClose();
+        else if (!inline) onClose();
       }}
     >
       <div
@@ -138,7 +141,7 @@ export function ItemModal({
         onClick={(e) => e.stopPropagation()}
         onWheel={onWheel}
         style={{ transform: scale !== 1 ? `scale(${scale})` : undefined }}
-        className="grid h-full max-h-[42rem] w-full max-w-5xl grid-cols-1 overflow-hidden border border-[var(--color-line)] bg-[var(--color-card)] md:grid-cols-2"
+        className={`grid w-full max-w-5xl ${inline ? 'md:h-[36rem]' : 'h-full max-h-[42rem]'} grid-cols-1 overflow-hidden border border-[var(--color-line)] bg-[var(--color-card)] md:grid-cols-2`}
       >
         <div className="relative aspect-[4/3] w-full bg-[var(--color-wall-soft)] md:aspect-auto md:h-full">
           <Photo src={shownImage} alt={item.name} sizes="(min-width: 768px) 50vw, 100vw" />

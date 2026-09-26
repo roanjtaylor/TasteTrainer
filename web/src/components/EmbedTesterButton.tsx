@@ -1,15 +1,12 @@
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import { useDevice, useEditMode } from '../pages/IframeTester';
 
-const ICON = 'h-[18px] w-[18px]';
-const SVG = { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true } as const;
 
-// The way in to /iframe (the embed widget's preview page) — and once you're there, the
-// mobile/desktop switch for it, in the same spot. Mounted alongside the account button
+// The mobile/desktop and edit switches for /iframe (the embed widget's preview page). The way
+// in is the account menu (AccountButton). Mounted alongside the account button
 // the same way it is: fixed in the window's right margin at `xl`+, inline in the nav
 // pill below that.
 export function EmbedTesterButton({ className = '' }: { className?: string }) {
-  const navigate = useNavigate();
   const onTester = useLocation().pathname === '/iframe';
   const [device, setDevice] = useDevice();
   const [editing, setEditing] = useEditMode();
@@ -25,20 +22,9 @@ export function EmbedTesterButton({ className = '' }: { className?: string }) {
     );
   }
 
-  return (
-    <button
-      onClick={() => navigate('/iframe')}
-      title="Test the embed widget"
-      aria-label="Open embed tester"
-      className={`h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] transition-colors hover:text-[var(--color-ink)] ${className}`}
-    >
-      <svg {...SVG} className={ICON}>
-        <circle cx="12" cy="12" r="9" />
-        <path d="M3 12h18" />
-        <path d="M12 3c2.8 2.6 4.2 5.8 4.2 9s-1.4 6.4-4.2 9c-2.8-2.6-4.2-5.8-4.2-9s1.4-6.4 4.2-9z" />
-      </svg>
-    </button>
-  );
+  // Off the tester there's nothing to show: the way in lives in the account menu
+  // (AccountButton), and only for a signed-in user.
+  return null;
 }
 
 function Switch({ label, on, onChange }: { label: string; on: boolean; onChange: (on: boolean) => void }) {

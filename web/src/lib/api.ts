@@ -4,9 +4,7 @@ import type {
   ImageCandidate,
   ImageKind,
   Item,
-  LikedTweetRef,
   Subtopic,
-  TweetImportStats,
   ProposedItem,
 } from '../../../shared/types';
 import type {
@@ -202,14 +200,6 @@ export const api = {
     }),
   signFile: (path: string) =>
     http<{ url: string }>('/api/files/signed', { method: 'POST', body: JSON.stringify({ path }) }),
-
-  // Liked tweets into a personal dataset (server/src/routes/tweets.ts) — one batch;
-  // components/TweetImportPanel.tsx loops it over a whole archive.
-  importTweets: (datasetId: string, likes: LikedTweetRef[]) =>
-    http<{ dataset: Dataset; stats: TweetImportStats }>('/api/tweets/import', {
-      method: 'POST',
-      body: JSON.stringify({ datasetId, likes }),
-    }),
 
   // The Claude chat (server/src/routes/chat.ts). Sending returns as soon as the turn
   // has STARTED; the reply is watched with `watchChat` below.

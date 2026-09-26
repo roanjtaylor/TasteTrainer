@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import type { Dataset, Domain, Item, ItemReport, Subtopic } from '../../../shared/types';
 import { saveDataset, useDataset } from '../lib/data';
 import * as db from '../lib/db';
@@ -7,23 +8,27 @@ import { useChatView, useReportChatView } from '../lib/chatView';
 import { physicalImageQuery } from '../lib/image';
 import { ItemCard } from '../components/ItemCard';
 import { ItemModal } from '../components/ItemModal';
-import { TweetCard } from '../components/TweetCard';
-import { TweetImportPanel } from '../components/TweetImportPanel';
+import { ShuffleButton } from '../components/ShuffleButton';
+import { Slideshow } from '../components/Slideshow';
+import { TweetCard, TILE_W } from '../components/TweetCard';
 import { ImagePicker } from '../components/ImagePicker';
 import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
 import { BackToTop } from '../components/BackToTop';
 import { PersonalFieldEditor } from '../components/PersonalFieldEditor';
-import { NavActions } from '../lib/navActions';
 
 // ---- Grid zoom ----
-// How many cards sit across the row: 1 (one card filling the width) to 10 (a tight
-// mosaic). Deliberately NOT persisted — every fresh load (including a plain refresh)
-// starts back at DEFAULT_COLS, so the desktop default is always the three-wide view
-// rather than whatever size a previous session happened to leave it zoomed to.
-const MIN_COLS = 1;
-const MAX_COLS = 10;
-const DEFAULT_COLS = 3;
+// The wall is always COLS cards across — the column structure never changes. Zooming
+// scales the whole grid instead: it is `zoom` times as wide as the page column (so
+// each card is drawn in full, just bigger or smaller, like the embed's mosaic), and
+// once it is wider than the column you pan it sideways. 1 = the whole ten-wide wall
+// fits; MAX_ZOOM = one card fills the row. Deliberately NOT persisted — every fresh
+// load starts back at DEFAULT_ZOOM (three cards across), not wherever a previous
+// session happened to leave it.
+const COLS = 10;
+const MIN_ZOOM = 1;
+const MAX_ZOOM = COLS;
+const DEFAULT_ZOOM = COLS / 3;
 
 // The Dataset view (6-ui.md): the whole field as one wall, oldest first.
 export function DatasetView() {
@@ -32,14 +37,23 @@ export function DatasetView() {
   // Cached read: a dataset seen before paints immediately and corrects itself in the
   // background, so returning to it costs nothing (lib/store.ts).
   const { data: ds, error: loadError, set: setDs } = useDataset(slug || null);
+  // Where Browse portals the personal world's Edit / Add actions: under the name.
+  const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
+  // How the field is browsed: the whole wall at once, or one item at a time (shuffled or
+  // in order) - the same two ways the embed offers.
+  const [view, setView] = useState<'mosaic' | 'slideshow'>('mosaic');
+  const [shuffle, setShuffle] = useState(true);
   // Tell the Claude dock what's on screen (lib/chatView.tsx).
   useReportChatView({ datasetId: ds?.id, datasetTopic: ds?.topic });
 
-  // Chronological (undated last): the one ordering that needs no labels to read.
-  const pool = useMemo(
-    () => (ds ? [...ds.items].sort((a, b) => (a.year ?? Infinity) - (b.year ?? Infinity)) : []),
-    [ds],
-  );
+  // Chronological (undated last) by default: the one ordering that needs no labels to
+  // read. `?order=newest` flips it; the arrow in the nav (Nav.tsx) toggles it.
+  const newestFirst = useSearchParams()[0].get('order') === 'newest';
+  const pool = useMemo(() => {
+    if (!ds) return [];
+    const sorted = [...ds.items].sort((a, b) => (a.year ?? Infinity) - (b.year ?? Infinity));
+    return newestFirst ? sorted.reverse() : sorted;
+  }, [ds, newestFirst]);
 
   if (loadError) return <p className="mt-8 text-[var(--color-accent)]">{loadError}</p>;
   if (!ds) return <p className="mt-8 text-[var(--color-muted)]">Loading…</p>;
@@ -51,21 +65,21 @@ export function DatasetView() {
           losing. It's left-aligned in the margin beside the centred content column, so
           it sits alongside the grid rather than over it. Below md there's no margin to
           sit in, so it scrolls with the page like an ordinary heading. */}
-      <div className="group relative md:fixed md:left-4 md:top-3 md:z-30 md:w-48 lg:w-60 xl:w-72">
-        <h1 className="serif truncate text-xl leading-tight" title={ds.description || undefined}>
+      {/* Confined to the empty margin left of the content column (same maths as the grid in
+          main.tsx), so long text wraps inside it instead of running over the cards. Only
+          pinned from `lg`, where that margin exists. */}
+      <div className="relative min-w-0 break-words lg:fixed lg:left-4 lg:top-3 lg:z-30 lg:w-[calc((100vw-min(72rem,74vw))/2-2rem)]">
+        <h1 className="serif truncate text-xl leading-tight">
           {ds.topic}
         </h1>
-        {ds.description && (
-          <div
-            role="tooltip"
-            className="pointer-events-none invisible absolute left-0 top-full z-40 mt-1 w-64 rounded-md bg-black px-2.5 py-1.5 text-xs text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:visible group-hover:opacity-100"
-          >
-            {ds.description}
-          </div>
-        )}
-        <p className="truncate text-xs text-[var(--color-muted)]">
-          {ds.items.length} {ds.items.length === 1 ? 'item' : 'items'}
+        <p className="text-sm text-[var(--color-muted)]">
+          {ds.description && `${ds.description} `}
+          ({ds.items.length} {ds.items.length === 1 ? 'item' : 'items'})
         </p>
+        <ViewSwitch view={view} onView={setView} shuffle={shuffle} onShuffle={setShuffle} />
+        {/* Personal-world Edit / Add (filled by Browse). Desktop only: below md there's
+            no left column to tidy them into. */}
+        <div ref={setActionsSlot} className="mt-2 hidden gap-3 lg:flex" />
       </div>
 
       <ReportsPanel datasetId={ds.id} />
@@ -73,10 +87,44 @@ export function DatasetView() {
       <Browse
         ds={ds}
         pool={pool}
+        view={view}
+        shuffle={shuffle}
+        actionsSlot={actionsSlot}
         onChanged={setDs}
       />
 
       <BackToTop />
+    </div>
+  );
+}
+
+// The left-column switch between the two ways of browsing: Mosaic (the whole wall) or
+// Slideshow, whose Shuffle / Linear choice appears only while Slideshow is on.
+function ViewSwitch({
+  view,
+  onView,
+  shuffle,
+  onShuffle,
+}: {
+  view: 'mosaic' | 'slideshow';
+  onView: (v: 'mosaic' | 'slideshow') => void;
+  shuffle: boolean;
+  onShuffle: (on: boolean) => void;
+}) {
+  const seg = (active: boolean) =>
+    `px-2.5 py-0.5 ${active ? 'bg-[var(--color-ink)] text-[var(--color-wall)]' : 'text-[var(--color-muted)] hover:text-[var(--color-ink)]'}`;
+  const group = 'inline-flex overflow-hidden rounded-full border border-[var(--color-line)] text-xs';
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <div className={group} role="group" aria-label="View">
+        <button onClick={() => onView('mosaic')} aria-pressed={view === 'mosaic'} className={seg(view === 'mosaic')}>
+          Mosaic
+        </button>
+        <button onClick={() => onView('slideshow')} aria-pressed={view === 'slideshow'} className={seg(view === 'slideshow')}>
+          Slideshow
+        </button>
+      </div>
+      {view === 'slideshow' && <ShuffleButton compact on={shuffle} onChange={onShuffle} />}
     </div>
   );
 }
@@ -163,10 +211,16 @@ function ReportsPanel({ datasetId }: { datasetId: string }) {
 function Browse({
   ds,
   pool,
+  view,
+  shuffle,
+  actionsSlot,
   onChanged,
 }: {
   ds: Dataset;
   pool: Item[];
+  view: 'mosaic' | 'slideshow';
+  shuffle: boolean;
+  actionsSlot: HTMLElement | null;
   onChanged: (ds: Dataset) => void;
 }) {
   // Inline editing: `editing` holds a working copy of the item being edited; `picker`
@@ -188,13 +242,30 @@ function Browse({
   // a *different* image collapse this one and expand that one in the same gesture
   // rather than closing then failing to reopen.
   const expandedRef = useRef<HTMLDivElement | null>(null);
-  // Cards-per-row, driven by the zoom control fixed in the window's right margin below
-  // — replaces the old fixed 1/2/3-column breakpoints with one continuous dial. Starts
-  // at DEFAULT_COLS every mount (see the comment on it above) — a refresh, or coming
-  // back from another dataset, always lands on the three-wide default.
-  const [cols, setCols] = useState(DEFAULT_COLS);
-  const setZoom = (next: number | ((c: number) => number)) =>
-    setCols((c) => Math.max(MIN_COLS, Math.min(MAX_COLS, typeof next === 'function' ? next(c) : next)));
+  // How much wider than the page column the grid is, driven by pinch / ctrl+scroll
+  // over the grid (there is no on-screen control). Starts at DEFAULT_ZOOM every mount (see the comment
+  // on it above) — a refresh, or coming back from another dataset, always lands on the
+  // three-wide default.
+  const [zoom, setZoomState] = useState(DEFAULT_ZOOM);
+  const setZoom = (next: number | ((z: number) => number)) =>
+    setZoomState((z) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, typeof next === 'function' ? next(z) : next)));
+  // The sideways-scrolling frame the grid sits in, and the width to ask the image host
+  // for: rounded up to a tenth of the window so a zoom drag doesn't refetch every tile.
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const tileSizes = `${Math.ceil(zoom) * 10}vw`;
+  // The scroller's width, tracked only so the tweet tiles know how big a cell is:
+  // cell = (zoom × width − gaps) / COLS, and a tile is drawn TILE_W wide then scaled to it.
+  const [frameW, setFrameW] = useState(0);
+  const hasWall = pool.length > 0 && view === 'mosaic';
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setFrameW(el.clientWidth));
+    ro.observe(el);
+    setFrameW(el.clientWidth);
+    return () => ro.disconnect();
+  }, [hasWall]);
+  const tileScale = frameW ? (zoom * frameW - (COLS - 1) * 4) / COLS / TILE_W : 1;
 
   // Zoom keeps whichever card you're focused on in place, rather than the reflow
   // yanking the whole page back to the top-left corner — a wall of a hundred cards is
@@ -207,7 +278,7 @@ function Browse({
   // scroll by the difference — same trick a map or PDF viewer uses to zoom "into" a point.
   const itemNodesRef = useRef(new Map<string, HTMLElement>());
   const hoveredIdRef = useRef<string | null>(null);
-  const anchorRef = useRef<{ id: string; top: number } | null>(null);
+  const anchorRef = useRef<{ id: string; top: number; left: number } | null>(null);
 
   // Tracks whether ItemModal (the full-screen detail view) is currently showing, so
   // the grid's own pinch/ctrl+scroll zoom below can step aside — see its use in
@@ -215,6 +286,8 @@ function Browse({
   // listener, not to drive a render.
   const modalOpen = !!expandedId && !editing && !!pool.find((i) => i.id === expandedId && !i.tweet);
   const modalOpenRef = useRef(false);
+  const viewRef = useRef(view);
+  viewRef.current = view;
   useEffect(() => {
     modalOpenRef.current = modalOpen;
   }, [modalOpen]);
@@ -231,12 +304,8 @@ function Browse({
       if (hit?.dataset.itemId) id = hit.dataset.itemId;
     }
     const el = id ? itemNodesRef.current.get(id) : undefined;
-    anchorRef.current = el ? { id: id as string, top: el.getBoundingClientRect().top } : null;
-  }
-
-  function zoomBy(next: number | ((c: number) => number)) {
-    captureZoomAnchor();
-    setZoom(next);
+    const rect = el?.getBoundingClientRect();
+    anchorRef.current = rect ? { id: id as string, top: rect.top, left: rect.left } : null;
   }
 
   // Runs after the reflow but before the browser paints it, so the correction itself
@@ -247,9 +316,11 @@ function Browse({
     if (!anchor) return;
     const el = itemNodesRef.current.get(anchor.id);
     if (!el) return;
-    const delta = el.getBoundingClientRect().top - anchor.top;
-    if (delta) window.scrollBy(0, delta);
-  }, [cols]);
+    const rect = el.getBoundingClientRect();
+    if (scrollerRef.current) scrollerRef.current.scrollLeft += rect.left - anchor.left;
+    const dy = rect.top - anchor.top;
+    if (dy) window.scrollBy(0, dy);
+  }, [zoom]);
 
   // Pinch-to-zoom, trackpad or mouse: both a trackpad pinch gesture and a ctrl/⌘+scroll
   // on a mouse wheel arrive in the browser as the same thing — a `wheel` event with
@@ -260,7 +331,6 @@ function Browse({
   // Native addEventListener with `{ passive: false }`, not React's onWheel: the browser
   // treats wheel listeners as passive by default, which silently drops preventDefault
   // and lets the page itself zoom instead.
-  const wheelAccumRef = useRef(0);
   useEffect(() => {
     function onWheel(e: WheelEvent) {
       if (!e.ctrlKey && !e.metaKey) return;
@@ -268,26 +338,18 @@ function Browse({
       // reaching here (see its own onWheel) so the grid underneath never reflows
       // while you're zooming the focused card. This is only a fallback in case some
       // future modal chrome doesn't stop propagation.
-      if (modalOpenRef.current) return;
+      if (modalOpenRef.current || viewRef.current !== 'mosaic') return;
       e.preventDefault();
       // Anchor to whatever card is under the pointer right now — captured once per
       // event, before any of the steps below, so it reflects the card's position
       // before this event's reflow rather than a stale one from a previous step.
       captureZoomAnchor({ x: e.clientX, y: e.clientY });
-      // A pinch fires a flurry of tiny deltas; accumulating and stepping in whole
-      // columns keeps the grid from jittering between sizes on every event.
-      wheelAccumRef.current += e.deltaY;
-      const STEP = 12;
       // Pinching/scrolling "out" (deltaY > 0, same direction as zooming a page out)
-      // shrinks the cards — more, smaller columns; the reverse zooms in.
-      while (wheelAccumRef.current >= STEP) {
-        wheelAccumRef.current -= STEP;
-        setZoom((c) => c + 1);
-      }
-      while (wheelAccumRef.current <= -STEP) {
-        wheelAccumRef.current += STEP;
-        setZoom((c) => c - 1);
-      }
+      // shrinks the cards; the reverse zooms in. Multiplicative, so every notch feels
+      // the same whether the wall is small or big; a mouse wheel's ±100 notch is capped
+      // so it isn't a lurch.
+      const d = Math.max(-30, Math.min(30, e.deltaY));
+      setZoom((z) => z * Math.exp(-d * 0.01));
     }
     window.addEventListener('wheel', onWheel, { passive: false });
     return () => window.removeEventListener('wheel', onWheel);
@@ -319,10 +381,6 @@ function Browse({
   // the dataset's own shape. None of it shows in the researched worlds.
   const personal = ds.domain === 'personal';
   const [editingField, setEditingField] = useState(false);
-  // Offered where it makes sense: a dataset that already holds tweets, or an empty one
-  // that could become one — not on a shelf of book covers.
-  const [importingTweets, setImportingTweets] = useState(false);
-  const takesTweets = personal && (ds.items.length === 0 || ds.items.some((i) => i.tweet));
   // A draft from "+ Add item" isn't in the dataset until it's saved — so it isn't in
   // `pool` either, and is drawn ahead of the grid instead (see `isNew` below).
   const isNew = !!editing && !ds.items.some((i) => i.id === editing.id);
@@ -378,38 +436,28 @@ function Browse({
 
   return (
     <div className="space-y-4">
-      {personal && (
-        <NavActions>
-          <button
-            onClick={() => setEditingField((v) => !v)}
-            className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
-          >
-            Edit dataset
-          </button>
-          {takesTweets && (
-            <button
-              onClick={() => setImportingTweets((v) => !v)}
-              className="rounded-full border border-[var(--color-line)] bg-[var(--color-card)] px-4 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
-            >
-              Import tweets
+      {personal &&
+        actionsSlot &&
+        createPortal(
+          <>
+            <button onClick={() => setEditingField((v) => !v)} className="inline-flex items-center gap-1 text-sm text-[var(--color-muted)] hover:text-[var(--color-ink)] disabled:opacity-40">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="h-3.5 w-3.5">
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+              </svg>
+              Edit
             </button>
-          )}
-          <button
-            onClick={() => setEditing(blankItem())}
-            disabled={!!editing}
-            aria-label="Add item"
-            title="Add item"
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--color-ink)] text-lg leading-none text-[var(--color-wall)] disabled:opacity-40"
-          >
-            +
-          </button>
-        </NavActions>
-      )}
+            <button onClick={() => setEditing(blankItem())} disabled={!!editing} className="inline-flex items-center gap-1 text-sm text-[var(--color-muted)] hover:text-[var(--color-ink)] disabled:opacity-40">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden="true" className="h-3.5 w-3.5">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              Add
+            </button>
+          </>,
+          actionsSlot,
+        )}
       {personal && editingField && (
         <PersonalFieldEditor ds={ds} onChanged={onChanged} onClose={() => setEditingField(false)} />
-      )}
-      {takesTweets && importingTweets && (
-        <TweetImportPanel ds={ds} onChanged={onChanged} onClose={() => setImportingTweets(false)} />
       )}
 
       {pool.length === 0 && !isNew ? (
@@ -418,10 +466,36 @@ function Browse({
             ? 'Nothing here yet — add an item to start the collection.'
             : 'No items in this scope.'}
         </p>
+      ) : view === 'slideshow' ? (
+        <>
+          {isNew && editing && (
+            <div className="mx-auto max-w-xl">
+              <ItemEditorCard
+                key={editing.id}
+                draft={editing}
+                subtopics={ds.subtopics}
+                domain={ds.domain}
+                saving={saving}
+                onChange={(c) => setEditing((e) => (e ? { ...e, ...c } : e))}
+                onSwapImage={() => setPicker(true)}
+                onSave={saveEdit}
+                onCancel={() => setEditing(null)}
+              />
+            </div>
+          )}
+          <Slideshow ds={ds} pool={pool} shuffle={shuffle} onChanged={onChanged} />
+        </>
       ) : (
+        <div ref={scrollerRef} className="overflow-x-auto">
         <div
           className="grid gap-1"
-          style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+          style={
+            {
+              width: `${zoom * 100}%`,
+              gridTemplateColumns: `repeat(${COLS}, minmax(0, 1fr))`,
+              '--tile-scale': tileScale,
+            } as CSSProperties
+          }
         >
           {isNew && editing && (
             <ItemEditorCard
@@ -467,10 +541,10 @@ function Browse({
                 }}
                 className="relative"
                 // An open thread is for reading, and a tenth of the row isn't a readable
-                // measure — so it takes about a third of the width whatever the zoom.
+                // measure — so it spans about a third of what's on screen, whatever the zoom.
                 style={
                   item.tweet && expandedId === item.id
-                    ? { gridColumn: `span ${Math.max(1, Math.ceil(cols / 3))}` }
+                    ? { gridColumn: `span ${Math.min(COLS, Math.max(1, Math.ceil(COLS / (3 * zoom))))}` }
                     : undefined
                 }
               >
@@ -484,11 +558,12 @@ function Browse({
                 ) : (
                 /* The card itself opens the full-screen modal below — works on touch,
                    not just hover. */
-                <ItemCard item={item} onOpen={() => setExpandedId(item.id)} />
+                <ItemCard item={item} onOpen={() => setExpandedId(item.id)} sizes={tileSizes} />
                 )}
               </div>
             ),
           )}
+        </div>
         </div>
       )}
 
@@ -531,75 +606,6 @@ function Browse({
           onClose={() => setPicker(false)}
         />
       )}
-
-      {pool.length > 0 && <ZoomControl cols={cols} onChange={zoomBy} />}
-    </div>
-  );
-}
-
-// A vertical slider fixed in the window's right margin — the same home the account
-// button already keeps there (main.tsx) — so scrolling a long wall of
-// cards always leaves one dial in reach for how much of it is on screen at once.
-// Dragging up = fewer, bigger cards (zoomed in, down to one filling the row); dragging
-// down = more, smaller ones (zoomed out, up to a ten-wide mosaic). Continuous, so it
-// replaces the old fixed sm/lg breakpoints with a real dial rather than three stops.
-function ZoomControl({
-  cols,
-  onChange,
-}: {
-  cols: number;
-  /** Clamps to [MIN_COLS, MAX_COLS] itself — callers can freely pass cols ± 1. */
-  onChange: (next: number | ((c: number) => number)) => void;
-}) {
-  // The <input> itself always runs low-to-high bottom-to-top; the zoom LEVEL (big cards
-  // = high zoom) is the inverse of the column count, so the thumb sits high when cards
-  // are big and low when they're tiny, matching how a zoom slider reads everywhere else.
-  const zoomLevel = MAX_COLS + MIN_COLS - cols;
-  return (
-    <div
-      className="fixed bottom-6 right-3 z-30 flex flex-col items-center gap-1.5 rounded-2xl border border-[var(--color-line)] bg-[var(--color-card)]/90 px-2 py-3 text-[var(--color-muted)] shadow-sm backdrop-blur"
-      title={`${cols} across — drag, click ±, or pinch/ctrl+scroll over the grid`}
-    >
-      {/* Fewer, bigger cards. Disabled at one-across rather than hidden, so the
-          button's position — and the dial below it — never jumps around. */}
-      <button
-        type="button"
-        onClick={() => onChange((c) => c - 1)}
-        disabled={cols <= MIN_COLS}
-        aria-label="Zoom in (fewer, bigger cards)"
-        className="select-none text-sm leading-none hover:text-[var(--color-ink)] disabled:opacity-30"
-      >
-        ＋
-      </button>
-      <input
-        type="range"
-        min={MIN_COLS}
-        max={MAX_COLS}
-        step={1}
-        value={zoomLevel}
-        onChange={(e) => onChange(MAX_COLS + MIN_COLS - Number(e.target.value))}
-        aria-label="Zoom: cards per row"
-        className="h-32 w-5 cursor-pointer accent-[var(--color-accent)]"
-        style={{
-          WebkitAppearance: 'slider-vertical',
-          writingMode: 'vertical-lr',
-          direction: 'rtl',
-        } as React.CSSProperties}
-        // Firefox's own vertical-range mechanism (ignores writing-mode on range inputs).
-        // Not a real DOM attribute React knows about, so it's passed through untyped.
-        {...{ orient: 'vertical' }}
-      />
-      {/* More, smaller cards. */}
-      <button
-        type="button"
-        onClick={() => onChange((c) => c + 1)}
-        disabled={cols >= MAX_COLS}
-        aria-label="Zoom out (more, smaller cards)"
-        className="select-none text-sm leading-none hover:text-[var(--color-ink)] disabled:opacity-30"
-      >
-        －
-      </button>
-      <span className="mt-0.5 select-none text-[10px] tabular-nums">{cols}×</span>
     </div>
   );
 }
