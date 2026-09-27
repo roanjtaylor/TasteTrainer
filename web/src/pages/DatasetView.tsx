@@ -8,6 +8,7 @@ import { useChatView, useReportChatView } from '../lib/chatView';
 import { physicalImageQuery } from '../lib/image';
 import { ItemCard } from '../components/ItemCard';
 import { ItemModal } from '../components/ItemModal';
+import { TweetModal } from '../components/TweetModal';
 import { ShuffleButton } from '../components/ShuffleButton';
 import { Slideshow } from '../components/Slideshow';
 import { TweetCard, TILE_W } from '../components/TweetCard';
@@ -28,7 +29,10 @@ import { PersonalFieldEditor } from '../components/PersonalFieldEditor';
 const COLS = 10;
 const MIN_ZOOM = 1;
 const MAX_ZOOM = COLS;
-const DEFAULT_ZOOM = COLS / 3;
+// Starts fully zoomed out (the whole ten-wide wall fits, no horizontal scrollbar) —
+// the visitor zooms in deliberately, rather than landing on a pre-zoomed three-wide
+// slice that needs a scrollbar just to see the rest of the wall.
+const DEFAULT_ZOOM = MIN_ZOOM;
 
 // The Dataset view (6-ui.md): the whole field as one wall, oldest first.
 export function DatasetView() {
@@ -41,7 +45,7 @@ export function DatasetView() {
   const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
   // How the field is browsed: the whole wall at once, or one item at a time (shuffled or
   // in order) - the same two ways the embed offers.
-  const [view, setView] = useState<'mosaic' | 'slideshow'>('mosaic');
+  const [view, setView] = useState<'mosaic' | 'slideshow'>('slideshow');
   const [shuffle, setShuffle] = useState(true);
   // Tell the Claude dock what's on screen (lib/chatView.tsx).
   useReportChatView({ datasetId: ds?.id, datasetTopic: ds?.topic });
@@ -231,17 +235,14 @@ function Browse({
   // Only one card's details are ever open at a time — expanding one collapses whatever
   // else was open, so the wall of images doesn't fill up with expanded panels.
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // The clicked tile's own on-screen box, captured the instant a mosaic tile opens —
+  // ItemModal grows out of it and shrinks back into it on close (lib/genie.ts), the
+  // same genie effect the embed's mosaic opens a picture with.
+  const [openOrigin, setOpenOrigin] = useState<DOMRect | null>(null);
   // The open item is part of what Claude is told you're looking at — "this" in a
   // message then means it (lib/chatView.tsx).
   const openForChat = expandedId ? ds.items.find((i) => i.id === expandedId) : undefined;
   useReportChatView({ itemId: openForChat?.id, itemName: openForChat?.name });
-  // General "click anything else closes it" rule: a mousedown outside the expanded
-  // card's own DOM (tracked via this ref) collapses it, whatever that click turns out
-  // to do — open the editor, open "+ Add item", swap the image, and so on. mousedown
-  // (not click) so this runs before the target's own click handler, letting a click on
-  // a *different* image collapse this one and expand that one in the same gesture
-  // rather than closing then failing to reopen.
-  const expandedRef = useRef<HTMLDivElement | null>(null);
   // How much wider than the page column the grid is, driven by pinch / ctrl+scroll
   // over the grid (there is no on-screen control). Starts at DEFAULT_ZOOM every mount (see the comment
   // on it above) — a refresh, or coming back from another dataset, always lands on the
@@ -284,7 +285,7 @@ function Browse({
   // the grid's own pinch/ctrl+scroll zoom below can step aside — see its use in
   // onWheel. A ref, not state, since it only needs to be read inside that native
   // listener, not to drive a render.
-  const modalOpen = !!expandedId && !editing && !!pool.find((i) => i.id === expandedId && !i.tweet);
+  const modalOpen = !!expandedId && !editing;
   const modalOpenRef = useRef(false);
   const viewRef = useRef(view);
   viewRef.current = view;
@@ -354,28 +355,6 @@ function Browse({
     window.addEventListener('wheel', onWheel, { passive: false });
     return () => window.removeEventListener('wheel', onWheel);
   }, []);
-  // Tweets still expand in place (TweetCard), so a click outside the open thread
-  // collapses it. A non-tweet item instead opens ItemModal below, which owns its own
-  // closing (backdrop click, Escape, ✕) — this guard would otherwise fight it: the
-  // modal's own buttons live outside `expandedRef` (the grid cell, not the modal), so
-  // this listener would collapse `expandedId` out from under a click on them before
-  // their own onClick ever ran.
-  useEffect(() => {
-    if (!expandedId) return;
-    const openItem = pool.find((i) => i.id === expandedId);
-    if (!openItem?.tweet) return;
-    function onOutsideDown(e: MouseEvent) {
-      // The Claude dock is "outside" too, but clicking into it to ask about the open
-      // thread must not close the thread — that is the context being asked about.
-      if ((e.target as Element | null)?.closest?.('[data-chat-dock]')) return;
-      if (expandedRef.current && !expandedRef.current.contains(e.target as Node)) {
-        setExpandedId(null);
-      }
-    }
-    document.addEventListener('mousedown', onOutsideDown);
-    return () => document.removeEventListener('mousedown', onOutsideDown);
-  }, [expandedId, pool]);
-
   // The personal world is built by hand (9-personal-and-auth.md), so its browse view
   // doubles as the builder: add one item, drop in a batch of files, delete, and edit
   // the dataset's own shape. None of it shows in the researched worlds.
@@ -486,9 +465,12 @@ function Browse({
           <Slideshow ds={ds} pool={pool} shuffle={shuffle} onChanged={onChanged} />
         </>
       ) : (
-        <div ref={scrollerRef} className="overflow-x-auto">
+        <div ref={scrollerRef} className="overflow-x-auto overflow-y-hidden">
+        {/* overflow-x alone would make overflow-y `auto` too, and a stacked tweet hand's
+            fanned corners hang a few px below the last row — enough for a needless
+            vertical scrollbar. Clip that axis, and pad the grid so the fan isn't cut. */}
         <div
-          className="grid gap-1"
+          className="grid gap-1 pb-3"
           style={
             {
               width: `${zoom * 100}%`,
@@ -531,7 +513,6 @@ function Browse({
                 ref={(el) => {
                   if (el) itemNodesRef.current.set(item.id, el);
                   else itemNodesRef.current.delete(item.id);
-                  if (expandedId === item.id) expandedRef.current = el;
                 }}
                 onMouseEnter={() => {
                   hoveredIdRef.current = item.id;
@@ -540,25 +521,28 @@ function Browse({
                   if (hoveredIdRef.current === item.id) hoveredIdRef.current = null;
                 }}
                 className="relative"
-                // An open thread is for reading, and a tenth of the row isn't a readable
-                // measure — so it spans about a third of what's on screen, whatever the zoom.
-                style={
-                  item.tweet && expandedId === item.id
-                    ? { gridColumn: `span ${Math.min(COLS, Math.max(1, Math.ceil(COLS / (3 * zoom))))}` }
-                    : undefined
-                }
               >
                 {item.tweet ? (
+                  /* Opens the same full-screen, genie-animated view as a picture does
+                     (TweetModal below) — grown out of this tile. */
                   <TweetCard
                     item={item}
-                    expanded={expandedId === item.id}
-                    onToggle={() => setExpandedId((id) => (id === item.id ? null : item.id))}
-                    onEdit={() => setEditing({ ...item })}
+                    onOpen={(rect) => {
+                      setOpenOrigin(rect);
+                      setExpandedId(item.id);
+                    }}
                   />
                 ) : (
                 /* The card itself opens the full-screen modal below — works on touch,
                    not just hover. */
-                <ItemCard item={item} onOpen={() => setExpandedId(item.id)} sizes={tileSizes} />
+                <ItemCard
+                  item={item}
+                  onOpen={(rect) => {
+                    setOpenOrigin(rect);
+                    setExpandedId(item.id);
+                  }}
+                  sizes={tileSizes}
+                />
                 )}
               </div>
             ),
@@ -571,12 +555,27 @@ function Browse({
         !editing &&
         (() => {
           const openItem = pool.find((i) => i.id === expandedId);
-          if (!openItem || openItem.tweet) return null;
-          return (
+          if (!openItem) return null;
+          const close = () => {
+            setExpandedId(null);
+            setOpenOrigin(null);
+          };
+          return openItem.tweet ? (
+            <TweetModal
+              item={openItem}
+              originRect={openOrigin ?? undefined}
+              onClose={close}
+              onEdit={() => {
+                setEditing({ ...openItem });
+                close();
+              }}
+            />
+          ) : (
             <ItemModal
               ds={ds}
               item={openItem}
-              onClose={() => setExpandedId(null)}
+              originRect={openOrigin ?? undefined}
+              onClose={close}
               onChanged={onChanged}
             />
           );

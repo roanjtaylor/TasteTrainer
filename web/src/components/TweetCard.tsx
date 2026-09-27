@@ -6,44 +6,44 @@ import { NativeTweet } from './NativeTweet';
 //
 // Same contract as ItemCard — a fixed 4:3 tile on the wall, one click to open — so the
 // grid treats the two alike. What differs is what there is to show: a tweet's picture
-// IS its words, so the tile is the lead tweet's text rather than a photo, and opening it
-// unfolds the whole thread in order instead of a description.
+// IS its words, so the tile is the lead tweet's text rather than a photo. Opening it
+// no longer unfolds the thread in place among the other tiles (confusing — it broke up
+// the wall exactly where you'd clicked and could leave a lopsided row behind), it opens
+// the same full-screen, genie-animated view as a picture does (TweetModal.tsx), grown
+// out of this very tile — `onOpen` hands back the tile's own on-screen box for that.
 //
 // The closed tile is drawn from the stored text: a wall of hundreds has to paint at once,
 // and an iframe per card wouldn't. Opened, each tweet that has an id becomes X's real
 // embed (NativeTweet.tsx), with the stored copy standing in until it loads — and for
 // good if the original is gone. Pictures are hotlinked from X, never copied.
 //
-// A thread of more than one tweet reads as a COLLECTION, not a single card: its closed
-// tile is a small hand of cards — the lead tweet in front, the next one or two fanned
-// out behind it from a shared bottom hinge, spreading slightly on hover. (The look the
-// subtopic fans on the old Filters page had.) It stays inside the same 4:3 cell, so the
-// wall's grid doesn't know the difference.
-export function TweetCard({
-  item,
-  expanded,
-  onToggle,
-  onEdit,
-}: {
-  item: Item;
-  expanded: boolean;
-  onToggle: () => void;
-  onEdit?: () => void;
-}) {
+// Only a lone tweet — nothing before it (no reply-chain context) and nothing after it —
+// is drawn as a plain sharp-cornered tile, the same rectangle every other dataset's
+// ItemCard is. Anything with more to it reads as a COLLECTION, not a single card: its
+// closed tile is a small hand of rounded cards — the lead tweet in front, the next one
+// or two fanned out behind it from a shared bottom hinge, spreading slightly on hover.
+// (The look the subtopic fans on the old Filters page had.) It stays inside the same 4:3
+// cell, so the wall's grid doesn't know the difference.
+export function TweetCard({ item, onOpen }: { item: Item; onOpen: (rect: DOMRect) => void }) {
   const tweets = item.tweet?.tweets ?? [];
   const own = tweets.filter((t) => !t.context);
   // The tile shows where the thread starts, so opening it reads straight on.
   const lead = own[0] ?? tweets[0];
-  const stacked = own.length > 1;
-  const CARD = 'overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-card)]';
+  // Everything in the thread other than the lead — replied-to context before it, the
+  // author's own follow-ups after it.
+  const others = tweets.filter((t) => t !== lead);
+  const stacked = others.length > 0;
+  const CARD = `overflow-hidden border border-[var(--color-line)] bg-[var(--color-card)] ${
+    stacked ? 'rounded-xl' : ''
+  }`;
   // The box every card of the hand shares: inset far enough that a fanned corner never
   // leaves the cell, whatever the zoom.
   const HAND = 'absolute inset-x-[5%] bottom-0 top-[9%] origin-bottom';
 
   return (
-    <figure className={expanded || !stacked ? CARD : 'group relative aspect-[4/3]'}>
-      {!expanded && stacked &&
-        own.slice(1, 3).map((t, i) => (
+    <figure className={!stacked ? CARD : 'group relative aspect-[4/3]'}>
+      {stacked &&
+        others.slice(0, 2).map((t, i) => (
           <div
             key={t.id || i}
             aria-hidden
@@ -53,75 +53,42 @@ export function TweetCard({
             }`}
           />
         ))}
-      {!expanded && (
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={onToggle}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              onToggle();
-            }
-          }}
-          aria-expanded={false}
-          aria-label="Show thread"
-          className={`cursor-pointer overflow-hidden hover:bg-[var(--color-wall-soft)] ${
-            stacked ? `${HAND} ${CARD} z-10 shadow-sm` : 'aspect-[4/3] w-full'
-          }`}
-        >
-          <ScaledTile stacked={stacked}>
-            <div className="flex h-full flex-col gap-2 p-4">
-              <Byline tweet={lead} fallback={item} />
-              {/* min-h-0 lets the text be the part that gives way, so the footer always fits. */}
-              <p className="serif min-h-0 flex-1 overflow-hidden whitespace-pre-line text-[15px] leading-snug">
-                {lead?.text ?? item.name}
-              </p>
-              <p className="flex shrink-0 items-center justify-between text-xs text-[var(--color-muted)]">
-                {stacked ? (
-                  <span className="rounded-full bg-[var(--color-ink)]/80 px-2.5 py-0.5 text-[var(--color-wall)]">
-                    +{own.length - 1} more
-                  </span>
-                ) : (
-                  <span>{item.subtopic}</span>
-                )}
-                <span>{item.year ?? ''}</span>
-              </p>
-            </div>
-          </ScaledTile>
-        </div>
-      )}
-
-      {expanded && (
-        <div className="space-y-3 p-4">
-          <div className="flex items-center justify-between gap-2">
-            <button
-              onClick={onToggle}
-              className="text-xs text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-            >
-              ← Close
-            </button>
-            <div className="flex items-center gap-3 text-xs">
-              {onEdit && (
-                <button onClick={onEdit} className="text-[var(--color-muted)] hover:text-[var(--color-ink)]">
-                  Edit
-                </button>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={(e) => onOpen(e.currentTarget.getBoundingClientRect())}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onOpen(e.currentTarget.getBoundingClientRect());
+          }
+        }}
+        aria-haspopup="dialog"
+        aria-label="Show thread"
+        className={`cursor-pointer overflow-hidden hover:bg-[var(--color-wall-soft)] ${
+          stacked ? `${HAND} ${CARD} z-10 shadow-sm` : 'aspect-[4/3] w-full'
+        }`}
+      >
+        <ScaledTile stacked={stacked}>
+          <div className="flex h-full flex-col gap-2 p-4">
+            <Byline tweet={lead} fallback={item} />
+            {/* min-h-0 lets the text be the part that gives way, so the footer always fits. */}
+            <p className="serif min-h-0 flex-1 overflow-hidden whitespace-pre-line text-[15px] leading-snug">
+              {lead?.text ?? item.name}
+            </p>
+            <p className="flex shrink-0 items-center justify-between text-xs text-[var(--color-muted)]">
+              {stacked ? (
+                <span className="rounded-full bg-[var(--color-ink)]/80 px-2.5 py-0.5 text-[var(--color-wall)]">
+                  +{others.length} more
+                </span>
+              ) : (
+                <span>{item.subtopic}</span>
               )}
-              {item.url && (
-                <a
-                  href={item.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-[var(--color-accent)] hover:underline"
-                >
-                  Open on X ↗
-                </a>
-              )}
-            </div>
+              <span>{item.year ?? ''}</span>
+            </p>
           </div>
-          <TweetThreadList tweets={tweets} fallback={item} />
-        </div>
-      )}
+        </ScaledTile>
+      </div>
     </figure>
   );
 }

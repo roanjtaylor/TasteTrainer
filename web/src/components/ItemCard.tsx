@@ -9,17 +9,17 @@ import { Photo } from './Photo';
 // used to break up the mosaic every time you looked at one item, leaving a hole in
 // the wall exactly where your eye was. `onOpen` is owned by the grid (Browse in
 // DatasetView.tsx), which is what decides which item's modal is open.
-export function ItemCard({ item, onOpen, sizes }: { item: Item; onOpen: () => void; sizes?: string }) {
+export function ItemCard({ item, onOpen, sizes }: { item: Item; onOpen: (rect: DOMRect) => void; sizes?: string }) {
   return (
     <figure className="group overflow-hidden border border-[var(--color-line)] bg-[var(--color-card)]">
       <div
         role="button"
         tabIndex={0}
-        onClick={onOpen}
+        onClick={(e) => onOpen(e.currentTarget.getBoundingClientRect())}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
-            onOpen();
+            onOpen(e.currentTarget.getBoundingClientRect());
           }
         }}
         aria-haspopup="dialog"

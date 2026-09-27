@@ -14,10 +14,13 @@ function shuffled<T>(xs: T[]): T[] {
   return a;
 }
 
-// The dataset one item at a time — the site's counterpart to the embed's slideshow.
-// `pool` arrives oldest-first (or newest-first), which is the Linear order; Shuffle plays
-// a random pass instead. Flipping between the two stays on the item you're looking at.
-// Arrow keys and a horizontal swipe step through; it wraps at either end.
+// The dataset one item at a time — the site's counterpart to the embed's slideshow
+// (Embed.tsx's Browse), drawn the same way: the picture full-bleed, edge to edge, with
+// prev/next and the caption appearing only on hover so the photo itself is never
+// interrupted. `pool` arrives oldest-first (or newest-first), which is the Linear
+// order; Shuffle plays a random pass instead. Flipping between the two stays on the
+// item you're looking at. Arrow keys and a horizontal swipe step through; it wraps at
+// either end.
 export function Slideshow({
   ds,
   pool,
@@ -65,9 +68,14 @@ export function Slideshow({
   const touch = useRef<{ x: number; y: number } | null>(null);
   if (!current) return null;
 
+  // Every control here (prev/next, the caption) lives in `group` and only shows on
+  // hover — same as the embed's `chrome` — so the picture displays uninterrupted
+  // otherwise.
+  const chrome = 'opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto';
+
   return (
     <div
-      className="space-y-3"
+      className="group relative h-[calc(100svh-11rem)] min-h-[16rem] w-full overflow-hidden bg-[var(--color-wall-soft)]"
       onTouchStart={(e) => {
         touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
       }}
@@ -81,50 +89,60 @@ export function Slideshow({
       }}
     >
       {current.tweet ? (
-        <div key={current.id} className="mx-auto max-w-xl space-y-3 rounded-xl border border-[var(--color-line)] bg-[var(--color-card)] p-4">
-          {current.url && (
-            <a
-              href={current.url}
-              target="_blank"
-              rel="noreferrer"
-              className="block text-right text-xs text-[var(--color-accent)] hover:underline"
-            >
-              Open on X ↗
-            </a>
-          )}
-          <TweetThreadList tweets={current.tweet.tweets} fallback={current} />
+        <div key={current.id} className="tweet-scroll custom-scroll h-full w-full overflow-y-auto overscroll-contain bg-[var(--color-card)]">
+          <div className="mx-auto max-w-xl space-y-3 p-4">
+            {current.url && (
+              <a
+                href={current.url}
+                target="_blank"
+                rel="noreferrer"
+                className="block text-right text-xs text-[var(--color-accent)] hover:underline"
+              >
+                Open on X ↗
+              </a>
+            )}
+            <TweetThreadList tweets={current.tweet.tweets} fallback={current} />
+          </div>
         </div>
       ) : (
         <Slide key={current.id} ds={ds} item={current} onChanged={onChanged} />
       )}
 
-      <div className="flex items-center justify-center gap-4 text-sm text-[var(--color-muted)]">
-        <button
-          onClick={() => go(-1)}
-          disabled={n < 2}
-          aria-label="Previous"
-          className="rounded-full border border-[var(--color-line)] px-4 py-1.5 hover:bg-[var(--color-wall-soft)] disabled:opacity-40"
-        >
-          ←
-        </button>
-        <span className="tabular-nums">
-          {idx + 1} / {n}
-        </span>
-        <button
-          onClick={() => go(1)}
-          disabled={n < 2}
-          aria-label="Next"
-          className="rounded-full border border-[var(--color-line)] px-4 py-1.5 hover:bg-[var(--color-wall-soft)] disabled:opacity-40"
-        >
-          →
-        </button>
-      </div>
+      {!current.tweet && (
+        <div className={`absolute bottom-3 left-3 z-10 max-w-[70%] truncate rounded-full bg-[var(--color-ink)]/60 px-3 py-1 text-xs text-[var(--color-wall)] backdrop-blur ${chrome}`}>
+          {current.name}
+          {current.year ? ` · ${current.year}` : ''}
+        </div>
+      )}
+
+      {n > 1 && (
+        <>
+          <button
+            onClick={() => go(-1)}
+            aria-label="Previous"
+            title="Previous"
+            className={`absolute left-3 top-1/2 z-10 -translate-y-1/2 rounded-full bg-[var(--color-ink)]/60 p-2.5 text-[var(--color-wall)] backdrop-blur hover:bg-[var(--color-ink)] ${chrome}`}
+          >
+            <ChevronIcon direction="left" />
+          </button>
+          <button
+            onClick={() => go(1)}
+            aria-label="Next"
+            title="Next"
+            className={`absolute right-3 top-1/2 z-10 -translate-y-1/2 rounded-full bg-[var(--color-ink)]/60 p-2.5 text-[var(--color-wall)] backdrop-blur hover:bg-[var(--color-ink)] ${chrome}`}
+          >
+            <ChevronIcon direction="right" />
+          </button>
+          <span className={`absolute bottom-3 right-3 z-10 rounded-full bg-[var(--color-ink)]/60 px-3 py-1 text-xs tabular-nums text-[var(--color-wall)] backdrop-blur ${chrome}`}>
+            {idx + 1} / {n}
+          </span>
+        </>
+      )}
     </div>
   );
 }
 
-// One picture, as large as the window allows: the front is just the image (the height is
-// the window less the page chrome and the counter row, so it needs no scrolling), and a
+// One picture, filling the frame edge to edge — same as the embed's own slide. A
 // click turns it over to the item's details — description, fields, edit — which the
 // close button (or Escape) turns back.
 function Slide({ ds, item, onChanged }: { ds: Dataset; item: Item; onChanged: (ds: Dataset) => void }) {
@@ -137,9 +155,17 @@ function Slide({ ds, item, onChanged }: { ds: Dataset; item: Item; onChanged: (d
       onClick={() => setBack(true)}
       aria-label={`${item.name || 'Item'} — show details`}
       title="Click for details"
-      className="block h-[calc(100svh-11rem)] min-h-[16rem] w-full cursor-pointer overflow-hidden border border-[var(--color-line)] bg-[var(--color-wall-soft)]"
+      className="block h-full w-full cursor-pointer"
     >
-      <Photo src={item.image} alt={item.name} sizes="100vw" />
+      <Photo src={item.image} alt={item.name} className="h-full w-full" sizes="100vw" />
     </button>
+  );
+}
+
+function ChevronIcon({ direction }: { direction: 'left' | 'right' }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d={direction === 'left' ? 'M15 5l-7 7 7 7' : 'M9 5l7 7-7 7'} />
+    </svg>
   );
 }

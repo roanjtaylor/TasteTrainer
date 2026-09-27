@@ -1,8 +1,9 @@
-import { useEffect, useState, type WheelEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type WheelEvent } from 'react';
 import type { Dataset, Item } from '../../../shared/types';
 import { saveDataset } from '../lib/data';
 import { physicalImageQuery } from '../lib/image';
 import { useChatView } from '../lib/chatView';
+import { playGenie } from '../lib/genie';
 import { CaptureBadge } from './CaptureBadge';
 import { PenIcon } from './ItemCard';
 import { ItemFields } from './ItemFields';
@@ -26,6 +27,7 @@ export function ItemModal({
   onClose,
   onChanged,
   inline = false,
+  originRect,
 }: {
   ds: Dataset;
   item: Item;
@@ -33,6 +35,10 @@ export function ItemModal({
   onChanged: (ds: Dataset) => void;
   /** Sits in the page (the slideshow) instead of floating over it: no backdrop. */
   inline?: boolean;
+  /** The mosaic tile's own on-screen box, when opened from one — the panel grows out
+   *  of it and shrinks back into it on close, the same genie effect the embed's
+   *  mosaic opens a picture with (lib/genie.ts). Ignored when `inline`. */
+  originRect?: DOMRect;
 }) {
   const personal = ds.domain === 'personal';
   const { ask } = useChatView();
@@ -40,6 +46,44 @@ export function ItemModal({
   const [draft, setDraft] = useState<Item | null>(null);
   const [picker, setPicker] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // ---- Genie open/close (only when opened from a mosaic tile, i.e. `originRect` is
+  // given): the panel grows out of the tile on mount, and `requestClose` plays the
+  // same animation in reverse before actually calling `onClose` — so the close every
+  // button/backdrop/Escape path already triggers below just needs to call
+  // `requestClose` instead of `onClose` directly. ----
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const closingRef = useRef(false);
+  useLayoutEffect(() => {
+    if (inline || !originRect || !panelRef.current) return;
+    const o = originRect;
+    playGenie(
+      panelRef.current,
+      { x: o.left, y: o.top, w: o.width, h: o.height },
+      { w: window.innerWidth, h: window.innerHeight },
+      'open',
+    );
+    // Runs once, on mount only — this instance is only ever rendered for one open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  function requestClose() {
+    if (inline || !originRect || !panelRef.current || closingRef.current) {
+      onClose();
+      return;
+    }
+    closingRef.current = true;
+    const o = originRect;
+    playGenie(
+      panelRef.current,
+      { x: o.left, y: o.top, w: o.width, h: o.height },
+      { w: window.innerWidth, h: window.innerHeight },
+      'close',
+      () => {
+        closingRef.current = false;
+        onClose();
+      },
+    );
+  }
 
   // Pinch/ctrl+scroll zooms the focused card itself — image and text together — rather
   // than the dataset wall behind it. Resets whenever a different item opens, so zoom
@@ -110,7 +154,7 @@ export function ItemModal({
       if (e.key !== 'Escape' || saving) return;
       if (picker) setPicker(false);
       else if (mode === 'edit') cancelEdit();
-      else onClose();
+      else requestClose();
     }
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
@@ -131,10 +175,11 @@ export function ItemModal({
       onClick={() => {
         if (saving) return;
         if (mode === 'edit') cancelEdit();
-        else if (!inline) onClose();
+        else if (!inline) requestClose();
       }}
     >
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label={item.name || 'Item details'}
@@ -235,7 +280,7 @@ export function ItemModal({
                     <PenIcon />
                   </button>
                   <button
-                    onClick={onClose}
+                    onClick={requestClose}
                     aria-label="Close"
                     title="Close"
                     className="rounded-full border border-[var(--color-line)] p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-wall-soft)]"
