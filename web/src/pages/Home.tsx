@@ -27,7 +27,7 @@ export function Home() {
   const { data: map } = useWorldMap(curated ? domain : null);
   // Mapping and reviewing a world is Claude's work: these buttons just open the dock
   // with the ask written out, for you to send or reword (lib/chatView.tsx).
-  const { ask } = useChatView();
+  const { ask, canAsk } = useChatView();
 
   // A phone gets the map as a list of regions (WorldMapSections), not the canvas.
   const narrow = useNarrow();
@@ -84,17 +84,19 @@ export function Home() {
           <p className="text-[var(--color-muted)]">No datasets yet.</p>
           <p className="mx-auto mt-1 max-w-md text-sm text-[var(--color-muted)]">
             {curated
-              ? 'Ask Claude to map this world and pick from the fields it finds.'
+              ? canAsk ? 'Ask Claude to map this world and pick from the fields it finds.' : 'Nothing has been mapped here yet.'
               : 'Start a collection of your own — books, films, albums, family memories — and fill it with your files. Everything here stays private to you.'}
           </p>
           <div className="mt-4 flex justify-center gap-2">
             {curated ? (
-              <button
-                onClick={() => ask('/create')}
-                className="rounded-full bg-[var(--color-ink)] px-5 py-2 text-sm text-[var(--color-wall)]"
-              >
-                Ask Claude to map this world →
-              </button>
+              canAsk && (
+                <button
+                  onClick={() => ask('/create')}
+                  className="rounded-full bg-[var(--color-ink)] px-5 py-2 text-sm text-[var(--color-wall)]"
+                >
+                  Ask Claude to map this world →
+                </button>
+              )
             ) : (
               <Link
                 to={`/${domain}/new`}
@@ -113,7 +115,7 @@ export function Home() {
         )
       ) : (
         <>
-          {curated && !hasMap && (
+          {curated && !hasMap && canAsk && (
             <p className="mb-4 text-sm text-[var(--color-muted)]">
               This world has no map yet.{' '}
               <button onClick={() => ask('/create')} className="text-[var(--color-accent)] underline">

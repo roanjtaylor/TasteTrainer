@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { ChatView } from '../../../shared/chat';
+import { useAuth } from './auth';
 import { useDomain } from './domain';
 
 // What Claude is told you're looking at (shared/chat.ts's ChatView).
@@ -24,6 +25,9 @@ interface ChatViewContextValue {
    *  draft asked for twice still opens it twice. */
   request: { seq: number; draft: string };
   ask: (draft?: string) => void;
+  /** Whether there is a dock to open: Claude is the signed-in curator's alone
+   *  (components/chat/ChatDock.tsx). Every "Ask Claude" button hides behind this. */
+  canAsk: boolean;
 }
 
 const ChatViewContext = createContext<ChatViewContextValue>({
@@ -32,10 +36,12 @@ const ChatViewContext = createContext<ChatViewContextValue>({
   withdraw: () => {},
   request: { seq: 0, draft: '' },
   ask: () => {},
+  canAsk: false,
 });
 
 export function ChatViewProvider({ children }: { children: ReactNode }) {
   const domain = useDomain();
+  const canAsk = !!useAuth().email;
   const [reported, setReported] = useState<Reported>({});
   const [request, setRequest] = useState({ seq: 0, draft: '' });
 
@@ -50,8 +56,8 @@ export function ChatViewProvider({ children }: { children: ReactNode }) {
   const ask = useCallback((draft = '') => setRequest((r) => ({ seq: r.seq + 1, draft })), []);
 
   const value = useMemo(
-    () => ({ view: { ...reported, domain: domain ?? undefined }, report, withdraw, request, ask }),
-    [reported, domain, report, withdraw, request, ask],
+    () => ({ view: { ...reported, domain: domain ?? undefined }, report, withdraw, request, ask, canAsk }),
+    [reported, domain, report, withdraw, request, ask, canAsk],
   );
   return <ChatViewContext.Provider value={value}>{children}</ChatViewContext.Provider>;
 }

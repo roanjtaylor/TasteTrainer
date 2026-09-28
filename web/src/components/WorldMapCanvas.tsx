@@ -127,7 +127,7 @@ function CardAction({
   className: string;
   children: ReactNode;
 }) {
-  const { ask } = useChatView();
+  const { ask, canAsk } = useChatView();
   if (card.href) {
     return (
       <Link to={card.href} title={title} style={style} className={className}>
@@ -135,8 +135,17 @@ function CardAction({
       </Link>
     );
   }
+  // A ghost (a field Claude proposed but hasn't built) opens the dock with "build this"
+  // ready — for the curator. A visitor has no dock, so for them it's just a label.
+  if (!card.ask || !canAsk) {
+    return (
+      <div title={title} style={style} className={className}>
+        {children}
+      </div>
+    );
+  }
   return (
-    <button type="button" onClick={() => card.ask && ask(card.ask)} title={title} style={style} className={className}>
+    <button type="button" onClick={() => ask(card.ask)} title={title} style={style} className={className}>
       {children}
     </button>
   );

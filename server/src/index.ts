@@ -72,8 +72,9 @@ app.use('/api/datasets', datasetsRouter);
 app.use('/api/curation', curationRouter);
 app.use('/api/images', imagesRouter);
 // The Claude chat: freeform conversation with tools over the data, every change staged
-// for approval (routes/chat.ts, manual.md).
-app.use('/api/chat', chatRouter);
+// for approval (routes/chat.ts, manual.md). Behind the wall outright: Claude is the
+// curator's tool — visitors get "Report a problem" on an item, not a seat at the dock.
+app.use('/api/chat', requireAuth, chatRouter);
 // Uploads only ever serve the personal world, so this is the one router behind the
 // wall outright rather than checked per-dataset.
 app.use('/api/files', requireAuth, filesRouter);

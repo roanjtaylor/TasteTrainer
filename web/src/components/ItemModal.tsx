@@ -41,7 +41,7 @@ export function ItemModal({
   originRect?: DOMRect;
 }) {
   const personal = ds.domain === 'personal';
-  const { ask } = useChatView();
+  const { ask, canAsk } = useChatView();
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [draft, setDraft] = useState<Item | null>(null);
   const [picker, setPicker] = useState(false);
@@ -263,14 +263,17 @@ export function ItemModal({
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   {/* Opens the Claude dock with this item as its context (the grid reports
-                      the open item — lib/chatView.tsx). The dock floats above this modal. */}
-                  <button
-                    onClick={() => ask()}
-                    title="Ask Claude about this"
-                    className="rounded-full border border-[var(--color-claude)]/60 px-3 py-1 text-xs text-[var(--color-claude)] hover:bg-[var(--color-wall-soft)]"
-                  >
-                    Ask Claude
-                  </button>
+                      the open item — lib/chatView.tsx). The dock floats above this modal.
+                      Curator only: a visitor has no dock (`canAsk`). */}
+                  {canAsk && (
+                    <button
+                      onClick={() => ask()}
+                      title="Ask Claude about this"
+                      className="rounded-full border border-[var(--color-claude)]/60 px-3 py-1 text-xs text-[var(--color-claude)] hover:bg-[var(--color-wall-soft)]"
+                    >
+                      Ask Claude
+                    </button>
+                  )}
                   <button
                     onClick={startEdit}
                     aria-label="Edit"

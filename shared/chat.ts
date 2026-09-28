@@ -74,11 +74,17 @@ export interface ChatThread {
   updatedAt: string;
 }
 
+/** One row of `GET /api/chat/threads` — enough for the dock to draw its tab strip and
+ *  launcher badge on a device that has never opened this conversation. */
 export interface ChatThreadSummary {
   id: string;
   domain: Domain | null;
   title: string;
+  /** Status of the last message: 'running' / 'queued' means Claude is at work in it. */
   status: ChatStatus;
+  /** Proposed changes still awaiting a decision, across the thread's open changesets. */
+  pending: number;
+  createdAt: string;
   updatedAt: string;
 }
 

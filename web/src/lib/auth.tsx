@@ -11,7 +11,10 @@ import { clearAll } from './store';
 // (lib/db.ts), so the dataset view shows the sign-in form in place of a collection it
 // couldn't read (pages/DatasetView.tsx). The one route gated outright is /personal/new:
 // a form that only writes, and only for the signed-in curator (server/src/auth.ts checks
-// the token on every write — a wall only the browser enforces is a curtain).
+// the token on every write — a wall only the browser enforces is a curtain). The Claude
+// dock is the other thing that exists only signed in (components/chat/ChatDock.tsx,
+// lib/chatView.tsx's `canAsk`): visitors browse and report problems; the curator talks
+// to Claude.
 
 interface AuthContextValue {
   /** undefined while still asking supabase-js whether a stored session exists. */

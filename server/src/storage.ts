@@ -250,6 +250,15 @@ export async function listChangesets(threadId: string): Promise<Changeset[]> {
   return (data ?? []).map(rowToChangeset);
 }
 
+/** Every changeset still holding pending ops, across all threads — what the dock's
+ *  thread list counts to badge "n changes to review" before any tab is opened. */
+export async function listOpenChangesets(): Promise<Changeset[]> {
+  const { data, error } = await supabase.from('taste_changesets').select('*').eq('status', 'open');
+  if (missingRelation(error)) throw new Error(CHAT_MIGRATION_HINT);
+  if (error) throw new Error(error.message);
+  return (data ?? []).map(rowToChangeset);
+}
+
 // ---- Item reports: visitor-flagged problems from the public embed widget
 // (shared/types.ts#ItemReport, migration 009). Filed by the visitor and dismissed by
 // the curator straight from the browser (web/src/lib/db.ts); this side only reads

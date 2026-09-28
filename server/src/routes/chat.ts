@@ -4,9 +4,9 @@ import { CLAUDE_MODEL, HF_APP_SECRET, HF_BASE_URL } from '../config.ts';
 import {
   deleteThread,
   getChangeset,
-  getDataset,
   getThread,
   listChangesets,
+  listOpenChangesets,
   listThreads,
 } from '../storage.ts';
 import { answerQuestion, isRunning, liveThread, startRun, stopRun, subscribe } from '../services/agentRun.ts';
@@ -14,7 +14,7 @@ import { applyChangeset, rejectOps, revertChangeset } from '../services/changese
 import { expandCommand, listCommands } from '../services/commands.ts';
 import { newId, now } from '../util.ts';
 import { optionalDomain } from '../../../shared/types.ts';
-import { CHAT_EFFORTS, DEFAULT_CHAT_EFFORT, opDatasetIds } from '../../../shared/chat.ts';
+import { CHAT_EFFORTS, DEFAULT_CHAT_EFFORT } from '../../../shared/chat.ts';
 import type {
   Changeset,
   ChatEffort,
@@ -25,14 +25,15 @@ import type {
   ChatView,
 } from '../../../shared/chat.ts';
 
-// The Claude chat (manual.md). Mounted at /api/chat.
+// The Claude chat (manual.md). Mounted at /api/chat, behind `requireAuth` (index.ts):
+// every route here has a signed-in, allowlisted curator on `req.user`. Claude is the
+// curator's tool for changing the data; a visitor's only voice is "Report a problem" on
+// an item, which is read from the table, not from here.
 //
-// Access follows the rest of the app (auth.ts): the physical and digital worlds are
-// open, the personal world needs a signed-in user — for the conversation that was
-// started there, and for any change that touches a personal dataset.
+// Conversations belong to the ACCOUNT, not the browser. The thread list below is what
+// every device draws its tabs from, so a turn started on a phone is waiting, with its
+// diff, on the laptop opened hours later.
 export const chatRouter = Router();
-
-const PERSONAL_401 = { error: 'Sign in to use Claude in your personal world.' };
 
 /** A turn that was running when the server restarted is still marked so in storage,
  *  and would spin forever. Nothing is running it now, so say what happened. */
@@ -51,30 +52,17 @@ function present(thread: ChatThread): ChatThread {
 async function loadThread(req: Request, res: Response): Promise<ChatThread | null> {
   const thread = liveThread(req.params.id) ?? (await getThread(req.params.id));
   if (!thread) { res.status(404).json({ error: 'Conversation not found.' }); return null; }
-  if (thread.domain === 'personal' && !req.user) { res.status(401).json(PERSONAL_401); return null; }
   return present(thread);
 }
 
-/** A changeset, its thread checked for access — and, signed out, refused outright if it
- *  reaches into a personal dataset from a conversation that started somewhere else. */
+/** Deciding while Claude is still working is fine — the same as accepting an edit in
+ *  Claude Code before it has finished the next one. Staging and deciding both go
+ *  through the changeset's per-thread lock (services/changesets.ts), and proposals are
+ *  validated against the data as it stands plus what is still pending, so an accepted
+ *  op simply becomes part of "as it stands". */
 async function loadChangeset(req: Request, res: Response): Promise<Changeset | null> {
   const cs = await getChangeset(req.params.id);
   if (!cs) { res.status(404).json({ error: 'Changeset not found.' }); return null; }
-  if (!req.user) {
-    const thread = await getThread(cs.threadId);
-    const ids = [...new Set(cs.ops.flatMap(opDatasetIds))];
-    const datasets = await Promise.all(ids.map((id) => getDataset(id)));
-    const personal =
-      thread?.domain === 'personal' ||
-      datasets.some((d) => d?.domain === 'personal') ||
-      cs.ops.some((o) => o.kind === 'dataset.create' && o.domain === 'personal');
-    if (personal) { res.status(401).json(PERSONAL_401); return null; }
-  }
-  // Deciding while Claude is still working is fine — the same as accepting an edit in
-  // Claude Code before it has finished the next one. Staging and deciding both go
-  // through the changeset's per-thread lock (services/changesets.ts), and proposals are
-  // validated against the data as it stands plus what is still pending, so an accepted
-  // op simply becomes part of "as it stands".
   return cs;
 }
 
@@ -125,16 +113,29 @@ chatRouter.get('/commands', async (_req, res, next) => {
 
 // ---- Threads ----
 
-chatRouter.get('/threads', async (req: Request, res: Response, next: NextFunction) => {
+// Every open conversation, oldest first — the dock's tab strip, on whichever device
+// asks. Each carries what a tab shows without being opened: whether Claude is at work
+// in it, and how many proposed changes are waiting on a decision.
+chatRouter.get('/threads', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const threads = (await listThreads()).filter((t) => req.user || t.domain !== 'personal').map(present);
-    const summaries: ChatThreadSummary[] = threads.map((t) => ({
-      id: t.id,
-      domain: t.domain,
-      title: t.title || 'New conversation',
-      status: t.messages[t.messages.length - 1]?.status ?? 'done',
-      updatedAt: t.updatedAt,
-    }));
+    const [threads, open] = await Promise.all([listThreads(), listOpenChangesets()]);
+    const pendingByThread = new Map<string, number>();
+    for (const cs of open) {
+      const n = cs.ops.filter((o) => o.status === 'pending' || o.status === 'conflict').length;
+      pendingByThread.set(cs.threadId, (pendingByThread.get(cs.threadId) ?? 0) + n);
+    }
+    const summaries: ChatThreadSummary[] = threads
+      .map(present)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .map((t) => ({
+        id: t.id,
+        domain: t.domain,
+        title: t.title || '',
+        status: t.messages[t.messages.length - 1]?.status ?? 'done',
+        pending: pendingByThread.get(t.id) ?? 0,
+        createdAt: t.createdAt,
+        updatedAt: t.updatedAt,
+      }));
     res.set('Cache-Control', 'no-store');
     res.json(summaries);
   } catch (err) { next(err); }
@@ -173,21 +174,21 @@ chatRouter.post('/messages', async (req: Request, res: Response, next: NextFunct
     const raw = (req.body?.view ?? {}) as ChatView;
     const view: ChatView = { ...raw, domain: optionalDomain(raw.domain) };
     if (!text?.trim()) return res.status(400).json({ error: 'Say something first.' });
-    if (view.domain === 'personal' && !req.user) return res.status(401).json(PERSONAL_401);
 
     let thread: ChatThread | null = null;
     if (threadId) {
       thread = await getThread(threadId);
       if (!thread) return res.status(404).json({ error: 'Conversation not found.' });
-      if (thread.domain === 'personal' && !req.user) return res.status(401).json(PERSONAL_401);
       if (isRunning(thread.id)) return res.status(409).json({ error: 'Claude is still working in this conversation.' });
       present(thread);
     } else {
       thread = { id: newId(), domain: view.domain ?? null, title: '', messages: [], createdAt: now(), updatedAt: now() };
     }
 
+    // `personal: true` — only the signed-in curator gets this far (requireAuth), so the
+    // personal world is theirs to read and change like the other two.
     const started = await startRun({
-      thread, text: text.trim(), prompt: (await expandCommand(text)) ?? undefined, view, model, personal: !!req.user,
+      thread, text: text.trim(), prompt: (await expandCommand(text)) ?? undefined, view, model, personal: true,
       effort: CHAT_EFFORTS.some((e) => e.id === effort) ? effort : DEFAULT_CHAT_EFFORT,
     });
     res.status(202).json({ thread: started });
@@ -256,8 +257,8 @@ chatRouter.get('/threads/:id/stream', async (req: Request, res: Response, next: 
 
 chatRouter.get('/changesets/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const cs = await getChangeset(req.params.id);
-    if (!cs) return res.status(404).json({ error: 'Changeset not found.' });
+    const cs = await loadChangeset(req, res);
+    if (!cs) return;
     res.set('Cache-Control', 'no-store');
     res.json(cs);
   } catch (err) { next(err); }
