@@ -29,11 +29,14 @@ export function DomainSelect() {
   }
 
   return (
-    <div className="mx-auto mt-8 max-w-5xl">
-      <header className="mb-10 text-center">
-        <h1 className="serif text-4xl">Which taste are you training?</h1>
+    // Sized to fit a phone screen without scrolling: the three cards stack there, so the
+    // heading, the gaps and the cards' own padding all shrink below `md` — the full
+    // size only comes back once the cards sit side by side.
+    <div className="mx-auto mt-2 max-w-5xl md:mt-8">
+      <header className="mb-5 text-center md:mb-10">
+        <h1 className="serif text-2xl md:text-4xl">Which taste are you training?</h1>
       </header>
-      <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3 md:gap-5">
         {DOMAINS.map((domain) => (
           <DomainCard key={domain} domain={domain} onClick={() => choose(domain)} />
         ))}
@@ -46,10 +49,10 @@ function DomainCard({ domain, onClick }: { domain: Domain; onClick: () => void }
   return (
     <button
       onClick={onClick}
-      className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-card)] p-10 text-center transition-colors hover:border-[var(--color-accent)] hover:bg-[var(--color-wall-soft)]"
+      className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-card)] p-5 text-center transition-colors hover:border-[var(--color-accent)] hover:bg-[var(--color-wall-soft)] md:p-10"
     >
-      <h2 className="serif text-3xl">{DOMAIN_LABELS[domain].title}</h2>
-      <p className="mt-3 text-sm italic text-[var(--color-muted)]">E.g. {DOMAIN_EXAMPLES[domain]}</p>
+      <h2 className="serif text-xl md:text-3xl">{DOMAIN_LABELS[domain].title}</h2>
+      <p className="mt-1.5 text-xs italic text-[var(--color-muted)] md:mt-3 md:text-sm">E.g. {DOMAIN_EXAMPLES[domain]}</p>
     </button>
   );
 }

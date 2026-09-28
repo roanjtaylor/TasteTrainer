@@ -40,6 +40,7 @@ function toItem(raw: Partial<Item> & Partial<ProposedItem>, subtopics: Subtopic[
     // A saved thread (services/tweets.ts). Carried through every save — an edit to the
     // item's subtopic must not cost it the tweets it is made of.
     tweet: (raw as Item).tweet,
+    instagram: (raw as Item).instagram,
     createdAt: (raw as Item).createdAt || now(),
   };
 }

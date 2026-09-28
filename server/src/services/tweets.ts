@@ -189,7 +189,10 @@ function ordered(tweets: Tweet[]): Tweet[] {
 
 function truncate(text: string, max: number): string {
   const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length <= max ? flat : `${flat.slice(0, max - 1).trimEnd()}…`;
+  // By code point, not UTF-16 unit: slicing inside a surrogate pair (an emoji, a
+  // mathematical-bold letter) leaves a lone half that PostgREST rejects as invalid JSON.
+  const chars = [...flat];
+  return chars.length <= max ? flat : `${chars.slice(0, max - 1).join("").trimEnd()}…`;
 }
 
 /** The ordinary Item fields, derived from the thread so browse/filter/rank need no

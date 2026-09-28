@@ -4,6 +4,9 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import type { Dataset, Domain, Item, ItemReport, Subtopic } from '../../../shared/types';
 import { saveDataset, useDataset } from '../lib/data';
 import * as db from '../lib/db';
+import { SignIn, useAuth } from '../lib/auth';
+import { useNarrow } from '../lib/narrow';
+import { EmbedBrowse } from './Embed';
 import { useChatView, useReportChatView } from '../lib/chatView';
 import { physicalImageQuery } from '../lib/image';
 import { ItemCard } from '../components/ItemCard';
@@ -12,6 +15,9 @@ import { TweetModal } from '../components/TweetModal';
 import { ShuffleButton } from '../components/ShuffleButton';
 import { Slideshow } from '../components/Slideshow';
 import { TweetCard, TILE_W } from '../components/TweetCard';
+import { InstagramCard } from '../components/InstagramCard';
+import { InstagramImportPanel } from '../components/InstagramImportPanel';
+import { byItemTime } from '../lib/itemDate';
 import { ImagePicker } from '../components/ImagePicker';
 import { Photo } from '../components/Photo';
 import { ItemFields } from '../components/ItemFields';
@@ -40,7 +46,7 @@ export function DatasetView() {
   const { domain = '', slug = '' } = useParams();
   // Cached read: a dataset seen before paints immediately and corrects itself in the
   // background, so returning to it costs nothing (lib/store.ts).
-  const { data: ds, error: loadError, set: setDs } = useDataset(slug || null);
+  const { data: ds, error: loadError, set: setDs, refresh } = useDataset(slug || null);
   // Where Browse portals the personal world's Edit / Add actions: under the name.
   const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
   // How the field is browsed: the whole wall at once, or one item at a time (shuffled or
@@ -51,16 +57,70 @@ export function DatasetView() {
   useReportChatView({ datasetId: ds?.id, datasetTopic: ds?.topic });
 
   // Chronological (undated last) by default: the one ordering that needs no labels to
-  // read. `?order=newest` flips it; the arrow in the nav (Nav.tsx) toggles it.
-  const newestFirst = useSearchParams()[0].get('order') === 'newest';
+  // read. `?order=newest` flips it; the arrow in the nav (Nav.tsx) toggles it. To the
+  // day where the item knows it (a post's publish date), else the year (lib/itemDate.ts).
+  const [params, setParams] = useSearchParams();
+  const newestFirst = params.get('order') === 'newest';
   const pool = useMemo(() => {
     if (!ds) return [];
-    const sorted = [...ds.items].sort((a, b) => (a.year ?? Infinity) - (b.year ?? Infinity));
+    const sorted = [...ds.items].sort(byItemTime);
     return newestFirst ? sorted.reverse() : sorted;
   }, [ds, newestFirst]);
 
-  if (loadError) return <p className="mt-8 text-[var(--color-accent)]">{loadError}</p>;
+  // A dataset that can't be read while nobody is signed in is most likely a private
+  // one: row level security hides it rather than refusing it (lib/db.ts), so "not
+  // found" and "private" look the same from here, and the sign-in form is the right
+  // answer to both — and signing in re-makes the read that was refused (below: a
+  // failed read leaves nothing in the cache, so nothing else would retry it). Only a
+  // dataset marked private is ever gated; the personal world's shelf and its public
+  // collections aren't (lib/auth.tsx).
+  const { loading: authLoading, email } = useAuth();
+  useEffect(() => {
+    if (email && loadError) void refresh();
+    // Only the sign-in itself should retry, not every render that still has the error.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [email]);
+  // On a phone the field is browsed exactly as the embed widget browses it
+  // (EmbedBrowse, pages/Embed.tsx) — one mobile UI, defined once, rather than the
+  // desktop wall's header, switches and margin actions squeezed into a narrow column.
+  const narrow = useNarrow();
+
+  if (loadError) {
+    if (!email && !authLoading) {
+      return <SignIn title={ds?.topic ?? 'A private collection'} blurb="Sign in to see what's here." />;
+    }
+    return <p className="mt-8 text-[var(--color-accent)]">{loadError}</p>;
+  }
   if (!ds) return <p className="mt-8 text-[var(--color-muted)]">Loading…</p>;
+
+  if (narrow) {
+    return (
+      // Full-bleed under the nav bar: cancels main's own padding (main.tsx) and takes
+      // the rest of the viewport, so the widget's picture and utility bar sit exactly
+      // where they would in a phone-sized iframe.
+      <div className="-mx-6 -mt-5 -mb-8 h-[calc(100dvh-3.25rem)] overflow-hidden bg-[var(--color-wall)]">
+        <EmbedBrowse
+          key={ds.id}
+          ds={db.toEmbedDataset(ds)}
+          newestFirst={newestFirst}
+          // `?view=mosaic` is only ever set here, and only read by the nav (Nav.tsx),
+          // which shows the order arrow on a phone in the mosaic alone — the slideshow
+          // has its own shuffle / oldest-first switch in the utility bar.
+          onViewModeChange={(mode) =>
+            setParams(
+              (p) => {
+                const n = new URLSearchParams(p);
+                if (mode === 'mosaic') n.set('view', 'mosaic');
+                else n.delete('view');
+                return n;
+              },
+              { replace: true },
+            )
+          }
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -360,6 +420,10 @@ function Browse({
   // the dataset's own shape. None of it shows in the researched worlds.
   const personal = ds.domain === 'personal';
   const [editingField, setEditingField] = useState(false);
+  // Offered where it makes sense: a dataset that already holds Instagram posts, or an
+  // empty one waiting for its first batch (components/InstagramImportPanel.tsx).
+  const [importing, setImporting] = useState(false);
+  const takesInstagram = personal && (ds.items.length === 0 || ds.items.some((i) => i.instagram));
   // A draft from "+ Add item" isn't in the dataset until it's saved — so it isn't in
   // `pool` either, and is drawn ahead of the grid instead (see `isNew` below).
   const isNew = !!editing && !ds.items.some((i) => i.id === editing.id);
@@ -432,9 +496,21 @@ function Browse({
               </svg>
               Add
             </button>
+            {takesInstagram && (
+              <button onClick={() => setImporting((v) => !v)} className="inline-flex items-center gap-1 text-sm text-[var(--color-muted)] hover:text-[var(--color-ink)]">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="h-3.5 w-3.5">
+                  <path d="M12 3v12M6 9l6 6 6-6" />
+                  <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+                </svg>
+                Import
+              </button>
+            )}
           </>,
           actionsSlot,
         )}
+      {takesInstagram && importing && (
+        <InstagramImportPanel ds={ds} onChanged={onChanged} onClose={() => setImporting(false)} />
+      )}
       {personal && editingField && (
         <PersonalFieldEditor ds={ds} onChanged={onChanged} onClose={() => setEditingField(false)} />
       )}
@@ -532,6 +608,14 @@ function Browse({
                       setExpandedId(item.id);
                     }}
                   />
+                ) : item.instagram ? (
+                  <InstagramCard
+                    item={item}
+                    onOpen={(rect) => {
+                      setOpenOrigin(rect);
+                      setExpandedId(item.id);
+                    }}
+                  />
                 ) : (
                 /* The card itself opens the full-screen modal below — works on touch,
                    not just hover. */
@@ -560,7 +644,7 @@ function Browse({
             setExpandedId(null);
             setOpenOrigin(null);
           };
-          return openItem.tweet ? (
+          return openItem.tweet || openItem.instagram ? (
             <TweetModal
               item={openItem}
               originRect={openOrigin ?? undefined}

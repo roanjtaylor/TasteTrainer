@@ -12,3 +12,6 @@ data/
 
 # X data archive (DMs, IP log, phone number) — only ever the import's input
 tweets/
+
+# Instagram data export (DMs, personal info) — only ever the import's input
+igdata/

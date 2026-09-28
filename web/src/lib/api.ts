@@ -3,6 +3,8 @@ import type {
   Domain,
   ImageCandidate,
   ImageKind,
+  InstagramImportStats,
+  InstagramPostRef,
   Item,
   Subtopic,
   ProposedItem,
@@ -147,6 +149,13 @@ export const api = {
   updateDataset: (id: string, body: Partial<Dataset>) =>
     http<Dataset>(`/api/datasets/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteDataset: (id: string) => http<void>(`/api/datasets/${id}`, { method: 'DELETE' }),
+  // Liked/saved Instagram posts into a personal dataset (server/src/routes/instagram.ts)
+  // — one batch; components/InstagramImportPanel.tsx loops it over the export's files.
+  importInstagram: (datasetId: string, posts: InstagramPostRef[]) =>
+    http<{ dataset: Dataset; stats: InstagramImportStats }>('/api/instagram/import', {
+      method: 'POST',
+      body: JSON.stringify({ datasetId, posts }),
+    }),
 
   // "Re-fetch images" — run the current image pipeline over a dataset that is already
   // saved. Images used to be resolved only at curation time, so every sourcing

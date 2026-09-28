@@ -191,6 +191,10 @@ function MapCardView({ card }: { card: LaidOutCard }) {
  * otherwise would make the map worse than the grid it replaced — so the map degrades
  * into its own regions as sections, which is the same information without the geometry.
  */
+// The phone's reading of the map: a list of regions, each a list of its fields — names
+// only. A field's description is read inside the field (the dataset view) and a
+// region's on the desktop canvas; here they were four lines of grey under every title
+// and made a one-thumb scroll of the world into an essay.
 export function WorldMapSections({ map, cards }: { map: WorldMap; cards: MapCard[] }) {
   const byRegion = new Map(map.regions.map((r) => [r.id, [] as MapCard[]]));
   for (const card of cards) {
@@ -198,16 +202,21 @@ export function WorldMapSections({ map, cards }: { map: WorldMap; cards: MapCard
     if (regionId) byRegion.get(regionId)?.push(card);
   }
 
+  // In the order the canvas is read: top row first, left to right, then down — the
+  // expressive end of the world before the practical one. A region's `y` grows towards
+  // the practical end (the axis reads practical -> expressive UP, so the canvas flips it
+  // when drawing), hence descending here. The stored order is whatever Claude listed.
+  const regions = map.regions.slice().sort((a, b) => b.y - a.y || a.x - b.x);
+
   return (
     <div className="space-y-8">
-      {map.regions.map((region) => {
+      {regions.map((region) => {
         const members = byRegion.get(region.id) ?? [];
         if (!members.length) return null;
         return (
           <section key={region.id}>
             <h2 className="serif text-2xl">{region.name}</h2>
-            <p className="mt-0.5 text-sm text-[var(--color-muted)]">{region.description}</p>
-            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
               {members
                 .slice()
                 .sort((a, b) => Number(a.ghost) - Number(b.ghost) || b.itemCount - a.itemCount)
@@ -215,16 +224,15 @@ export function WorldMapSections({ map, cards }: { map: WorldMap; cards: MapCard
                   <CardAction
                     key={card.key}
                     card={card}
-                    className={`rounded-xl p-4 text-left ${
+                    className={`flex items-baseline justify-between gap-3 rounded-xl px-4 py-3 text-left ${
                       card.ghost
                         ? 'border border-dashed border-[var(--color-accent)]/50'
                         : 'border border-[var(--color-line)] bg-[var(--color-card)]'
                     }`}
                   >
-                    <div className="serif text-lg leading-tight">{card.title}</div>
-                    <p className="mt-1 text-sm text-[var(--color-muted)]">{card.subtitle}</p>
-                    <p className="mt-2 text-xs uppercase tracking-wider text-[var(--color-muted)]">
-                      {card.ghost ? 'not built yet — ask Claude' : `${card.itemCount} items`}
+                    <div className="serif min-w-0 text-lg leading-tight">{card.title}</div>
+                    <p className="shrink-0 text-xs uppercase tracking-wider text-[var(--color-muted)]">
+                      {card.ghost ? 'not built yet' : `${card.itemCount} items`}
                     </p>
                   </CardAction>
                 ))}

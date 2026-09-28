@@ -29,6 +29,7 @@ import { curationRouter } from './routes/curation.ts';
 import { imagesRouter } from './routes/images.ts';
 import { filesRouter } from './routes/files.ts';
 import { tweetsRouter } from './routes/tweets.ts';
+import { instagramRouter } from './routes/instagram.ts';
 import { chatRouter } from './routes/chat.ts';
 
 const app = express();
@@ -78,6 +79,7 @@ app.use('/api/chat', chatRouter);
 app.use('/api/files', requireAuth, filesRouter);
 // Same wall, same reason: liked tweets only ever go into a personal dataset.
 app.use('/api/tweets', requireAuth, tweetsRouter);
+app.use('/api/instagram', requireAuth, instagramRouter);
 
 // Turn anything a route throws into JSON the client can display, not a bare 500.
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

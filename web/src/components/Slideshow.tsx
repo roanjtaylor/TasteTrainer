@@ -3,6 +3,7 @@ import type { Dataset, Item } from '../../../shared/types';
 import { ItemModal } from './ItemModal';
 import { Photo } from './Photo';
 import { TweetThreadList } from './TweetCard';
+import { InstagramPostView } from './InstagramCard';
 
 /** A Fisher-Yates pass, so nothing repeats until the whole set has been seen. */
 function shuffled<T>(xs: T[]): T[] {
@@ -88,7 +89,8 @@ export function Slideshow({
         if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) go(dx < 0 ? 1 : -1);
       }}
     >
-      {current.tweet ? (
+      {current.tweet || current.instagram ? (
+        /* A saved thread or an Instagram post: its own scrolling column, not a picture. */
         <div key={current.id} className="tweet-scroll custom-scroll h-full w-full overflow-y-auto overscroll-contain bg-[var(--color-card)]">
           <div className="mx-auto max-w-xl space-y-3 p-4">
             {current.url && (
@@ -98,17 +100,21 @@ export function Slideshow({
                 rel="noreferrer"
                 className="block text-right text-xs text-[var(--color-accent)] hover:underline"
               >
-                Open on X ↗
+                {current.instagram ? 'Open on Instagram ↗' : 'Open on X ↗'}
               </a>
             )}
-            <TweetThreadList tweets={current.tweet.tweets} fallback={current} />
+            {current.tweet ? (
+              <TweetThreadList tweets={current.tweet.tweets} fallback={current} />
+            ) : (
+              <InstagramPostView item={current} />
+            )}
           </div>
         </div>
       ) : (
         <Slide key={current.id} ds={ds} item={current} onChanged={onChanged} />
       )}
 
-      {!current.tweet && (
+      {!current.tweet && !current.instagram && (
         <div className={`absolute bottom-3 left-3 z-10 max-w-[70%] truncate rounded-full bg-[var(--color-ink)]/60 px-3 py-1 text-xs text-[var(--color-wall)] backdrop-blur ${chrome}`}>
           {current.name}
           {current.year ? ` · ${current.year}` : ''}

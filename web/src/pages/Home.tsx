@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { isCuratedDomain, slugifyTopic, type DatasetSummary } from '../../../shared/types';
 import { useDomain } from '../lib/domain';
@@ -7,6 +7,7 @@ import { cardsFor } from '../lib/mapLayout';
 import { WorldMapCanvas, WorldMapSections } from '../components/WorldMapCanvas';
 import { NavActions } from '../lib/navActions';
 import { useChatView } from '../lib/chatView';
+import { useNarrow } from '../lib/narrow';
 
 // Datasets home — one world's fields (6-ui.md, 7-software-design.md), addressed by
 // the world: /physical, /digital.
@@ -28,15 +29,8 @@ export function Home() {
   // with the ask written out, for you to send or reword (lib/chatView.tsx).
   const { ask } = useChatView();
 
-  const [narrow, setNarrow] = useState(
-    () => typeof window !== 'undefined' && window.innerWidth < 700,
-  );
-
-  useEffect(() => {
-    const onResize = () => setNarrow(window.innerWidth < 700);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
+  // A phone gets the map as a list of regions (WorldMapSections), not the canvas.
+  const narrow = useNarrow();
 
   const cards = useMemo(
     () =>

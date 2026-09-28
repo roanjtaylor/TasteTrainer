@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
+import { useNarrow } from '../lib/narrow';
 
 // The account's home in the chrome: the window's top-right corner, not a bare
 // "Sign out" text button appended to the end of the nav pill. Signed in, it's an
@@ -14,6 +15,12 @@ export function AccountButton({ className = '' }: { className?: string }) {
   const { email, signOut } = useAuth();
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
+  // On a phone, only the landing page carries it: the top-right corner is the one
+  // place the nav pill and the world / dataset screens have to spare, and signing in
+  // or checking who you are is a once-a-visit thing — done at the door, not on every
+  // screen after it. (A private dataset still asks for sign-in in place, lib/auth.tsx.)
+  const narrow = useNarrow();
+  const onLanding = useLocation().pathname === '/';
 
   useEffect(() => {
     if (!open) return;
@@ -21,6 +28,8 @@ export function AccountButton({ className = '' }: { className?: string }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [open]);
+
+  if (narrow && !onLanding) return null;
 
   if (!email) {
     return (

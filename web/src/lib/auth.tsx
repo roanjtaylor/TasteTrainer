@@ -1,17 +1,17 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from './supabase';
-import { useDomain } from './domain';
 import { clearAll } from './store';
 
-// The personal world's front door (9-personal-and-auth.md).
+// Where signing in is asked for (9-personal-and-auth.md).
 //
-// Only the personal world is sensitive — private uploads, family photos — so signing
-// in is only ever asked of someone entering it. The physical and digital worlds are
-// researched, public-domain knowledge and are never gated. This doesn't make the
-// personal world private by itself (the server checks the token on every request,
-// server/src/auth.ts; a wall only the browser enforces is a curtain) — it's what keeps
-// a visit to /personal from being a page of failed requests instead of a login form.
+// Nothing is gated by WORLD: the personal world's shelf and its public collections are
+// browsable signed out, same as the physical and digital ones. What's private is a
+// DATASET marked `private` — row level security hides it until the curator signs in
+// (lib/db.ts), so the dataset view shows the sign-in form in place of a collection it
+// couldn't read (pages/DatasetView.tsx). The one route gated outright is /personal/new:
+// a form that only writes, and only for the signed-in curator (server/src/auth.ts checks
+// the token on every write — a wall only the browser enforces is a curtain).
 
 interface AuthContextValue {
   /** undefined while still asking supabase-js whether a stored session exists. */
@@ -35,16 +35,30 @@ export function useAuth(): AuthContextValue {
 
 /**
  * Tracks the Supabase session and provides it via `useAuth`, without blocking
- * rendering — signing in is asked for only where it's actually needed (`PersonalGate`
+ * rendering — signing in is asked for only where it's actually needed (`RequireSignIn`
  * below), not as a condition for the whole app to render at all.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
+  // Whether the last known state had a session — null until the first answer. Used to
+  // tell an actual sign-in from the other events that carry a session (the restored
+  // one on load, a token refresh, a tab regaining focus).
+  const hadSession = useRef<boolean | null>(null);
 
   useEffect(() => {
     if (!supabase) return;
-    supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
+    supabase.auth.getSession().then(({ data }) => {
+      hadSession.current = !!data.session;
+      setSession(data.session);
+    });
+    const { data } = supabase.auth.onAuthStateChange((_event, next) => {
+      // Signed-out reads are a different view of the data — private datasets missing
+      // from the shelf, upload URLs unsigned — so what was cached before signing in is
+      // wrong now. Dropping it refetches whatever is on screen (lib/store.ts#drop).
+      if (next && hadSession.current === false) clearAll();
+      hadSession.current = !!next;
+      setSession(next);
+    });
     return () => data.subscription.unsubscribe();
   }, []);
 
@@ -70,18 +84,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 }
 
 /**
- * Wraps the routed content: shows the sign-in screen in place of the page whenever
- * the current URL is inside the personal world (`/personal/...`) and nobody is signed
- * in. Every other world renders straight through, untouched.
+ * Wraps a screen that only the signed-in curator can use (/personal/new): shows the
+ * sign-in form in its place while nobody is signed in. Browsing is never gated this
+ * way — a private dataset hides itself instead (see the note at the top of this file).
  */
-export function PersonalGate({ children }: { children: ReactNode }) {
-  const domain = useDomain();
+export function RequireSignIn({ children, title, blurb }: { children: ReactNode; title?: string; blurb?: string }) {
   const { loading, email } = useAuth();
 
-  if (domain !== 'personal') return <>{children}</>;
   if (!supabase) return <Misconfigured />;
   if (loading) return null;
-  if (!email) return <SignIn />;
+  if (!email) return <SignIn title={title} blurb={blurb} />;
   return <>{children}</>;
 }
 

@@ -93,7 +93,13 @@ function storagePathOf(image: string): string | null {
 /** The widget's view of a dataset (shared/types.ts#EmbedDataset). */
 export async function getEmbed(idOrSlug: string): Promise<EmbedDataset | null> {
   const ds = await getDataset(idOrSlug);
-  if (!ds) return null;
+  return ds && toEmbedDataset(ds);
+}
+
+/** A full dataset cut down to what the widget shows. Also how the app's own dataset
+ *  view hands a dataset to the widget's browser on a phone (pages/DatasetView.tsx),
+ *  so the mobile UI is defined once, in Embed.tsx. */
+export function toEmbedDataset(ds: Dataset): EmbedDataset {
   return {
     id: ds.id,
     domain: ds.domain,
@@ -108,6 +114,7 @@ export async function getEmbed(idOrSlug: string): Promise<EmbedDataset | null> {
       description: it.description,
       definingFact: it.definingFact,
       ...(it.tweet ? { tweet: it.tweet } : {}),
+      ...(it.instagram ? { instagram: it.instagram } : {}),
     })),
   };
 }

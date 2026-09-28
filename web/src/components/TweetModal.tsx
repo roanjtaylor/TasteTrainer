@@ -2,9 +2,11 @@ import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { Item } from '../../../shared/types';
 import { playGenie } from '../lib/genie';
 import { TweetThreadList } from './TweetCard';
+import { InstagramPostView } from './InstagramCard';
 
 // The full-screen view a tweet tile's click opens — a saved thread's counterpart to
-// ItemModal, grown out of the clicked tile with the same genie effect (lib/genie.ts)
+// ItemModal, and a liked Instagram post's too (InstagramCard.tsx: the body is then
+// Instagram's own embed, and the link goes there instead of to X), grown out of the clicked tile with the same genie effect (lib/genie.ts)
 // the embed's mosaic opens a picture with, instead of the old behaviour of unfolding
 // the thread in place among the other tiles.
 export function TweetModal({
@@ -87,13 +89,17 @@ export function TweetModal({
             )}
             {item.url && (
               <a href={item.url} target="_blank" rel="noreferrer" className="text-[var(--color-accent)] hover:underline">
-                Open on X ↗
+                {item.instagram ? 'Open on Instagram ↗' : 'Open on X ↗'}
               </a>
             )}
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          <TweetThreadList tweets={item.tweet?.tweets ?? []} fallback={item} />
+          {item.instagram ? (
+            <InstagramPostView item={item} />
+          ) : (
+            <TweetThreadList tweets={item.tweet?.tweets ?? []} fallback={item} />
+          )}
         </div>
       </div>
     </div>

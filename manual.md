@@ -6,13 +6,13 @@ Built from the core idea in [`taste.md`](./taste.md) — that doc says what prob
 
 ## What it does
 
-The physical and digital worlds are open — researched, public-domain knowledge. Only the **personal** world sits behind a **sign-in** (Supabase Auth), since that's where your own private uploads live. See [Signing in](#signing-in).
+Every world is open to browse. Only a dataset marked **private** (personal world) sits behind a **sign-in** (Supabase Auth), since that's where your own private uploads live. See [Signing in](#signing-in).
 
 Every dataset belongs to one of three **worlds**, chosen on the landing screen:
 
 - **Physical** — work you can stand in front of or hold: watches, cars, chairs, paintings, buildings.
 - **Digital** — work that lives on a screen: websites, apps, product UI, graphics.
-- **Personal** — what's *yours*: books, films, music, family memories. The first two worlds are objective (the best of what exists, researched by Claude); this one is subjective and **built by hand** — name a collection, then add items or drop in a batch of your own image files. Uploaded files live in a **private** bucket and are only ever served as expiring signed links. Once built, a personal dataset is browsed and filtered exactly like the others — and, since it holds your own private material, it's the one world that requires signing in.
+- **Personal** — what's *yours*: books, films, music, family memories, the tweets and Instagram posts you liked. The first two worlds are objective (the best of what exists, researched by Claude); this one is subjective and **built by hand** — name a collection, then add items or drop in a batch of your own image files. Uploaded files live in a **private** bucket and are only ever served as expiring signed links. Once built, a personal dataset is browsed and filtered exactly like the others. A collection you mark private is hidden until you sign in; the rest of the personal world is as open as the other two.
 
 (This split was previously called "hardware vs software", which mis-described half of what it held — a painting is not hardware. Renamed 2026-07-28.)
 
@@ -46,11 +46,13 @@ taste.md     the problem this app solves (the philosophy behind it)
 
 ## Signing in
 
-Only the personal world needs it. Every request that touches personal-world content (its datasets, its file uploads) is rejected without a valid Supabase access token — the server checks it, not just the browser (`server/src/auth.ts`). The physical and digital worlds never ask.
+Nothing is gated by world. What's private is a **dataset** marked `private` (personal world only): row level security hides it until the curator is signed in (migration 011), so opening one signed out shows the sign-in form in its place, and the shelf simply doesn't list it. The one screen that asks up front is `/personal/new`, which only writes. Every write goes through the server, which checks the token itself (`server/src/auth.ts`) — a wall only the browser enforces is a curtain. (Until 2026-09-28 the whole personal world was behind the sign-in screen; that blocked its public collections for no reason.)
+
+On a phone (below Tailwind's `md`, `web/src/lib/narrow.ts`) the app's own screens slim down: the landing page fits one screen, the world view lists regions and field names only, the account button shows on the landing page alone, and a dataset is browsed with the embed widget's own browser (`EmbedBrowse` in `pages/Embed.tsx`, handed the dataset via `db.toEmbedDataset`) — so the mobile UI is defined once, in the widget, rather than repeated in the dataset view.
 
 - **Web** needs the Supabase project's *publishable* key: `VITE_SUPABASE_KEY` in `web/.env.local` locally and in the Vercel project's env (template: `web/.env.example`). It's a public value. Without it, the personal world shows a "sign-in isn't configured" message; everything else still works.
 - **Server** takes `ALLOWED_EMAILS` (comma-separated). The Supabase project is shared with other personal projects, and anyone can create an account in a Supabase project — so "signed in" isn't "is me". This list is what makes the personal world yours alone; the server warns at startup if it's empty.
-- **First time:** open the personal world and use "Create your account" on the sign-in screen with an allowlisted email.
+- **First time:** use "Log in" (top right of the landing page) with an allowlisted email.
 
 ## Run it
 
@@ -141,4 +143,6 @@ The app is read-heavy over data that barely changes, so caching is layered rathe
 - The physical world's image **swap picker** scrapes an unofficial DuckDuckGo endpoint (chosen for cleaner results, no API key), falling back to the official Wikimedia Commons search API when that scrape breaks. If both come back empty, paste an image URL directly.
 - Digital-world screenshots are rendered by **our own headless Chromium** against the Wayback Machine, with every non-`archive.org` request blocked so an archived page can't re-hydrate from the live web. When no usable snapshot exists it falls back to a screenshot of the **live site** — which is not the design of that year, so the item is badged **not period-accurate** in the gallery rather than passing silently. Swap the image to pick a nearer snapshot.
 - Personal uploads are **images only** for now (JPEG, PNG, WebP, GIF, AVIF; 25 MB each) — an item is shown by an `<img>`. A book, film or album is represented by its cover (upload it, paste a URL, or use the image search), with an optional link to where it lives.
+- **Liked tweets** come in from an X data archive (`data/like.js`) through `POST /api/tweets/import`; each like is stored with the thread above it (`Item.tweet`), text kept, media hotlinked, and opened as X's own embed.
+- **Instagram likes and saves** come in from Instagram's data export (Settings → Your information → Download your information): open a personal collection (empty, or one that already holds Instagram posts), press **Import** under its name, and drop in `your_instagram_activity/likes/liked_posts.json` and `saved/saved_posts.json`. Each post becomes an item (`Item.instagram`) holding the caption, owner, hashtags and the link; a post in both files is one card carrying both timestamps, and re-importing merges rather than duplicates. The export has no media and no publish date: the date is decoded from the link's shortcode (a snowflake media id), which is what the wall orders by — to the day, not just the year (`web/src/lib/itemDate.ts`). Closed tiles show the caption; opening one, the slideshow, and the embed widget's slide show **Instagram's own embed** in an iframe (`instagram.com/reel/<code>/embed/captioned/`), which plays reels, swipes carousels and shows photos with Instagram's UI. Nothing is copied from Instagram; a deleted post leaves its caption card behind.
 - UI is intentionally a **simple MVP** in the gallery aesthetic (warm beige, pill nav).

@@ -518,6 +518,16 @@ export function itemForClaude(i: Item): Record<string, unknown> {
     ...(i.tweet
       ? { savedThread: i.tweet.tweets?.map((t: any) => str(t.text)).filter(Boolean).join('\n---\n').slice(0, 3000) }
       : {}),
+    ...(i.instagram
+      ? {
+          instagramPost: {
+            kind: i.instagram.kind,
+            owner: i.instagram.owner,
+            publishedAt: i.instagram.publishedAt,
+            caption: str(i.instagram.caption).slice(0, 2000),
+          },
+        }
+      : {}),
   };
 }
 

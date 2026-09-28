@@ -227,7 +227,59 @@ export interface Item {
    * card draws the thread itself instead of a picture (components/TweetCard.tsx).
    */
   tweet?: TweetThread;
+  /**
+   * Personal world: this item IS a liked or saved Instagram post (services/instagram.ts).
+   * As with `tweet`, the ordinary fields are derived from it on import; the wall draws
+   * the caption as a tile and, opened, Instagram's own embed (InstagramCard.tsx).
+   */
+  instagram?: InstagramPost;
   createdAt: string;
+}
+
+/**
+ * One Instagram post you liked or saved (personal world — server/src/services/instagram.ts).
+ *
+ * Instagram's data export gives the link, caption, owner and hashtags but no media and
+ * no publish date. The date is recovered from the shortcode: it encodes the post's
+ * snowflake id, whose upper bits are milliseconds since Instagram's epoch. Media is
+ * never copied; the open view is Instagram's own embed of the shortcode.
+ */
+export interface InstagramPost {
+  /** The link's id: instagram.com/reel/<shortcode>/ */
+  shortcode: string;
+  /** Which kind of link it was — decides the embed url and the tile's badge. */
+  kind: 'reel' | 'post';
+  caption: string;
+  /** Handle, no "@". "" when the export left it out. */
+  owner: string;
+  ownerName: string;
+  hashtags: string[];
+  /** ISO, decoded from the shortcode; "" when the shortcode couldn't be read. */
+  publishedAt: string;
+  /** ISO — when you liked / saved it. Either may be absent; both when it was both. */
+  likedAt?: string;
+  savedAt?: string;
+}
+
+/** What the browser sends per post from the export's liked_posts.json / saved_posts.json
+ *  (components/InstagramImportPanel.tsx parses the files; the server does the rest). */
+export interface InstagramPostRef {
+  url: string;
+  caption?: string;
+  owner?: string;
+  ownerName?: string;
+  hashtags?: string[];
+  /** Unix seconds from the export's `timestamp`, tagged by which file it came from. */
+  likedAt?: number;
+  savedAt?: number;
+}
+
+export interface InstagramImportStats {
+  added: number;
+  /** Already here — the like/save timestamps were merged in. */
+  merged: number;
+  /** Links the parser couldn't read a shortcode out of. */
+  skipped: number;
 }
 
 /** A like as the X data archive lists it (data/like.js) — or a bare id from a pasted
@@ -456,6 +508,8 @@ export interface EmbedItem {
   definingFact: string;
   /** A saved thread (personal world) — the widget shows the thread instead of a picture. */
   tweet?: TweetThread;
+  /** A liked/saved Instagram post (personal world) — the widget shows Instagram's embed. */
+  instagram?: InstagramPost;
 }
 
 /** What the widget browses (web/src/lib/db.ts#getEmbed). A private personal dataset

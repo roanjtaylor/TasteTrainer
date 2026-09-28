@@ -20,6 +20,21 @@ function TweetTile({ item }: { item: EmbedItem }) {
   );
 }
 
+/** An Instagram post's tile: the caption, as on the app's wall (InstagramCard). */
+function InstagramTile({ item }: { item: EmbedItem }) {
+  const post = item.instagram!;
+  return (
+    <div className="flex h-full w-full flex-col gap-2 overflow-hidden bg-[var(--color-card)] p-4 text-left">
+      <p className="truncate text-xs text-[var(--color-muted)]">
+        {post.ownerName || (post.owner ? `@${post.owner}` : item.name)}
+      </p>
+      <p className="serif min-h-0 flex-1 overflow-hidden whitespace-pre-line text-[15px] leading-snug text-[var(--color-ink)]">
+        {post.caption || item.name}
+      </p>
+    </div>
+  );
+}
+
 /**
  * A zoomable, pannable grid of every picture in the dataset at once — "a portal"
  * onto the whole field rather than one picture at a time (Embed.tsx's other mode,
@@ -258,6 +273,8 @@ export function Mosaic({
                   thumbnail each is the whole budget. Tapping one opens it full-size. */}
               {item.tweet ? (
                 <TweetTile item={item} />
+              ) : item.instagram ? (
+                <InstagramTile item={item} />
               ) : (
                 <Photo src={item.image} alt={item.name} className="h-full w-full" sizes={`${TILE}px`} />
               )}

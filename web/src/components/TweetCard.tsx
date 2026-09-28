@@ -100,7 +100,7 @@ export function TweetCard({ item, onOpen }: { item: Item; onOpen: (rect: DOMRect
 export const TILE_W = 320;
 const TILE_H = 240;
 
-function ScaledTile({ stacked, children }: { stacked: boolean; children: ReactNode }) {
+export function ScaledTile({ stacked, children }: { stacked: boolean; children: ReactNode }) {
   return (
     <div
       className="origin-top-left"

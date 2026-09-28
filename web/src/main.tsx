@@ -6,7 +6,7 @@ import { Nav } from './components/Nav';
 import { TaskNotifications } from './components/TaskNotifications';
 import { AccountButton } from './components/AccountButton';
 import { EmbedTesterButton } from './components/EmbedTesterButton';
-import { AuthProvider, PersonalGate } from './lib/auth';
+import { AuthProvider, RequireSignIn } from './lib/auth';
 import { NavActionsProvider } from './lib/navActions';
 import { ChatViewProvider } from './lib/chatView';
 import { ChatDock } from './components/chat/ChatDock';
@@ -42,7 +42,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 function AppShell() {
   return (
     // Tracks the session app-wide (lib/auth.tsx), but doesn't block rendering — only
-    // the personal world (PersonalGate, below) is ever gated on being signed in.
+    // /personal/new (RequireSignIn, below) is gated on being signed in; a private
+    // dataset asks for it itself when it can't be read.
     <AuthProvider>
       {/* What Claude is told you are looking at (lib/chatView.tsx) — above the routes so
           the screens can report into it, and the dock, below, can read it. */}
@@ -101,9 +102,8 @@ function AppShell() {
                 ":domain" is validated by lib/domain (anything else redirects to the
                 gate), and static segments outrank ":slug" in React Router's route
                 ranking, so /personal/new is always the new-collection form. */}
-            {/* Gates only the personal world (/personal/...) behind a sign-in screen —
-                every other route renders straight through (lib/auth.tsx). */}
-            <PersonalGate>
+            {/* No world is gated: a private dataset hides itself until the curator
+                signs in (lib/auth.tsx, DatasetView). Only /personal/new asks up front. */}
               <Routes>
                 <Route path="/" element={<DomainSelect />} />
                 {/* Pre-rename addresses, kept alive for links already out there. */}
@@ -115,7 +115,14 @@ function AppShell() {
                     are hand-built, so something has to make the empty shelf. The
                     researched worlds have no wizard — you ask Claude in the dock, from
                     whatever world or field you're looking at. */}
-                <Route path="/personal/new" element={<PersonalNew />} />
+                <Route
+                  path="/personal/new"
+                  element={
+                    <RequireSignIn title="Your personal world" blurb="Sign in to start a collection.">
+                      <PersonalNew />
+                    </RequireSignIn>
+                  }
+                />
                 <Route path="/iframe" element={<IframeTester />} />
                 {/* Static segments outrank ":slug", so these always win over a field
                     name. Retired addresses, kept alive for open tabs: the world's map
@@ -126,7 +133,6 @@ function AppShell() {
                 <Route path="/:domain/:slug/new" element={<LegacyCurateRedirect />} />
                 <Route path="/:domain/:slug" element={<DatasetView />} />
               </Routes>
-            </PersonalGate>
           </main>
           <div className="hidden lg:flex">
             <TaskNotifications variant="rail" />

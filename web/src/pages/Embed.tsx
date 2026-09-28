@@ -11,6 +11,7 @@ import { Photo } from '../components/Photo';
 import { Mosaic } from '../components/Mosaic';
 import { ShuffleButton } from '../components/ShuffleButton';
 import { TweetThreadList } from '../components/TweetCard';
+import { InstagramPostView } from '../components/InstagramCard';
 
 // Every world, the personal one included. A personal topic marked private reads as
 // absent until the viewer signs in (row level security, lib/db.ts), so the widget
@@ -152,7 +153,7 @@ export function Embed() {
         />
       )}
       {step.kind === 'browse' && (
-        <Browse ds={step.ds} onBack={deepLink ? undefined : () => setStep({ kind: 'world' })} />
+        <EmbedBrowse ds={step.ds} onBack={deepLink ? undefined : () => setStep({ kind: 'world' })} />
       )}
       {editing && <EditPanel domainParam={domainParam} slug={slug ?? ''} />}
     </div>
@@ -493,8 +494,30 @@ function DatasetPicker({
 // ---- Step 3: browse one dataset — either a retro slideshow, one picture at a time
 // with next/previous (shuffle or chronological order), or the whole field at once
 // (a zoomable/pannable mosaic of every picture, Mosaic.tsx) ----
-function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
+//
+// Exported because it is also the app's own dataset view on a phone
+// (pages/DatasetView.tsx): the widget's narrow layout — utility bar below the picture,
+// swipe, tap to flip — is the one mobile UI, kept here so there's a single source of it.
+export function EmbedBrowse({
+  ds,
+  onBack,
+  newestFirst = false,
+  onViewModeChange,
+}: {
+  ds: EmbedDataset;
+  onBack?: () => void;
+  /** Flips the mosaic's order (the app's `?order=newest`, toggled in its nav). The
+   *  widget itself never sets this: its mosaic is always oldest first. */
+  newestFirst?: boolean;
+  /** Told whenever the view flips, so a host (the app's dataset view) can show the
+   *  controls that only make sense in one of them — the order arrow, mosaic only. */
+  onViewModeChange?: (mode: 'slideshow' | 'mosaic') => void;
+}) {
   const [viewMode, setViewMode] = useState<'slideshow' | 'mosaic'>('slideshow');
+  useEffect(() => {
+    onViewModeChange?.(viewMode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode]);
   // What's actually drawn lags `viewMode` (which the switches read): flipping to the
   // mosaic mounts a tile per picture, and done in the same render as the click it held
   // the switch's knob still for a moment. The knob moves first; the view follows.
@@ -682,7 +705,10 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
   // The mosaic is always oldest to newest (undated last), the dataset view's default
   // order, whatever the slideshow's shuffle switch says. `mosaicOrder[t]` is the
   // `ds.items` index of tile t.
-  const mosaicOrder = useMemo(() => buildOrder(ds.items, 'chronological'), [ds.items]);
+  const mosaicOrder = useMemo(() => {
+    const order = buildOrder(ds.items, 'chronological');
+    return newestFirst ? order.reverse() : order;
+  }, [ds.items, newestFirst]);
   const mosaicItems = useMemo(() => mosaicOrder.map((i) => ds.items[i]), [mosaicOrder, ds.items]);
 
   // Tapping a tile in the mosaic shows that picture on its own, no transition (see `solo`).
@@ -732,7 +758,7 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
   // turn partway through.
   function flipTo(next: boolean) {
     // A thread has nothing to put on a back — its words are already the front.
-    if (swipedRef.current || animating || next === flipped || current.tweet) return;
+    if (swipedRef.current || animating || next === flipped || current.tweet || current.instagram) return;
     setAnimating(true);
   }
   // The chrome around the picture (top bars, caption, prev/next) hides for the whole
@@ -876,7 +902,7 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
                       transition: dragging ? 'none' : 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1)',
                     }
               }
-              className={`absolute inset-0 ${current.tweet ? '' : 'embed-flip-perspective'} ${slide ? (slide.dir === 1 ? 'embed-slide-enter-next' : 'embed-slide-enter-prev') : ''}`}
+              className={`absolute inset-0 ${current.tweet || current.instagram ? '' : 'embed-flip-perspective'} ${slide ? (slide.dir === 1 ? 'embed-slide-enter-next' : 'embed-slide-enter-prev') : ''}`}
             >
               {/* A thread has nothing to put on a back (it scrolls in place; there's
                   nothing to flip to), so it skips the flip machinery entirely rather
@@ -888,7 +914,7 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
                   same as the picture's own tap-to-flip, so a swipe's trailing synthetic
                   click (swipedRef, set in onPointerMove above) must not also be read as
                   that tap. */}
-              {current.tweet ? (
+              {current.tweet || current.instagram ? (
                 <div
                   className="h-full w-full"
                   onClickCapture={(e) => {
@@ -1082,7 +1108,7 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
           ) : (
             <span />
           )}
-          {!current.tweet && !showingBack && viewMode === 'slideshow' && (
+          {!current.tweet && !current.instagram && !showingBack && viewMode === 'slideshow' && (
             <span className="min-w-0 max-w-[55%] truncate text-[11px] text-[#d8d8d8]">
               {current.name}
               {current.year ? ` · ${current.year}` : ''}
@@ -1133,7 +1159,7 @@ function Browse({ ds, onBack }: { ds: EmbedDataset; onBack?: () => void }) {
 /** One item filling the frame: its picture, or — for a saved thread — the thread
  *  itself, read top to bottom, with the same X embeds the app's own wall opens. */
 function Slide({ item }: { item: EmbedItem }) {
-  if (!item.tweet) {
+  if (!item.tweet && !item.instagram) {
     return <Photo src={item.image} alt={item.name} className="h-full w-full" sizes={SINGLE_SIZES} />;
   }
   return (
@@ -1142,7 +1168,12 @@ function Slide({ item }: { item: EmbedItem }) {
       style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
     >
       <div className="space-y-3 p-4">
-        <TweetThreadList tweets={item.tweet.tweets} fallback={item} plain />
+        {item.tweet ? (
+          <TweetThreadList tweets={item.tweet.tweets} fallback={item} plain />
+        ) : (
+          /* Instagram's own embed — it plays the reel and swipes the carousel itself. */
+          <InstagramPostView item={item} />
+        )}
       </div>
     </div>
   );
