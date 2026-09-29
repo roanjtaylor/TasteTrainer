@@ -1,5 +1,5 @@
 // The "genie" open/close animation shared by every place a tapped tile grows into a
-// full picture and shrinks back into it on close (Embed.tsx's mosaic -> solo picture,
+// full picture and shrinks back into it on close (EmbedBrowse.tsx's mosaic -> solo picture,
 // and ItemModal's mosaic -> full-screen view). A uniform scale + a clip that opens up
 // as it grows, so nothing stretches and the tile's edges are what "unfurl" — the same
 // trick a map or dock icon uses. Web Animations API, so it can be played in reverse

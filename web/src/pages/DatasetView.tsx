@@ -7,7 +7,8 @@ import { saveDataset, useDataset } from '../lib/data';
 import * as db from '../lib/db';
 import { SignIn, useAuth } from '../lib/auth';
 import { useNarrow } from '../lib/narrow';
-import { EmbedBrowse } from './Embed';
+import { EmbedBrowse } from '../components/EmbedBrowse';
+import { useEmbedChrome } from '../lib/inEmbed';
 import { useChatView, useReportChatView } from '../lib/chatView';
 import { physicalImageQuery } from '../lib/image';
 import { ItemCard } from '../components/ItemCard';
@@ -83,9 +84,20 @@ export function DatasetView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [email]);
   // On a phone the field is browsed exactly as the embed widget browses it
-  // (EmbedBrowse, pages/Embed.tsx) — one mobile UI, defined once, rather than the
+  // (EmbedBrowse, components/EmbedBrowse.tsx) — one mobile UI, defined once, rather than the
   // desktop wall's header, switches and margin actions squeezed into a narrow column.
   const narrow = useNarrow();
+  // Inside the embed widget (pages/Embed.tsx) there's no Nav: its back arrow floats
+  // top-left instead — and on a phone, once the field is showing, the widget browser
+  // draws that way back itself (EmbedBrowse's `onBack`), so the arrow steps aside.
+  const embed = useEmbedChrome();
+  const setOwnsBack = embed?.setOwnsBack;
+  const ownsBack = !!setOwnsBack && narrow && !!ds && !loadError;
+  useEffect(() => {
+    if (!setOwnsBack || !ownsBack) return;
+    setOwnsBack(true);
+    return () => setOwnsBack(false);
+  }, [setOwnsBack, ownsBack]);
 
   if (loadError) {
     if (!email && !authLoading) {
@@ -99,11 +111,17 @@ export function DatasetView() {
     return (
       // Full-bleed under the nav bar: cancels main's own padding (main.tsx) and takes
       // the rest of the viewport, so the widget's picture and utility bar sit exactly
-      // where they would in a phone-sized iframe.
-      <div className="-mx-6 -mt-5 -mb-8 h-[calc(100dvh-3.25rem)] overflow-hidden bg-[var(--color-wall)]">
+      // where they would in a phone-sized iframe. Inside the embed widget there's no
+      // Nav above it, so it takes the whole frame.
+      <div
+        className={`-mx-6 -mt-5 -mb-8 overflow-hidden bg-[var(--color-wall)] ${
+          embed ? 'h-[100dvh]' : 'h-[calc(100dvh-3.25rem)]'
+        }`}
+      >
         <EmbedBrowse
           key={ds.id}
           ds={db.toEmbedDataset(ds)}
+          onBack={embed?.up ?? undefined}
           newestFirst={newestFirst}
           // `?view=mosaic` is only ever set here, and only read by the nav (Nav.tsx),
           // which shows the order arrow on a phone in the mosaic alone — the slideshow
@@ -134,8 +152,14 @@ export function DatasetView() {
       {/* Confined to the empty margin left of the content column (same maths as the grid in
           main.tsx), so long text wraps inside it instead of running over the cards. Only
           pinned from `lg`, where that margin exists. */}
-      <div className="relative min-w-0 break-words lg:fixed lg:left-4 lg:top-3 lg:z-30 lg:w-[calc((100vw-min(72rem,74vw))/2-2rem)]">
-        <h1 className="serif truncate text-xl leading-tight">
+      {/* In the embed widget its floating back arrow (pages/Embed.tsx) takes the top-left
+          corner: the name sits beside it, or below it once pinned in the margin. */}
+      <div
+        className={`relative min-w-0 break-words lg:fixed lg:left-4 lg:z-30 lg:w-[calc((100vw-min(72rem,74vw))/2-2rem)] ${
+          embed ? 'lg:top-14' : 'lg:top-3'
+        }`}
+      >
+        <h1 className={`serif truncate text-xl leading-tight ${embed ? 'pl-10 lg:pl-0' : ''}`}>
           {ds.topic}
         </h1>
         <p className="text-sm text-[var(--color-muted)]">
@@ -196,7 +220,7 @@ function ViewSwitch({
 }
 
 // ---- Reports: what visitors flagged from the public embed widget's card-back
-// (Embed.tsx's flip), read straight from the table (lib/db.ts) — the curator alone
+// (EmbedBrowse.tsx's flip), read straight from the table (lib/db.ts) — the curator alone
 // can. Shown only while there's something open to look at — most datasets most of
 // the time have nothing here, and an empty "0 reports" strip would just be permanent
 // clutter. ----

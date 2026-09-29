@@ -98,7 +98,7 @@ export async function getEmbed(idOrSlug: string): Promise<EmbedDataset | null> {
 
 /** A full dataset cut down to what the widget shows. Also how the app's own dataset
  *  view hands a dataset to the widget's browser on a phone (pages/DatasetView.tsx),
- *  so the mobile UI is defined once, in Embed.tsx. */
+ *  so the mobile UI is defined once, in components/EmbedBrowse.tsx. */
 export function toEmbedDataset(ds: Dataset): EmbedDataset {
   return {
     id: ds.id,

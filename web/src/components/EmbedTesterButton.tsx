@@ -1,22 +1,20 @@
 import { useLocation } from 'react-router-dom';
-import { useDevice, useEditMode } from '../pages/IframeTester';
+import { useEditMode } from '../pages/IframeTester';
 
 
-// The mobile/desktop and edit switches for /iframe (the embed widget's preview page). The way
+// The edit switch for /iframe (the embed widget's preview page). The way
 // in is the account menu (AccountButton). Mounted alongside the account button
 // the same way it is: fixed in the window's right margin at `xl`+, inline in the nav
 // pill below that.
 export function EmbedTesterButton({ className = '' }: { className?: string }) {
   const onTester = useLocation().pathname === '/iframe';
-  const [device, setDevice] = useDevice();
   const [editing, setEditing] = useEditMode();
 
   if (onTester) {
-    // Two iOS-style switches, stacked. Device: off = desktop (the default), on = mobile.
-    // Mode: on = edit (the default, attributes pane showing), off = view.
+    // An iOS-style switch. On = edit (the default, attributes pane showing), off = view.
+    // No mobile/desktop switch: narrowing the window narrows the frame (IframeTester).
     return (
       <div className={`flex-col justify-center gap-0.5 rounded-xl px-2.5 py-1 ${className}`}>
-        <Switch label="Mobile" on={device === 'mobile'} onChange={(v) => setDevice(v ? 'mobile' : 'desktop')} />
         <Switch label="Edit" on={editing} onChange={setEditing} />
       </div>
     );

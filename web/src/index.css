@@ -63,7 +63,7 @@ h3,
   background-color: var(--color-muted);
 }
 
-/* Embed slideshow (Embed.tsx): the incoming picture slides in over the outgoing
+/* Embed slideshow (EmbedBrowse.tsx): the incoming picture slides in over the outgoing
    one instead of a hard swap. "next" and "prev" travel in opposite directions,
    so entering and leaving each have a left- and a right-going variant. */
 /* `--slide-from` is how far a swipe had already dragged the outgoing card when the
@@ -89,7 +89,7 @@ h3,
 /* Touch screens have no hover to reveal the embed's overlay controls, and an overlay
    that's forced always-on top of the picture is exactly the clutter this is avoiding —
    so there the overlay chrome (back/view-toggle/shuffle, the old arrows, the old
-   caption) hides completely and `.embed-utility-bar` (Embed.tsx), a row of the same
+   caption) hides completely and `.embed-utility-bar` (EmbedBrowse.tsx), a row of the same
    controls living in normal flow *below* the picture, takes over instead.
    `(hover: none)` alone catches a real touchscreen, but nothing else — a narrow embed
    opened on an ordinary desktop/laptop (a mouse present, so `hover: hover`) still
@@ -125,7 +125,7 @@ h3,
   animation: embed-slide-out-to-right 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-/* Embed slideshow card flip (Embed.tsx): clicking the picture flips it horizontally
+/* Embed slideshow card flip (EmbedBrowse.tsx): clicking the picture flips it horizontally
    to its "back" — the item's info, and a way to report a problem with it. A plain
    rotateY transition clips the top/bottom corners mid-flip: at 90deg the card is
    edge-on to the camera, and perspective makes its projected height overshoot the
@@ -134,7 +134,7 @@ h3,
    can't pass through a value it isn't animating to) keeps every corner in frame
    through the whole turn, then it's back at full size once it settles flat again.
    The angles themselves come in through `--flip-from/mid/to` (set inline by
-   Embed.tsx) rather than being baked into the keyframes: front->back and
+   EmbedBrowse.tsx) rather than being baked into the keyframes: front->back and
    back->front both spin the same way round — always increasing — instead of the
    card winding forward then unwinding backward, so it keeps spinning like a
    revolving door rather than snapping back and forth. */

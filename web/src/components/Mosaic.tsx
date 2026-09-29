@@ -37,7 +37,7 @@ function InstagramTile({ item }: { item: EmbedItem }) {
 
 /**
  * A zoomable, pannable grid of every picture in the dataset at once — "a portal"
- * onto the whole field rather than one picture at a time (Embed.tsx's other mode,
+ * onto the whole field rather than one picture at a time (EmbedBrowse.tsx's other mode,
  * Browse/shuffle). Laid out as close to a square as the item count allows, so it
  * reads as one big image made of many, not a list.
  *

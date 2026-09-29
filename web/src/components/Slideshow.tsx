@@ -17,7 +17,7 @@ function shuffled<T>(xs: T[]): T[] {
 }
 
 // The dataset one item at a time — the site's counterpart to the embed's slideshow
-// (Embed.tsx's Browse), drawn the same way: the picture full-bleed, edge to edge, with
+// (EmbedBrowse.tsx), drawn the same way: the picture full-bleed, edge to edge, with
 // prev/next and the caption appearing only on hover so the photo itself is never
 // interrupted. `pool` arrives oldest-first (or newest-first), which is the Linear
 // order; Shuffle plays a random pass instead. Flipping between the two stays on the

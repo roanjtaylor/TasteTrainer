@@ -1,48 +1,45 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter } from 'react-router-dom';
 import './index.css';
 import { Nav } from './components/Nav';
 import { TaskNotifications } from './components/TaskNotifications';
 import { AccountButton } from './components/AccountButton';
 import { EmbedTesterButton } from './components/EmbedTesterButton';
-import { AuthProvider, RequireSignIn } from './lib/auth';
+import { AuthProvider } from './lib/auth';
 import { NavActionsProvider } from './lib/navActions';
 import { ChatViewProvider } from './lib/chatView';
 import { ChatDock } from './components/chat/ChatDock';
-import { DomainSelect } from './pages/DomainSelect';
-import { Home } from './pages/Home';
-import { PersonalNew } from './pages/PersonalNew';
-import { DatasetView } from './pages/DatasetView';
-import { LegacyCurateRedirect, LegacyDatasetRedirect, LegacyMapRedirect } from './pages/LegacyRedirect';
+import { AppRoutes, PAGE_GRID } from './AppRoutes';
 import { Embed } from './pages/Embed';
-import { IframeTester } from './pages/IframeTester';
+
+// The embed widget is what gets iframed on someone else's site, so it has no Nav and
+// no layout grid — nothing but the widget (pages/Embed.tsx). It keeps its own router:
+// the bare /embed browses the app's screens in memory, so a visitor clicking around
+// never changes the iframe's address — that address is the embed's setting.
+// /embed/:domain/:slug and /embed/:datasetId pin it to one dataset instead.
+const inEmbed = /^\/embed(\/|$)/.test(window.location.pathname);
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <Routes>
-        {/* No Nav, no layout grid — this is what gets iframed on someone else's
-            site, so it has to be nothing but the widget. It does track the session
-            (AuthProvider, no gate): a personal collection embeds too, behind the
-            widget's own sign-in form (Embed.tsx). The bare /embed is the one to hand
-            out: a self-contained pick-a-world -> pick-a-dataset -> browse widget with
-            no dataset-specific URL to build. /embed/:domain/:slug and
-            /embed/:datasetId are deep links straight into the browse step for one
-            fixed dataset, skipping the picker. */}
-        <Route path="/embed" element={<AuthProvider><Embed /></AuthProvider>} />
-        <Route path="/embed/:domain/:slug" element={<AuthProvider><Embed /></AuthProvider>} />
-        <Route path="/embed/:datasetId" element={<AuthProvider><Embed /></AuthProvider>} />
-        <Route path="*" element={<AppShell />} />
-      </Routes>
-    </BrowserRouter>
+    {inEmbed ? (
+      // It does track the session (AuthProvider, no gate): a private collection embeds
+      // too, behind the widget's own sign-in form.
+      <AuthProvider>
+        <Embed />
+      </AuthProvider>
+    ) : (
+      <BrowserRouter>
+        <AppShell />
+      </BrowserRouter>
+    )}
   </React.StrictMode>,
 );
 
 function AppShell() {
   return (
     // Tracks the session app-wide (lib/auth.tsx), but doesn't block rendering — only
-    // /personal/new (RequireSignIn, below) is gated on being signed in; a private
+    // /personal/new (RequireSignIn, AppRoutes.tsx) is gated on being signed in; a private
     // dataset asks for it itself when it can't be read.
     <AuthProvider>
       {/* What Claude is told you are looking at (lib/chatView.tsx) — above the routes so
@@ -89,7 +86,7 @@ function AppShell() {
             padding — are half the below-`lg` values (`gap-x-3`/`px-3` vs `px-6`): the
             rail's cards sit closer to the content pane on one side and the scrollbar
             on the other, so they get that width back rather than the margins. */}
-        <div className="mx-auto max-w-6xl px-6 pb-8 pt-5 lg:mx-0 lg:max-w-none lg:grid lg:grid-cols-[minmax(0,1fr)_min(72rem,74%)_minmax(0,1fr)] lg:gap-x-3 lg:px-3">
+        <div className={`${PAGE_GRID} pb-8 pt-5`}>
           <div className="hidden lg:block" />
           {/* Tight bottom padding: the map is sized to fit the window without
               scrolling, and six rems of dead space under it was the difference
@@ -98,41 +95,7 @@ function AppShell() {
               intrinsic size push it past its track — harmless today (nothing inside
               is wider than the track) but cheap insurance against it happening. */}
           <main className="min-w-0">
-            {/* The URL names the world and the field: /physical, /physical/ships.
-                ":domain" is validated by lib/domain (anything else redirects to the
-                gate), and static segments outrank ":slug" in React Router's route
-                ranking, so /personal/new is always the new-collection form. */}
-            {/* No world is gated: a private dataset hides itself until the curator
-                signs in (lib/auth.tsx, DatasetView). Only /personal/new asks up front. */}
-              <Routes>
-                <Route path="/" element={<DomainSelect />} />
-                {/* Pre-rename addresses, kept alive for links already out there. */}
-                <Route path="/datasets" element={<Navigate to="/" replace />} />
-                <Route path="/new" element={<Navigate to="/" replace />} />
-                <Route path="/dataset/:id" element={<LegacyDatasetRedirect />} />
-                <Route path="/:domain" element={<Home />} />
-                {/* Only the personal world has a "new dataset" screen: its collections
-                    are hand-built, so something has to make the empty shelf. The
-                    researched worlds have no wizard — you ask Claude in the dock, from
-                    whatever world or field you're looking at. */}
-                <Route
-                  path="/personal/new"
-                  element={
-                    <RequireSignIn title="Your personal world" blurb="Sign in to start a collection.">
-                      <PersonalNew />
-                    </RequireSignIn>
-                  }
-                />
-                <Route path="/iframe" element={<IframeTester />} />
-                {/* Static segments outrank ":slug", so these always win over a field
-                    name. Retired addresses, kept alive for open tabs: the world's map
-                    lives on the shelf itself (/physical), and the curate wizard is gone. */}
-                <Route path="/:domain/review" element={<LegacyMapRedirect />} />
-                <Route path="/:domain/map" element={<LegacyMapRedirect />} />
-                <Route path="/:domain/new" element={<LegacyCurateRedirect />} />
-                <Route path="/:domain/:slug/new" element={<LegacyCurateRedirect />} />
-                <Route path="/:domain/:slug" element={<DatasetView />} />
-              </Routes>
+            <AppRoutes />
           </main>
           <div className="hidden lg:flex">
             <TaskNotifications variant="rail" />

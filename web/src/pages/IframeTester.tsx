@@ -1,30 +1,18 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { DOMAINS, type Domain } from '../../../shared/types';
 import { EMBED_CONFIG_MESSAGE, EMBED_MODE_MESSAGE, EMBED_READY_MESSAGE } from '../lib/embedProtocol';
 
-// The embed widget, previewed the way it'll sit on someone else's site (/iframe). Two
-// switches, both kept in the URL so a view is linkable and survives a reload:
-//   ?device=mobile|desktop — the frame is a fixed size for each, not draggable; the
-//                            toggle for it lives in the nav (EmbedTesterButton).
-//   ?mode=edit|view        — (toggle in the nav, under the device one) this page plays
-//                            the role of a website builder hosting the widget: it tells
-//                            the frame which mode to be in (lib/embedProtocol.ts), and
-//                            saves what the frame's own settings panel reports back
-//                            (world/topic into the URL, the size onto the frame).
-export const DEVICE_SIZES = {
-  mobile: { width: 390, height: 585 },
-  desktop: { width: 800, height: 480 },
-} as const;
-export type Device = keyof typeof DEVICE_SIZES;
-
-export function useDevice(): [Device, (d: Device) => void] {
-  const [params, setParams] = useSearchParams();
-  const device: Device = params.get('device') === 'mobile' ? 'mobile' : 'desktop';
-  const set = (d: Device) =>
-    setParams((p) => { const n = new URLSearchParams(p); n.set('device', d); return n; }, { replace: true });
-  return [device, set];
-}
+// The embed widget, previewed the way it'll sit on someone else's site (/iframe).
+// One switch, kept in the URL so a view is linkable and survives a reload:
+//   ?mode=edit|view — (toggle in the nav, EmbedTesterButton) this page plays the role of
+//                     a website builder hosting the widget: it tells the frame which
+//                     mode to be in (lib/embedProtocol.ts), and saves what the frame's
+//                     own settings panel reports back (world/topic into the URL, the
+//                     size onto the frame).
+// There's no phone preset: the frame is never wider than the page, so narrowing the
+// browser window is how a phone-sized embed is previewed.
+const DEFAULT_SIZE = { width: 800, height: 480 };
 
 export function useEditMode(): [boolean, (edit: boolean) => void] {
   const [params, setParams] = useSearchParams();
@@ -35,37 +23,48 @@ export function useEditMode(): [boolean, (edit: boolean) => void] {
 
 export function IframeTester() {
   const [params, setParams] = useSearchParams();
-  const [device] = useDevice();
   const [editing] = useEditMode();
   const worldParam = params.get('world');
   const world: Domain | null = (DOMAINS as readonly string[]).includes(worldParam ?? '') ? (worldParam as Domain) : null;
   const topic = world ? (params.get('topic') ?? '') : '';
 
-  // What the widget's edit panel last asked for; cleared when the device switches.
+  // What the widget's edit panel last asked for.
   const [size, setSize] = useState<{ width: number; height: number } | null>(null);
-  useEffect(() => setSize(null), [device]);
 
-  // The frame is a fixed size per device, but never taller than what's left of the
-  // window below the nav — the page must fit without scrolling. The embed code below
-  // reports the size actually rendered, so the snippet is always what you're looking at.
+  // The frame is a fixed size, but never wider than the page's column or taller than
+  // what's left of the window below the nav — the page must fit without scrolling, and
+  // a narrowed window is a narrowed frame. The embed code reports the size actually
+  // rendered, so the snippet is always what you're looking at.
   const boxRef = useRef<HTMLDivElement>(null);
   const [room, setRoom] = useState(Infinity);
+  const [roomWidth, setRoomWidth] = useState(Infinity);
   useEffect(() => {
     const measure = () => {
       const top = boxRef.current?.getBoundingClientRect().top ?? 0;
-      // box padding + border (34) and the page's own bottom padding (32)
-      setRoom(Math.floor(window.innerHeight - top - 34 - 32));
+      // the outline (4, both sides) and the page's own bottom padding (32)
+      setRoom(Math.floor(window.innerHeight - top - 4 - 32));
+      const column = boxRef.current?.parentElement?.clientWidth;
+      if (column) setRoomWidth(column - 4);
     };
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
   }, []);
-  const width = size?.width ?? DEVICE_SIZES[device].width;
-  const height = size?.height ?? Math.max(360, Math.min(DEVICE_SIZES[device].height, room));
+  // A width typed into the widget's panel is capped too: the frame never overflows the page.
+  const width = Math.max(220, Math.min(size?.width ?? DEFAULT_SIZE.width, roomWidth));
+  const height = size?.height ?? Math.max(360, Math.min(DEFAULT_SIZE.height, room));
+  const rendered = useRef({ width, height });
+  rendered.current = { width, height };
 
   const origin = window.location.origin;
   const src = `${origin}/embed${world && topic ? `/${world}/${topic}` : ''}`;
-  const code = `<iframe id="tt-embed" src="${src}" width="${width}" height="${height}" style="border:0;border-radius:12px" loading="lazy"></iframe>`;
+  // Injected once per src, not per size: re-injecting would reload the widget on every
+  // resize of the window. The box around it sizes it instead (the CSS beats the
+  // attributes), so the numbers here are only where it starts.
+  const code = useMemo(
+    () => `<iframe id="tt-embed" src="${src}" width="${rendered.current.width}" height="${rendered.current.height}" style="border:0;border-radius:12px" loading="lazy"></iframe>`,
+    [src],
+  );
 
   // ---- Acting as the host editor: the wiring a website builder does ----
   // The frame's own edit mode is the one previewed here — the same panel a builder's
@@ -90,7 +89,12 @@ export function IframeTester() {
           else { n.delete('world'); n.delete('topic'); }
           return n;
         }, { replace: true });
-        if (d.width > 0 && d.height > 0) setSize({ width: d.width, height: d.height });
+        // The panel also reports the size it opened at — the one already rendered. Only
+        // a size actually typed is kept, so the frame goes on following the window.
+        const cur = rendered.current;
+        if (d.width > 0 && d.height > 0 && (d.width !== cur.width || d.height !== cur.height)) {
+          setSize({ width: d.width, height: d.height });
+        }
       }
     };
     window.addEventListener('message', onMessage);
@@ -99,15 +103,16 @@ export function IframeTester() {
 
   return (
     <div className="flex flex-col items-center">
-      {/* One bordered "host page": the embed exactly as an importer's snippet renders it
-          (the code is injected verbatim, not a lookalike). In edit mode the frame is
+      {/* The embed exactly as an importer's snippet renders it (the code is injected
+          verbatim, not a lookalike), outlined in black on its own edge: everything
+          inside the line is the iframe, nothing outside it is. In edit mode the frame is
           told so and draws its own settings panel (Embed.tsx EditPanel) — settings,
           embed code and editor wiring, all in that one column inside the frame. Nothing
           is drawn from out here, so the frame is the same size in both modes and what's
           previewed is exactly what a builder's editor gets. */}
-      <div ref={boxRef} className="max-w-full rounded-2xl border border-[var(--color-line)] bg-[var(--color-wall-soft)] p-4 shadow-sm">
-        <div className="relative overflow-hidden rounded-xl" style={{ width, height }}>
-          <div ref={hostRef} key={code} className="[&_iframe]:block" dangerouslySetInnerHTML={{ __html: code }} />
+      <div ref={boxRef} className="mt-0.5 max-w-full">
+        <div className="relative outline outline-2 outline-black" style={{ width, height }}>
+          <div ref={hostRef} key={code} className="h-full w-full [&_iframe]:block [&_iframe]:h-full [&_iframe]:w-full" dangerouslySetInnerHTML={{ __html: code }} />
         </div>
       </div>
     </div>
