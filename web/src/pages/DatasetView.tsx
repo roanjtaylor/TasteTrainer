@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useSearchParams } from 'react-router-dom';
+import { textLabel } from '../../../shared/types';
 import type { Dataset, Domain, Item, ItemReport, Subtopic } from '../../../shared/types';
 import { saveDataset, useDataset } from '../lib/data';
 import * as db from '../lib/db';
@@ -16,6 +17,7 @@ import { ShuffleButton } from '../components/ShuffleButton';
 import { Slideshow } from '../components/Slideshow';
 import { TweetCard, TILE_W } from '../components/TweetCard';
 import { InstagramCard } from '../components/InstagramCard';
+import { TextCard } from '../components/TextCard';
 import { InstagramImportPanel } from '../components/InstagramImportPanel';
 import { byItemTime } from '../lib/itemDate';
 import { ImagePicker } from '../components/ImagePicker';
@@ -429,6 +431,8 @@ function Browse({
   // A draft from "+ Add item" isn't in the dataset until it's saved — so it isn't in
   // `pool` either, and is drawn ahead of the grid instead (see `isNew` below).
   const isNew = !!editing && !ds.items.some((i) => i.id === editing.id);
+  // A dataset of poems/quotes: new items are text cards too (Item.text).
+  const takesText = personal && ds.items.some((i) => i.text !== undefined);
 
   function blankItem(change: Partial<Item> = {}): Item {
     return {
@@ -443,6 +447,7 @@ function Browse({
       creator: '',
       definingFact: '',
       subtopic: '',
+      ...(takesText ? { text: '' } : {}),
       createdAt: new Date().toISOString(),
       ...change,
     };
@@ -600,7 +605,15 @@ function Browse({
                 }}
                 className="relative"
               >
-                {item.tweet ? (
+                {item.text !== undefined ? (
+                  <TextCard
+                    item={item}
+                    onOpen={(rect) => {
+                      setOpenOrigin(rect);
+                      setExpandedId(item.id);
+                    }}
+                  />
+                ) : item.tweet ? (
                   /* Opens the same full-screen, genie-animated view as a picture does
                      (TweetModal below) — grown out of this tile. */
                   <TweetCard
@@ -646,7 +659,7 @@ function Browse({
             setExpandedId(null);
             setOpenOrigin(null);
           };
-          return openItem.tweet || openItem.instagram ? (
+          return openItem.tweet || openItem.instagram || openItem.text !== undefined ? (
             <TweetModal
               item={openItem}
               originRect={openOrigin ?? undefined}
@@ -721,16 +734,30 @@ function ItemEditorCard({
 }) {
   return (
     <div className="space-y-2 border border-[var(--color-accent)] bg-[var(--color-card)] p-3">
-      <div className="relative aspect-[4/3] overflow-hidden bg-[var(--color-wall-soft)]">
-        <Photo src={draft.image} alt={draft.name} />
-        <button
-          onClick={onSwapImage}
-          className="absolute bottom-2 right-2 rounded-full bg-[var(--color-ink)]/80 px-3 py-1 text-xs text-[var(--color-wall)]"
-        >
-          Swap image
-        </button>
-      </div>
-      <ItemFields item={draft} subtopics={subtopics} domain={domain} onChange={onChange} />
+      {draft.text !== undefined ? (
+        /* Words only: the text is the whole item; its label is derived from it. */
+        <textarea
+          autoFocus
+          className="serif w-full rounded border border-[var(--color-line)] bg-[var(--color-wall)] px-2 py-1 text-[15px] leading-snug"
+          rows={10}
+          value={draft.text}
+          placeholder="the text, with any attribution and date"
+          onChange={(e) => onChange({ text: e.target.value, name: textLabel(e.target.value) })}
+        />
+      ) : (
+        <>
+          <div className="relative aspect-[4/3] overflow-hidden bg-[var(--color-wall-soft)]">
+            <Photo src={draft.image} alt={draft.name} />
+            <button
+              onClick={onSwapImage}
+              className="absolute bottom-2 right-2 rounded-full bg-[var(--color-ink)]/80 px-3 py-1 text-xs text-[var(--color-wall)]"
+            >
+              Swap image
+            </button>
+          </div>
+          <ItemFields item={draft} subtopics={subtopics} domain={domain} onChange={onChange} />
+        </>
+      )}
       <div className="flex gap-2 pt-1">
         <button
           onClick={onSave}

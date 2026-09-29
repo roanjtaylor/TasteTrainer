@@ -3,6 +3,7 @@ import type { Item } from '../../../shared/types';
 import { playGenie } from '../lib/genie';
 import { TweetThreadList } from './TweetCard';
 import { InstagramPostView } from './InstagramCard';
+import { TextView } from './TextCard';
 
 // The full-screen view a tweet tile's click opens — a saved thread's counterpart to
 // ItemModal, and a liked Instagram post's too (InstagramCard.tsx: the body is then
@@ -95,7 +96,9 @@ export function TweetModal({
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          {item.instagram ? (
+          {item.text !== undefined ? (
+            <TextView text={item.text} />
+          ) : item.instagram ? (
             <InstagramPostView item={item} />
           ) : (
             <TweetThreadList tweets={item.tweet?.tweets ?? []} fallback={item} />

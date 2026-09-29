@@ -115,6 +115,7 @@ export function toEmbedDataset(ds: Dataset): EmbedDataset {
       definingFact: it.definingFact,
       ...(it.tweet ? { tweet: it.tweet } : {}),
       ...(it.instagram ? { instagram: it.instagram } : {}),
+      ...(it.text !== undefined ? { text: it.text } : {}),
     })),
   };
 }

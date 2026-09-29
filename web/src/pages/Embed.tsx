@@ -12,6 +12,7 @@ import { Mosaic } from '../components/Mosaic';
 import { ShuffleButton } from '../components/ShuffleButton';
 import { TweetThreadList } from '../components/TweetCard';
 import { InstagramPostView } from '../components/InstagramCard';
+import { TextView } from '../components/TextCard';
 
 // Every world, the personal one included. A personal topic marked private reads as
 // absent until the viewer signs in (row level security, lib/db.ts), so the widget
@@ -758,7 +759,7 @@ export function EmbedBrowse({
   // turn partway through.
   function flipTo(next: boolean) {
     // A thread has nothing to put on a back — its words are already the front.
-    if (swipedRef.current || animating || next === flipped || current.tweet || current.instagram) return;
+    if (swipedRef.current || animating || next === flipped || isDrawn(current)) return;
     setAnimating(true);
   }
   // The chrome around the picture (top bars, caption, prev/next) hides for the whole
@@ -902,7 +903,7 @@ export function EmbedBrowse({
                       transition: dragging ? 'none' : 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1)',
                     }
               }
-              className={`absolute inset-0 ${current.tweet || current.instagram ? '' : 'embed-flip-perspective'} ${slide ? (slide.dir === 1 ? 'embed-slide-enter-next' : 'embed-slide-enter-prev') : ''}`}
+              className={`absolute inset-0 ${isDrawn(current) ? '' : 'embed-flip-perspective'} ${slide ? (slide.dir === 1 ? 'embed-slide-enter-next' : 'embed-slide-enter-prev') : ''}`}
             >
               {/* A thread has nothing to put on a back (it scrolls in place; there's
                   nothing to flip to), so it skips the flip machinery entirely rather
@@ -914,7 +915,7 @@ export function EmbedBrowse({
                   same as the picture's own tap-to-flip, so a swipe's trailing synthetic
                   click (swipedRef, set in onPointerMove above) must not also be read as
                   that tap. */}
-              {current.tweet || current.instagram ? (
+              {isDrawn(current) ? (
                 <div
                   className="h-full w-full"
                   onClickCapture={(e) => {
@@ -1036,7 +1037,7 @@ export function EmbedBrowse({
           </div>
           </div>
 
-          {!showingBack && (
+          {!showingBack && current.text === undefined && (
             <div
               className={`absolute bottom-3 left-3 z-10 max-w-[70%] truncate rounded-full bg-[var(--color-ink)]/60 px-3 py-1 text-xs text-[var(--color-wall)] backdrop-blur ${chrome}`}
             >
@@ -1108,7 +1109,7 @@ export function EmbedBrowse({
           ) : (
             <span />
           )}
-          {!current.tweet && !current.instagram && !showingBack && viewMode === 'slideshow' && (
+          {!isDrawn(current) && !showingBack && viewMode === 'slideshow' && (
             <span className="min-w-0 max-w-[55%] truncate text-[11px] text-[#d8d8d8]">
               {current.name}
               {current.year ? ` · ${current.year}` : ''}
@@ -1156,10 +1157,16 @@ export function EmbedBrowse({
   );
 }
 
+/** Items that are drawn from their own content rather than a picture, so have no back
+ *  to flip to: a saved thread, an Instagram post, or plain text. */
+function isDrawn(item: EmbedItem): boolean {
+  return !!(item.tweet || item.instagram) || item.text !== undefined;
+}
+
 /** One item filling the frame: its picture, or — for a saved thread — the thread
  *  itself, read top to bottom, with the same X embeds the app's own wall opens. */
 function Slide({ item }: { item: EmbedItem }) {
-  if (!item.tweet && !item.instagram) {
+  if (!isDrawn(item)) {
     return <Photo src={item.image} alt={item.name} className="h-full w-full" sizes={SINGLE_SIZES} />;
   }
   return (
@@ -1167,8 +1174,10 @@ function Slide({ item }: { item: EmbedItem }) {
       className="tweet-scroll custom-scroll h-full w-full overflow-y-auto overscroll-contain bg-[var(--color-wall)] text-[var(--color-ink)]"
       style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
     >
-      <div className="space-y-3 p-4">
-        {item.tweet ? (
+      <div className="space-y-3 p-4 sm:p-8">
+        {item.text !== undefined ? (
+          <TextView text={item.text} />
+        ) : item.tweet ? (
           <TweetThreadList tweets={item.tweet.tweets} fallback={item} plain />
         ) : (
           /* Instagram's own embed — it plays the reel and swipes the carousel itself. */

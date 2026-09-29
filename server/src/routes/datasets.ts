@@ -41,6 +41,8 @@ function toItem(raw: Partial<Item> & Partial<ProposedItem>, subtopics: Subtopic[
     // item's subtopic must not cost it the tweets it is made of.
     tweet: (raw as Item).tweet,
     instagram: (raw as Item).instagram,
+    // A poem or quote is its own card (Item.text) — same reason: an edit mustn't drop it.
+    text: (raw as Item).text,
     createdAt: (raw as Item).createdAt || now(),
   };
 }

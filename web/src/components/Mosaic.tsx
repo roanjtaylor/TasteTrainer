@@ -271,7 +271,13 @@ export function Mosaic({
             >
               {/* Sized to the tile, not to the zoom: every tile loads at once here, so a
                   thumbnail each is the whole budget. Tapping one opens it full-size. */}
-              {item.tweet ? (
+              {item.text !== undefined ? (
+                <div className="h-full w-full overflow-hidden bg-[var(--color-card)] p-4 text-left">
+                  <p className="serif h-full overflow-hidden whitespace-pre-line text-[15px] leading-snug text-[var(--color-ink)]">
+                    {item.text}
+                  </p>
+                </div>
+              ) : item.tweet ? (
                 <TweetTile item={item} />
               ) : item.instagram ? (
                 <InstagramTile item={item} />

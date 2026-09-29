@@ -515,6 +515,7 @@ export function itemForClaude(i: Item): Record<string, unknown> {
     ...(i.url ? { url: i.url } : {}),
     ...(i.imageKind ? { imageKind: i.imageKind } : {}),
     hasImage: !!i.image,
+    ...(i.text !== undefined ? { text: i.text } : {}),
     ...(i.tweet
       ? { savedThread: i.tweet.tweets?.map((t: any) => str(t.text)).filter(Boolean).join('\n---\n').slice(0, 3000) }
       : {}),

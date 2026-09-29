@@ -233,7 +233,21 @@ export interface Item {
    * the caption as a tile and, opened, Instagram's own embed (InstagramCard.tsx).
    */
   instagram?: InstagramPost;
+  /**
+   * Personal world: this item IS its words — a poem, a quote (the Poems dataset). The
+   * text is the whole card, attribution and any date included, so there is no picture
+   * and no back to turn over; it is drawn plainly and scrolls if it runs long
+   * (components/TextCard.tsx). `name` is a short derived label (textLabel) for
+   * accessibility and the agent; the rest of the item's fields stay empty.
+   */
+  text?: string;
   createdAt: string;
+}
+
+/** The short label a text item carries as its `name`: the first line, clipped. */
+export function textLabel(text: string): string {
+  const first = text.trim().split('\n')[0]?.replace(/^["“]/, '').trim() ?? '';
+  return first.length > 60 ? `${first.slice(0, 57).trimEnd()}…` : first;
 }
 
 /**
@@ -510,6 +524,8 @@ export interface EmbedItem {
   tweet?: TweetThread;
   /** A liked/saved Instagram post (personal world) — the widget shows Instagram's embed. */
   instagram?: InstagramPost;
+  /** A poem or quote (personal world) — the widget shows the words, nothing else. */
+  text?: string;
 }
 
 /** What the widget browses (web/src/lib/db.ts#getEmbed). A private personal dataset
